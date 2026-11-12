@@ -1,6 +1,6 @@
 """mocapapp: a desktop app around Pose2Sim for research use only."""
 
-__version__ = "0.1.0rc2"
+__version__ = "0.1.0rc3"
 
 CITATION = (
     "Pagnon D., Domalain M., Reveret L. (2022). Pose2Sim: An open-source Python package for multiview "

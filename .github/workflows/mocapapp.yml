@@ -38,7 +38,7 @@ jobs:
   macos-zip:
     if: startsWith(github.ref, 'refs/tags/mocapapp-v')
     needs: test
-    runs-on: macos-15
+    runs-on: ubuntu-latest   # only zips files; macOS runners are often short of capacity
     steps:
       - uses: actions/checkout@v6.0.2
       - name: Zip the macOS installer (zip keeps the executable bit the .command files need)
