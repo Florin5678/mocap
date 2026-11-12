@@ -41,9 +41,11 @@ def start_flow() -> bool:
 
 
 def run_gui(session: Path | None = None) -> int:
+    from mocapapp.gui.firstrun import first_start
     from mocapapp.gui.main_window import MainWindow
 
     app = application()
+    first_start()
     if session is None and not start_flow():
         return 0
     win = MainWindow()

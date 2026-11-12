@@ -37,6 +37,14 @@ from mocapapp.gui.common import (
 TUTORIAL_PAGE = {"setup": 0, "videos": 3, "intrinsics": 3, "scene": 4, "extrinsics": 3, "run": 5, "results": 0}
 
 
+def user_guide_path() -> Path | None:
+    """The guide ships inside the package (resources/) so installed copies have it too."""
+    from importlib import resources
+
+    path = Path(str(resources.files("mocapapp.resources") / "user-guide.md"))
+    return path if path.is_file() else None
+
+
 class Page(QWidget):
     """A wizard step. Pages call core functions only; `refresh` re-reads the session."""
 
@@ -142,6 +150,9 @@ class MainWindow(QMainWindow):
         self._action(help_menu, "Calibration &board PDF ...", self.save_board_pdf)
         self._action(help_menu, "&Consent form PDF ...", lambda: self.save_consent_pdf(""))
         self._action(help_menu, "&Environment check", self.show_doctor)
+        self._action(help_menu, "Download pose &models ...", self.download_models)
+        self._action(help_menu, "Copy &diagnostics", self.copy_diagnostics)
+        self._action(help_menu, "&User guide", self.show_user_guide)
         self._action(help_menu, "&About", self.show_about)
 
     def _action(self, menu, text, slot, shortcut=None) -> QAction:
@@ -343,6 +354,33 @@ class MainWindow(QMainWindow):
         lines = [f"{'OK' if c.ok else 'PROBLEM'} - {c.name}: {c.detail}" + (f"\n      -> {c.fix}" if not c.ok and
                                                                                c.fix else "") for c in checks]
         QMessageBox.information(self, "Environment check", "\n".join(lines))
+
+    def download_models(self) -> None:
+        from mocapapp.gui.firstrun import offer_models
+
+        offer_models(self, ask=False)
+
+    def copy_diagnostics(self) -> None:
+        from mocapapp.gui.firstrun import copy_diagnostics
+
+        copy_diagnostics(self)
+
+    def show_user_guide(self) -> None:
+        from PySide6.QtWidgets import QDialog, QTextBrowser
+
+        guide = user_guide_path()
+        if guide is None:
+            error_box(self, "User guide not found", "The user guide is not installed with this copy of the app. "
+                      "It is app/src/mocapapp/resources/user-guide.md in the project on GitHub.")
+            return
+        dlg = QDialog(self)
+        dlg.setWindowTitle("User guide")
+        dlg.resize(900, 720)
+        view = QTextBrowser()
+        view.setOpenExternalLinks(True)
+        view.setMarkdown(guide.read_text(encoding="utf-8"))
+        QVBoxLayout(dlg).addWidget(view)
+        dlg.exec()
 
     def show_about(self) -> None:
         QMessageBox.about(self, "About", f"<b>{s('app_name')}</b> {__version__}<br>{s('research_only')}<br><br>"

@@ -23,7 +23,9 @@ STATUS_LEVEL = {"ok": "ok", "ready": "ok", "done": "ok", "warn": "warning", "fai
 
 
 def settings() -> QSettings:
-    return QSettings(ORG, APP)
+    # defaultFormat() is the native store (registry/plist) unless changed: the tests switch it to INI files
+    # in a temp folder, so they never touch the user's real settings.
+    return QSettings(QSettings.defaultFormat(), QSettings.Scope.UserScope, ORG, APP)
 
 
 def recent_sessions() -> list[Path]:

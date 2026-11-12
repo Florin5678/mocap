@@ -479,6 +479,35 @@ def _cmd_reminders(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_models(args: argparse.Namespace) -> int:
+    from mocapapp.core import models
+
+    modes = models.MODES if args.mode == "all" else (args.mode,)
+    for m in models.models(modes):
+        print(f"[{'OK  ' if m.ready else 'MISS'}] {m.mode} {m.role}: {m.onnx.name}")
+    gone = models.missing(modes)
+    if not gone:
+        print("Everything needed is downloaded; processing works offline.")
+        return 0
+    if not args.download:
+        size = sum(models.SIZES_MB[m] for m in modes)
+        print(f"Missing {len(gone)} model(s). Download them (about {size} MB, once) with --download.")
+        return 1
+    try:
+        models.download(modes)
+    except OSError as exc:
+        print(exc)
+        return 1
+    return 0
+
+
+def _cmd_diagnostics(args: argparse.Namespace) -> int:
+    from mocapapp.core.diagnostics import diagnostics_text
+
+    print(diagnostics_text())
+    return 0
+
+
 def _cmd_gui(args: argparse.Namespace) -> int:
     from mocapapp.gui.app import run_gui
 
@@ -488,11 +517,22 @@ def _cmd_gui(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="mocapapp", description="Markerless mocap with Pose2Sim (research use only).")
+    from mocapapp import __version__
+
+    parser.add_argument("--version", action="version", version=f"mocapapp {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
 
     doctor = sub.add_parser("doctor", help="check that everything needed is installed")
     doctor.add_argument("--dir", help="folder where sessions will be stored (for the disk-space check)")
     doctor.set_defaults(func=_cmd_doctor)
+
+    mod = sub.add_parser("models", help="check or download the pose-estimation models (needed once, then offline)")
+    mod.add_argument("--mode", choices=["lightweight", "balanced", "performance", "all"], default="balanced")
+    mod.add_argument("--download", action="store_true", help="download what is missing")
+    mod.set_defaults(func=_cmd_models)
+
+    diag = sub.add_parser("diagnostics", help="versions and checks to paste into a bug report (no personal data)")
+    diag.set_defaults(func=_cmd_diagnostics)
 
     gui = sub.add_parser("gui", help="open the app window")
     gui.add_argument("--session", help="open this session directly")

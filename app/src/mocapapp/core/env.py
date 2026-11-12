@@ -58,6 +58,20 @@ def _accelerator_check() -> Check:
     return Check("Pose backend", True, detail)
 
 
+def _models_check() -> Check:
+    try:
+        from mocapapp.core import models
+
+        gone = models.missing(("balanced",))
+    except Exception as exc:
+        return Check("Pose models", False, f"cannot check: {exc}", "Reinstall the environment.")
+    if not gone:
+        return Check("Pose models", True, f"downloaded ({models.cache_dir()})")
+    return Check("Pose models", False, "not downloaded yet (needed once, about "
+                 f"{models.SIZES_MB['balanced']} MB)", "Run `mocapapp models --download` while online, or let the "
+                 "app download them at first start.")
+
+
 def _disk_check(path: Path) -> Check:
     free_gb = shutil.disk_usage(path).free / 1e9
     ok = free_gb >= MIN_FREE_GB
@@ -75,6 +89,7 @@ def run_checks(work_dir: Path | None = None) -> list[Check]:
         _import_check("cv2", "OpenCV", "Run `uv sync` in the app folder."),
         _accelerator_check(),
         _ffmpeg_check(),
+        _models_check(),
         _disk_check(work_dir or Path.cwd()),
     ]
     return checks

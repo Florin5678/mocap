@@ -2,7 +2,11 @@
 
 Desktop app around Pose2Sim: multi-camera videos of one person → validated 3D pose (`.trc`/`.c3d`) and OpenSim kinematics (`.osim`/`.mot`/`.bvh`). **Research use only.** Spec: [`../PROJECT.md`](../PROJECT.md).
 
-Status: Milestone 4 - the app window (greeting dialog, tutorial, a step-by-step wizard from session setup to export) on top of the headless core (session setup, validation and trial mapping, video normalisation, lens and camera-position calibration, the Pose2Sim runner with resume/cancel and sync checks, QA report with 3D preview, export with manifest), plus the printable calibration board and consent-form PDFs, and the privacy features of Milestone 5 (per-trial consent records, raw-footage deletion with safeguards, withdrawal, retention reminders; see [`docs/privacy.md`](docs/privacy.md)). Packaging and the user guide (M6) are next. Upstream findings: [`docs/upstream-notes.md`](docs/upstream-notes.md).
+Status: **0.1.0rc1, Milestone 6 (release candidate)**: installers for Windows and macOS, pose-model pre-download, first-start checks, user guide (Help > User guide, [`src/mocapapp/resources/user-guide.md`](src/mocapapp/resources/user-guide.md)) and the usability-test protocol ([`docs/usability-test.md`](docs/usability-test.md)) on top of M0-M5: the headless core (session setup, validation, calibration, the Pose2Sim runner, QA, export), the app window, and the privacy features ([`docs/privacy.md`](docs/privacy.md)). Still open for the release: the usability test with three new users. Upstream findings: [`docs/upstream-notes.md`](docs/upstream-notes.md).
+
+## Install (users)
+
+Windows: run `mocapapp-setup.exe`; macOS (15 or newer): unzip `mocapapp-macos.zip` and double-click `Install mocapapp.command`. Both download Python, the locked dependencies and the pose models (about 10-30 minutes, ~10 GB), then work offline. How the installers work and how to make a release: [`installer/README.md`](installer/README.md).
 
 ## The app window
 
@@ -41,6 +45,9 @@ mocapapp export --session <dir> [--select config,trc.filt_lstm,c3d.filt_lstm,osi
 mocapapp delete-raw --session <dir> --trial 1 [--include-originals] [--after-run]     # lists only; add --yes [--confirm CODE]
 mocapapp delete-session --session <dir> [--trial 1] [--include-originals]           # withdrawal / whole session; --yes --confirm
 mocapapp reminders --root <output root>                    # sessions whose raw footage is still stored
+mocapapp models [--download] [--mode balanced|all]       # pose models, needed once; then offline
+mocapapp diagnostics                                       # versions and checks for bug reports (no personal data)
+mocapapp --version
 ```
 
 Stage output is logged to `trials/trial_<label>/mocap_logs/<stage>.log`. The slow end-to-end tests on upstream's demo (CLI and GUI, ~4 min each): `uv run pytest -m slow`. GUI tests run offscreen; `MOCAP_SCREENSHOTS=<folder>` saves a PNG of every wizard step.

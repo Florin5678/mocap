@@ -1,0 +1,80 @@
+# mocapapp (app/): tests on Windows and macOS; on a mocapapp-v* tag, builds the installers into a draft release.
+name: mocapapp
+
+on:
+  push:
+    branches: [ "app/**" ]
+    paths: [ "app/**", "Pose2Sim/**", ".github/workflows/mocapapp.yml" ]
+    tags: [ "mocapapp-v*" ]
+  pull_request:
+    paths: [ "app/**" ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ windows-latest, macos-15 ]   # OpenSim's macOS wheels need macOS 15
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: app
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v6.0.2
+      - uses: astral-sh/setup-uv@v8.1.0
+        with:
+          version: "0.13.4"
+      - run: uv sync --frozen
+      - run: uv run ruff check .
+      - run: uv run pytest -q -m "not slow"
+
+  macos-zip:
+    if: startsWith(github.ref, 'refs/tags/mocapapp-v')
+    needs: test
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v6.0.2
+      - name: Zip the macOS installer (zip keeps the executable bit the .command files need)
+        run: |
+          chmod +x app/installer/macos/*.command
+          mkdir -p app/dist
+          zip -j app/dist/mocapapp-macos.zip app/installer/macos/*.command app/installer/windows/license.txt
+      - uses: actions/upload-artifact@v4.6.2
+        with:
+          name: mocapapp-macos
+          path: app/dist/mocapapp-macos.zip
+
+  installers:
+    if: startsWith(github.ref, 'refs/tags/mocapapp-v')
+    needs: [ test, macos-zip ]
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6.0.2
+      - name: Build mocapapp-setup.exe with Inno Setup 6
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\iscc.exe")) { choco install innosetup -y --no-progress }
+          $tag = "${{ github.ref_name }}"
+          $version = $tag -replace '^mocapapp-v', ''
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\iscc.exe" "/DRef=$tag" "/DAppVersion=$version" app\installer\windows\mocapapp.iss
+      - uses: actions/download-artifact@v4.3.0
+        with:
+          name: mocapapp-macos
+          path: app/dist
+      - name: Draft a pre-release with both installers
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" app/dist/mocapapp-setup.exe app/dist/mocapapp-macos.zip `
+            --draft --prerelease --title "mocapapp ${{ github.ref_name }}" `
+            --notes "Release candidate. Research use only. See app/src/mocapapp/resources/user-guide.md."
