@@ -1,0 +1,6 @@
+.venv/
+.pytest_cache/
+.ruff_cache/
+# the root .gitignore ignores **/*.json; app files that must be tracked:
+!src/mocapapp/resources/**/*.json
+!tests/fixtures/**/*.json

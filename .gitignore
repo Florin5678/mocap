@@ -24,3 +24,20 @@ dist/
 
 Content/website/index.html
 
+
+# MOCAP-PATCH: never commit participant data (PROJECT.md rule 7)
+**/*.mp4
+**/*.mov
+**/*.MOV
+**/*.mkv
+**/consent.json
+**/session.json
+**/scene.json
+**/manifest.json
+**/inputs/
+**/calibration_work/
+**/export/
+**/qa/
+mocap_sessions/
+# but keep the upstream demo videos tracked
+!Pose2Sim/Demo_*/**/*.mp4

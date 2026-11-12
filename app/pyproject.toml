@@ -1,0 +1,41 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mocapapp"
+version = "0.0.1"
+description = "Desktop app around Pose2Sim: multi-camera video to validated 3D pose and OpenSim kinematics, for research use only."
+requires-python = ">=3.11,<3.14"
+license = "BSD-3-Clause"
+dependencies = [
+    "pose2sim",
+    "pydantic>=2.9,<3",
+    "rtoml>=0.11",
+    "tomlkit>=0.13",
+    "imageio-ffmpeg>=0.5",
+]
+
+[project.scripts]
+mocapapp = "mocapapp.cli.main:main"
+
+[dependency-groups]
+dev = ["pytest>=8.3", "ruff>=0.7"]
+
+[tool.uv.sources]
+pose2sim = { path = "..", editable = true }
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mocapapp"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["slow: runs Pose2Sim on demo data (minutes)"]
+addopts = "-m 'not slow'"
+
+[tool.ruff]
+line-length = 110
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
