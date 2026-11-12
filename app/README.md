@@ -2,7 +2,7 @@
 
 Desktop app around Pose2Sim: multi-camera videos of one person → validated 3D pose (`.trc`/`.c3d`) and OpenSim kinematics (`.osim`/`.mot`/`.bvh`). **Research use only.** Spec: [`../PROJECT.md`](../PROJECT.md).
 
-Status: Milestone 1 (session setup, validation, trial mapping, video normalisation, per-trial project assembly). Calibration (M2) and the runner (M3) are next. Upstream findings: [`docs/upstream-notes.md`](docs/upstream-notes.md).
+Status: Milestone 2 (session setup, validation and trial mapping, video normalisation, lens and camera-position calibration, per-trial project assembly). The runner (M3) is next. Upstream findings: [`docs/upstream-notes.md`](docs/upstream-notes.md).
 
 ## Command line (so far)
 
@@ -12,7 +12,14 @@ mocapapp session new --study PA26 --trials 2 --heights 178,1.65 --cam cam01=<fol
 mocapapp validate --session <root>/<session>          # checks inputs, prints the trial mapping table
 mocapapp pick --session <dir> --camera cam02 --role extrinsic --file <any video>
 mocapapp map --session <dir> --set cam01:1=<file> --set cam02:1=<file> ...
-mocapapp assemble --session <dir> [--dry-run]          # convert videos, build trials/trial_<label>/
+mocapapp prepare --session <dir> [--dry-run]           # convert/copy videos into the session
+mocapapp calibrate intrinsics --session <dir> [--camera cam01]
+mocapapp scene set --session <dir> --csv points.csv --origin "tape cross by the door" --x-axis "the window"
+mocapapp scene check|show --session <dir>
+mocapapp calibrate frame --session <dir> --camera cam01          # PNG to read pixel positions from
+mocapapp calibrate extrinsics --session <dir> --camera cam01 --points clicks.csv   # label,u,v or hidden
+mocapapp calibrate status --session <dir>
+mocapapp assemble --session <dir>                       # build trials/trial_<label>/ with Config.toml + calibration
 ```
 
 Each camera folder holds `intrinsic.<ext>`, `extrinsic.<ext>` and one video per trial. The output root must be an ASCII-only path.

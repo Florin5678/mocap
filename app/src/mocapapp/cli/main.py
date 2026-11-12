@@ -192,8 +192,97 @@ def _cmd_assemble(args: argparse.Namespace) -> int:
     if args.dry_run:
         return 0
     prepare_inputs(plan, report)
-    assemble_trials(session, root)
+    if args.command == "assemble":
+        assemble_trials(session, root)
     save_session(session, root)
+    return 0
+
+
+def _print_issues(issues) -> bool:
+    for issue in issues:
+        print(issue)
+    return not any(i.level in ("error", "action") for i in issues)
+
+
+def _cmd_scene(args: argparse.Namespace) -> int:
+    from mocapapp.core.calibration import scene_points as sp
+    from mocapapp.core.calibration.service import get_scene, set_scene
+
+    root = Path(args.session)
+    if args.scene_command == "set":
+        try:
+            scene = get_scene(root)
+        except Exception:
+            scene = sp.Scene()
+        if args.csv:
+            scene.points = sp.from_csv(Path(args.csv).read_text(encoding="utf-8-sig"))
+        if args.snippet:
+            scene.points = sp.from_snippet(Path(args.snippet).read_text(encoding="utf-8"))
+        if args.origin is not None:
+            scene.origin_text = args.origin
+        if args.x_axis is not None:
+            scene.x_axis_text = args.x_axis
+        if args.y_note is not None:
+            scene.y_axis_note = args.y_note
+        removed = set_scene(root, scene)
+        if removed:
+            print("Reference points changed: removed " + ", ".join(removed)
+                  + ". Click the points again for each camera.")
+        print(f"{len(scene.points)} reference points saved.")
+    scene = get_scene(root)
+    if args.scene_command == "show":
+        print(sp.axes_description(scene))
+        print()
+        print(sp.to_csv(scene.points) if args.format == "csv" else scene.as_config_snippet())
+        return 0
+    ok = _print_issues(sp.check_scene(scene))
+    print("\nReference points OK." if ok else "\nFix the reference points (see above).")
+    return 0 if ok else 1
+
+
+def _cmd_calibrate(args: argparse.Namespace) -> int:
+    from mocapapp.core.calibration import extrinsics as ex
+    from mocapapp.core.calibration import service
+    from mocapapp.core.session import load_session, save_session
+
+    root = Path(args.session)
+    session = load_session(root)
+    try:
+        if args.calib_command == "intrinsics":
+            cams = [args.camera] if args.camera else None
+            for r in service.run_intrinsics(session, root, cams, args.every, args.force):
+                print(f"{r.camera}: {r.rms_px:.3f} px from {r.n_used}/{r.n_frames} frames, coverage {r.coverage:.0%}, "
+                      f"tilt spread {r.tilt_spread_deg:.0f} deg, {r.layout} -> {r.status.upper()}")
+                for a in r.advice:
+                    print(f"    -> {a}")
+        elif args.calib_command == "frame":
+            print(service.export_frame(root, args.camera, args.frame))
+            print("Measure the pixel position (u = from left, v = from top) of each visible reference point and "
+                  "write label,u,v lines to a CSV ('hidden' for points this camera cannot see).")
+        elif args.calib_command == "extrinsics":
+            clicks = ex.read_clicks_csv(Path(args.points).read_text(encoding="utf-8-sig"))
+            r = service.run_extrinsics(session, root, args.camera, clicks, args.frame, args.override)
+            pos = ", ".join(f"{v:.2f}" for v in r.camera_position)
+            print(f"{r.camera}: {r.rms_px:.2f} px = {r.rms_cm:.2f} cm from {r.n_points} points; camera at ({pos}) m "
+                  f"-> {r.status.upper()}{' (overridden)' if r.overridden else ''}")
+            for w in r.warnings:
+                print(f"    -> {w}")
+            if r.status == "fail" and not r.overridden:
+                print(f"    Above {ex.WARN_CM} cm this camera blocks the run. "
+                      "Fix the points, or accept with --override.")
+        elif args.calib_command == "status":
+            for cam, state in service.calibration_state(session, root).items():
+                print(f"{cam}: {state}")
+            return 0
+        if args.calib_command in ("intrinsics", "extrinsics"):
+            state = service.calibration_state(session, root)
+            if all(s == "ready" for s in state.values()):
+                print(f"All cameras calibrated: {service.write_calibration(session, root)}")
+    except (service.CalibrationStepError, ex.ExtrinsicsError, ValueError) as exc:
+        print(exc)
+        return 1
+    finally:
+        save_session(session, root)
     return 0
 
 
@@ -221,6 +310,47 @@ def build_parser() -> argparse.ArgumentParser:
     val = sub.add_parser("validate", help="check inputs and show the trial mapping")
     val.add_argument("--session", required=True)
     val.set_defaults(func=_cmd_validate)
+
+    prep = sub.add_parser("prepare", help="convert/copy all videos into the session (needed before calibration)")
+    prep.add_argument("--session", required=True)
+    prep.add_argument("--dry-run", action="store_true", help="only show what would be copied or converted")
+    prep.set_defaults(func=_cmd_assemble)
+
+    scene = sub.add_parser("scene", help="reference points for camera-position calibration")
+    scsub = scene.add_subparsers(dest="scene_command", required=True)
+    sset = scsub.add_parser("set", help="set points (CSV label,x,y,z in metres, or a Config.toml snippet) and axes")
+    sset.add_argument("--session", required=True)
+    sset.add_argument("--csv")
+    sset.add_argument("--snippet", help="text file containing object_coords_3d = [[x,y,z], ...]")
+    sset.add_argument("--origin", help="where the origin is, e.g. 'tape cross by the door'")
+    sset.add_argument("--x-axis", help="what +X points toward, e.g. 'the window'")
+    sset.add_argument("--y-note", help="optional: your own description of +Y")
+    for name, helptext in (("show", "print axes and points"), ("check", "validate the points")):
+        p = scsub.add_parser(name, help=helptext)
+        p.add_argument("--session", required=True)
+        if name == "show":
+            p.add_argument("--format", choices=["toml", "csv"], default="toml")
+    for p in scsub.choices.values():
+        p.set_defaults(func=_cmd_scene)
+
+    cal = sub.add_parser("calibrate", help="lens (intrinsic) and position (extrinsic) calibration")
+    csub = cal.add_subparsers(dest="calib_command", required=True)
+    ci = csub.add_parser("intrinsics", help="calibrate lenses from the intrinsic videos")
+    ci.add_argument("--camera")
+    ci.add_argument("--every", type=float, default=1.0, help="use one frame every N seconds (default 1)")
+    ci.add_argument("--force", action="store_true", help="recompute even if a result exists")
+    cf = csub.add_parser("frame", help="save a frame of the extrinsic video as PNG for clicking")
+    cf.add_argument("--camera", required=True)
+    cf.add_argument("--frame", type=int, default=0)
+    ce = csub.add_parser("extrinsics", help="camera position from clicked points (CSV label,u,v)")
+    ce.add_argument("--camera", required=True)
+    ce.add_argument("--points", required=True)
+    ce.add_argument("--frame", type=int, default=0)
+    ce.add_argument("--override", action="store_true", help="accept an error above 2.5 cm (recorded in the session)")
+    cs = csub.add_parser("status", help="what is calibrated and what is missing")
+    for p in (ci, cf, ce, cs):
+        p.add_argument("--session", required=True)
+        p.set_defaults(func=_cmd_calibrate)
 
     mp = sub.add_parser("map", help="set the trial mapping by hand")
     mp.add_argument("--session", required=True)

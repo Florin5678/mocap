@@ -91,3 +91,11 @@ None. `QApplication` appears only in `common.py` and plotting utilities (`trc_pl
 ## 13. Install size
 
 `app/.venv` (CPU, Windows) ≈ 1.3 GB. With the owner's D: drive at ~10 GB free after install, the doctor's 10 GB free-space check will warn; real 60 fps sessions need far more.
+
+## 14. Extrinsics: no check that points are in front of the camera (found in M2)
+
+`calibrate_extrinsics` ('scene') accepts any `solvePnP` solution. With reference points measured in a mirrored (left-handed) frame, `solvePnP` returns a perfect fit (reprojection ≈ 0 px) with the camera turned around and the points *behind* it, because projection cannot distinguish a point from its reflection through the camera centre. Upstream would report an excellent calibration and triangulate garbage. The app rejects solutions with points at depth ≤ 0 (decisions.md).
+
+## 15. Intrinsics on the owner's pilot videos (M2 check)
+
+Same videos, upstream vs. app (`every 0.5 s`): cam01 0.29 px from 22/28 frames, coverage 50 % → warn; cam03 9/22 usable frames → fail; cam04 board found in 1/24 frames → error. Upstream had used 4 and 6 partial detections for cam03/cam04 and produced distortion values of -0.8 to -0.9.
