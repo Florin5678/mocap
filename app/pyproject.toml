@@ -34,7 +34,7 @@ markers = ["slow: runs Pose2Sim on demo data (minutes)"]
 addopts = "-m 'not slow'"
 
 [tool.ruff]
-line-length = 110
+line-length = 120
 src = ["src", "tests"]
 
 [tool.ruff.lint]

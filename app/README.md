@@ -2,7 +2,20 @@
 
 Desktop app around Pose2Sim: multi-camera videos of one person → validated 3D pose (`.trc`/`.c3d`) and OpenSim kinematics (`.osim`/`.mot`/`.bvh`). **Research use only.** Spec: [`../PROJECT.md`](../PROJECT.md).
 
-Status: Milestone 0 (scaffold, pinned environment, upstream spike). See [`docs/upstream-notes.md`](docs/upstream-notes.md).
+Status: Milestone 1 (session setup, validation, trial mapping, video normalisation, per-trial project assembly). Calibration (M2) and the runner (M3) are next. Upstream findings: [`docs/upstream-notes.md`](docs/upstream-notes.md).
+
+## Command line (so far)
+
+```
+mocapapp doctor
+mocapapp session new --study PA26 --trials 2 --heights 178,1.65 --cam cam01=<folder> --cam cam02=<folder> --out <root>
+mocapapp validate --session <root>/<session>          # checks inputs, prints the trial mapping table
+mocapapp pick --session <dir> --camera cam02 --role extrinsic --file <any video>
+mocapapp map --session <dir> --set cam01:1=<file> --set cam02:1=<file> ...
+mocapapp assemble --session <dir> [--dry-run]          # convert videos, build trials/trial_<label>/
+```
+
+Each camera folder holds `intrinsic.<ext>`, `extrinsic.<ext>` and one video per trial. The output root must be an ASCII-only path.
 
 ## Setup (developers)
 
