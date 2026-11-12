@@ -103,3 +103,18 @@ def test_macos_installer_syntax():
     bash = "C:/Program Files/Git/bin/bash.exe" if sys.platform == "win32" else "bash"
     for name in ("Install mocapapp.command", "Uninstall mocapapp.command"):
         assert subprocess.run([bash, "-n", str(INSTALLER / "macos" / name)], check=False).returncode == 0
+
+
+def test_cli_video_steps_explain_imported_sessions(tmp_path, capsys):
+    """The sample session keeps all cameras in one folder; 'validate' must not report that as an error."""
+    from mocapapp.cli.main import main
+    from mocapapp.core.session import save_session
+    from tests.m3_fakes import make_session
+
+    root = tmp_path / "S"
+    session = make_session(root)
+    session.calibration_source = "imported"
+    save_session(session, root)
+    for cmd in ("validate", "assemble"):
+        assert main([cmd, "--session", str(root)]) == 0
+        assert "Checking or copying videos is not needed" in capsys.readouterr().out

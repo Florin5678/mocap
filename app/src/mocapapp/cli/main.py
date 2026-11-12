@@ -85,6 +85,15 @@ def _frozen(session) -> bool:
     return False
 
 
+def _imported(session) -> bool:
+    """Sessions with an imported calibration (the sample) have their videos in place: nothing to check or copy."""
+    if session.calibration_source != "imported":
+        return False
+    print("This session uses an imported calibration and its videos are already in place (for example, the "
+          "sample session). Checking or copying videos is not needed; continue with 'mocapapp run'.")
+    return True
+
+
 def _cmd_validate(args: argparse.Namespace) -> int:
     from mocapapp.core.session import load_session, save_session
     from mocapapp.core.validate import validate
@@ -93,6 +102,8 @@ def _cmd_validate(args: argparse.Namespace) -> int:
     session = load_session(root)
     if _frozen(session):
         return 1
+    if _imported(session):
+        return 0
     report = validate(session, root)
     for issue in report.issues:
         print(issue)
@@ -110,6 +121,8 @@ def _cmd_map(args: argparse.Namespace) -> int:
     session = load_session(root)
     if _frozen(session):
         return 1
+    if _imported(session):
+        return 0
     for item in args.set:
         left, sep, file = item.partition("=")
         cam, sep2, label = left.partition(":")
@@ -149,6 +162,8 @@ def _cmd_assemble(args: argparse.Namespace) -> int:
     session = load_session(root)
     if _frozen(session):
         return 1
+    if _imported(session):
+        return 0
     report = validate(session, root)
     if not report.ok:
         for issue in report.issues:
