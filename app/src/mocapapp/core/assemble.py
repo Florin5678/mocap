@@ -58,6 +58,8 @@ def plan_inputs(session: Session, root: Path, report: Report) -> Plan:
         sources.append((Path(cam.intrinsic.file), layout.inputs(cam.name) / "intrinsic.mp4"))
         sources.append((Path(cam.extrinsic.file), layout.inputs(cam.name) / "extrinsic.mp4"))
         for label, f in cam.trial_files.items():
+            if not session.trial(label).raw_present:
+                continue
             sources.append((Path(f), layout.inputs(cam.name) / f"trial_{label}.mp4"))
     trial_files = [Path(f) for c in session.cameras for f in c.trial_files.values()]
     plan = Plan(target_fps=_common_fps(report, trial_files))
@@ -126,6 +128,8 @@ def assemble_trials(session: Session, root: Path, progress: Progress = print) ->
     points = _scene_points(root)
     made = []
     for trial in session.trials:
+        if not trial.raw_present:
+            continue
         tdir = layout.trial(trial.label)
         (tdir / "videos").mkdir(parents=True, exist_ok=True)
         # Upstream picks the first folder with 'calib' in its name: never create another one here.

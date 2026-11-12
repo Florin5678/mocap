@@ -118,6 +118,14 @@ def fill_versions(session: Session) -> None:
         session.opensim_version = None
 
 
+def ensure_not_frozen(session: Session) -> None:
+    """After any raw-footage deletion the session's videos are fixed: no re-validation, re-mapping or re-copying."""
+    if session.frozen:
+        gone = ", ".join(f"trial {t.label} ({t.code})" for t in session.trials if not t.raw_present)
+        raise SetupError(f"Raw footage was deleted in this session ({gone}), so its videos can no longer be checked, "
+                         "changed or prepared again. Start a new session for new recordings.")
+
+
 def pick_video(session: Session, camera: str, role: str, file: Path, root: Path | None = None) -> None:
     """D3: choose a calibration video from any folder. With `root`, results computed from the old video are
     removed (a new intrinsic video also means a new camera position)."""
@@ -125,6 +133,7 @@ def pick_video(session: Session, camera: str, role: str, file: Path, root: Path 
     from mocapapp.core.calibration.service import _invalidate_calib
     from mocapapp.core.session import Layout
 
+    ensure_not_frozen(session)
     path = Path(file).resolve()
     if not path.is_file():
         raise SetupError(f"{path} does not exist.")
@@ -150,6 +159,7 @@ def set_mapping(session: Session, table: dict[tuple[str, str], Path], root: Path
     removed from inputs/ and the trial folder, so they are prepared again."""
     from mocapapp.core.session import Layout
 
+    ensure_not_frozen(session)
     for (cam, label), file in table.items():
         if not Path(file).is_file():
             raise SetupError(f"{file} does not exist.")
@@ -176,7 +186,7 @@ def run_ready(session: Session, root: Path) -> list[Issue]:
                 issues.append(Issue("error", cam, f"Calibration: {state}.", "Finish the calibration steps."))
     elif not Layout(root).calib_file.is_file():
         issues.append(Issue("error", "calibration", "The imported calibration file is missing.", ""))
-    return issues + runner.preflight(session, root, [t.label for t in session.trials])
+    return issues + runner.preflight(session, root, [t.label for t in session.active_trials])
 
 
 def inputs_ready(session: Session, root: Path) -> bool:
@@ -184,15 +194,16 @@ def inputs_ready(session: Session, root: Path) -> bool:
     from mocapapp.core.session import Layout
 
     layout = Layout(root)
+    trials = [t for t in session.trials if t.raw_present]  # deleted footage is gone on purpose
     for cam in session.cameras:
-        names = [f"trial_{t.label}.mp4" for t in session.trials]
+        names = [f"trial_{t.label}.mp4" for t in trials]
         if session.calibration_source == "app":
             names += ["intrinsic.mp4", "extrinsic.mp4"]
         if not all((layout.inputs(cam.name) / n).is_file() for n in names):
             return False
     return all((layout.trial(t.label) / "Config.toml").is_file() and
                all((layout.trial(t.label) / "videos" / f"{c.name}.mp4").is_file() for c in session.cameras)
-               for t in session.trials)
+               for t in trials)
 
 
 def prepare_session(session: Session, root: Path, progress=print, dry_run: bool = False):
@@ -201,6 +212,7 @@ def prepare_session(session: Session, root: Path, progress=print, dry_run: bool 
     from mocapapp.core.assemble import assemble_trials, plan_inputs, prepare_inputs
     from mocapapp.core.validate import validate
 
+    ensure_not_frozen(session)
     report = validate(session, root)
     save_session(session, root)
     if not report.ok:

@@ -114,7 +114,7 @@ def export(session: Session, root: Path, selection: list[str], labels: list[str]
         raise ValueError(f"Unknown export items: {', '.join(unknown)}. Choose from: {', '.join(table)}.")
     warnings: list[str] = []
     files: list[dict] = []
-    for trial in session.trials:
+    for trial in session.active_trials:
         if labels and trial.label not in labels:
             continue
         tdir = layout.trial(trial.label)

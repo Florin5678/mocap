@@ -50,6 +50,14 @@ class Trial(BaseModel):
     height_m: float | None = None  # None = 'auto'
     consent: Consent = Field(default_factory=Consent)
     delete_raw: bool = True  # follows consent: no storage consent -> delete (PROJECT.md §6.2)
+    # PROJECT.md §8.4: set by save_session when raw footage is kept with consent ("analysis finished")
+    retention_until: str | None = None
+    raw_deleted_at: str | None = None  # working copies + overlays + 2D keypoints deleted (§8.4)
+    withdrawn_at: str | None = None  # "Delete all participant data": every file of this trial is gone
+
+    @property
+    def raw_present(self) -> bool:
+        return self.raw_deleted_at is None and self.withdrawn_at is None
 
     @field_validator("height_m", mode="before")
     @classmethod
@@ -126,6 +134,16 @@ class Session(BaseModel):
                 return cam
         raise KeyError(f"No camera named {name} in this session.")
 
+    @property
+    def active_trials(self) -> list[Trial]:
+        """Trials whose participant has not withdrawn (withdrawn trials keep only their code and the log)."""
+        return [t for t in self.trials if t.withdrawn_at is None]
+
+    @property
+    def frozen(self) -> bool:
+        """Raw footage was deleted for some trial: the session's videos can no longer be prepared again."""
+        return any(not t.raw_present for t in self.trials)
+
     def trial(self, label: str) -> Trial:
         for t in self.trials:
             if t.label == label:
@@ -193,9 +211,38 @@ def atomic_write_text(path: Path, text: str) -> None:
         raise
 
 
+RETENTION_TEXT = "analysis finished"
+CONSENT_FILE = "consent.json"
+
+
+def _sync_retention(trial: Trial) -> None:
+    """§8.4 item 6: storage consented and deletion declined -> keep until the analysis is finished."""
+    keep = trial.raw_present and not trial.delete_raw and trial.consent.raw_footage_storage
+    trial.retention_until = RETENTION_TEXT if keep else None
+
+
+def consent_record(trial: Trial) -> dict:
+    """The per-trial consent.json of PROJECT.md §8.3 (no personal data: the code is a pseudonym)."""
+    c = trial.consent
+    return {"code": trial.code, "attested": c.attested, "attested_at": c.attested_at,
+            "raw_footage_storage": c.raw_footage_storage, "template_version": c.template_version,
+            "delete_raw": trial.delete_raw, "retention_until": trial.retention_until}
+
+
 def save_session(session: Session, root: Path) -> Path:
-    path = Layout(root).session_json
+    """Write session.json and each trial's consent.json (folders of withdrawn trials stay deleted)."""
+    layout = Layout(root)
+    for t in session.trials:
+        _sync_retention(t)
+    path = layout.session_json
     atomic_write_text(path, session.model_dump_json(by_alias=True, indent=2) + "\n")
+    for t in session.active_trials:
+        if not layout.trial(t.label).is_dir():
+            continue  # written once the trial folder is assembled (save_session runs again then)
+        target = layout.trial(t.label) / CONSENT_FILE
+        text = json.dumps(consent_record(t), indent=2) + "\n"
+        if not target.is_file() or target.read_text(encoding="utf-8") != text:
+            atomic_write_text(target, text)
     return path
 
 

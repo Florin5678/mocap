@@ -74,12 +74,25 @@ def _print_mapping(session, report) -> None:
         print("  Check this table. Fix it with: mocapapp map --session <dir> --set cam01:<trial>=<file> ...")
 
 
+def _frozen(session) -> bool:
+    from mocapapp.core.workflow import SetupError, ensure_not_frozen
+
+    try:
+        ensure_not_frozen(session)
+    except SetupError as exc:
+        print(exc)
+        return True
+    return False
+
+
 def _cmd_validate(args: argparse.Namespace) -> int:
     from mocapapp.core.session import load_session, save_session
     from mocapapp.core.validate import validate
 
     root = Path(args.session)
     session = load_session(root)
+    if _frozen(session):
+        return 1
     report = validate(session, root)
     for issue in report.issues:
         print(issue)
@@ -95,6 +108,8 @@ def _cmd_map(args: argparse.Namespace) -> int:
 
     root = Path(args.session)
     session = load_session(root)
+    if _frozen(session):
+        return 1
     for item in args.set:
         left, sep, file = item.partition("=")
         cam, sep2, label = left.partition(":")
@@ -132,6 +147,8 @@ def _cmd_assemble(args: argparse.Namespace) -> int:
 
     root = Path(args.session)
     session = load_session(root)
+    if _frozen(session):
+        return 1
     report = validate(session, root)
     if not report.ok:
         for issue in report.issues:
@@ -276,7 +293,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
     root = Path(args.session)
     session = load_session(root)
-    labels = [args.trial] if args.trial else [t.label for t in session.trials]
+    labels = [args.trial] if args.trial else [t.label for t in session.trials if t.raw_present]
     if args.fix_sync:
         if not args.trial:
             raise SystemExit("--fix-sync needs --trial.")
@@ -359,7 +376,8 @@ def _cmd_export(args: argparse.Namespace) -> int:
     session = load_session(root)
     selection = args.select.split(",") if args.select else default_selection(session.settings.filter.type)
     labels = [args.trial] if args.trial else None
-    qa = {t.label: trial_qa(session, root, t.label).light for t in session.trials if not labels or t.label in labels}
+    qa = {t.label: trial_qa(session, root, t.label).light for t in session.active_trials
+          if not labels or t.label in labels}
     try:
         out, warnings = export(session, root, selection, labels, qa)
     except ValueError as exc:
@@ -399,6 +417,65 @@ def _cmd_sample(args: argparse.Namespace) -> int:
     print(f"Sample session ready: {root}")
     print(f'Next: mocapapp confirm --session "{root}" --sync-cue; mocapapp consent --session "{root}" --trial 1 '
           f'--attest; mocapapp run --session "{root}"')
+    return 0
+
+
+def _delete(args: argparse.Namespace, scope: str) -> int:
+    from mocapapp.core import deletion
+    from mocapapp.core.session import load_session
+
+    root = Path(args.session)
+    session = load_session(root)
+    try:
+        if scope == "raw":
+            plan = deletion.plan_raw(session, root, args.trial, args.include_originals, after_run=args.after_run)
+        elif args.trial:
+            plan = deletion.plan_participant(session, root, args.trial, args.include_originals)
+        else:
+            plan = deletion.plan_session(session, root, args.include_originals)
+    except deletion.DeletionError as exc:
+        print(exc)
+        return 1
+    print(plan.describe())
+    if not args.yes:
+        confirm = f' --confirm "{plan.confirm_text}"' if plan.confirm_text else ""
+        print(f"\nNothing was deleted (dry run). Add --yes{confirm} to delete.")
+        return 0
+    try:
+        result = deletion.execute(plan, session, args.confirm)
+    except deletion.DeletionError as exc:
+        print(f"\n{exc}")
+        return 1
+    print(f"\nDeleted {result.deleted} item(s), {deletion.human_size(result.bytes)}.")
+    for f in result.failures:
+        print(f"Could not delete {f}")
+    print("\nThe app cannot do these for you - please check:")
+    for line in result.checklist:
+        print(f"  [ ] {line}")
+    return 1 if result.failures else 0
+
+
+def _cmd_delete_raw(args: argparse.Namespace) -> int:
+    return _delete(args, "raw")
+
+
+def _cmd_delete_session(args: argparse.Namespace) -> int:
+    return _delete(args, "participant")
+
+
+def _cmd_reminders(args: argparse.Namespace) -> int:
+    from mocapapp.core.deletion import session_reminders
+    from mocapapp.core.session import SESSION_FILE
+
+    base = Path(args.root)
+    roots = [base] if (base / SESSION_FILE).is_file() else sorted(p.parent for p in base.glob(f"*/{SESSION_FILE}"))
+    found = 0
+    for root in roots:
+        for line in session_reminders(root):
+            print(f"{root.name}: {line}")
+            found += 1
+    if not found:
+        print("No raw footage waiting to be deleted.")
     return 0
 
 
@@ -529,6 +606,27 @@ def build_parser() -> argparse.ArgumentParser:
     exp.add_argument("--select", help="comma list, e.g. config,trc.filt_lstm,c3d.filt_lstm,osim,mot,bvh "
                                       "(default: the ticked-by-default items)")
     exp.set_defaults(func=_cmd_export)
+
+    dr = sub.add_parser("delete-raw", help="delete a trial's raw footage, overlay videos and 2D keypoints "
+                                           "(dry run unless --yes)")
+    dr.add_argument("--trial", required=True)
+    dr.add_argument("--after-run", action="store_true",
+                    help="the deletion chosen at setup: refuse unless results are complete and exported")
+    dr.set_defaults(func=_cmd_delete_raw)
+    ds = sub.add_parser("delete-session", help="delete all participant data: one trial (--trial) or the whole "
+                                               "session (dry run unless --yes)")
+    ds.add_argument("--trial", help="only this participant (withdrawal); omit to delete the whole session")
+    ds.set_defaults(func=_cmd_delete_session)
+    for p in (dr, ds):
+        p.add_argument("--session", required=True)
+        p.add_argument("--include-originals", action="store_true",
+                       help="also delete the original recordings in the camera folders")
+        p.add_argument("--yes", action="store_true", help="really delete (otherwise only list what would go)")
+        p.add_argument("--confirm", help="the trial code (or session folder name) when asked to type it")
+
+    rem = sub.add_parser("reminders", help="list sessions whose raw footage is still stored")
+    rem.add_argument("--root", required=True, help="output folder holding sessions, or one session folder")
+    rem.set_defaults(func=_cmd_reminders)
 
     mp = sub.add_parser("map", help="set the trial mapping by hand")
     mp.add_argument("--session", required=True)

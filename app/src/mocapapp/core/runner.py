@@ -202,6 +202,13 @@ def preflight(session: Session, root: Path, labels: list[str]) -> list[Issue]:
         trial = session.trial(label)
         tdir = layout.trial(label)
         where = f"trial {label} ({trial.code})"
+        if trial.withdrawn_at:
+            continue
+        if not trial.raw_present:
+            if session.run_state.trial_status.get(label) != "done":
+                issues.append(Issue("error", where, f"The raw footage was deleted on {trial.raw_deleted_at}, so "
+                                    "this trial can no longer be processed.", "Leave it out of the run."))
+            continue
         if not trial.consent.attested:
             issues.append(Issue("action", where, "Signed consent for this participant has not been confirmed.",
                                 f"mocapapp consent --session <dir> --trial {label} --attest"))
@@ -270,6 +277,8 @@ def run_trial(session: Session, root: Path, label: str, listener: Listener = lam
               cancel: threading.Event | None = None, resume: bool = True, stages: list[str] | None = None,
               accept_sync: bool = False) -> bool:
     """Run (or resume) one trial. Returns True when every requested stage succeeded."""
+    if not session.trial(label).raw_present:
+        raise ValueError(f"Trial {label}: the raw footage was deleted, so it cannot be processed again.")
     layout = Layout(root)
     tdir = layout.trial(label)
     cams = [c.name for c in session.cameras]
@@ -339,6 +348,10 @@ def run_session(session: Session, root: Path, labels: list[str] | None = None, l
     results = {}
     for trial in session.trials:
         if labels and trial.label not in labels:
+            continue
+        if not trial.raw_present:  # withdrawn, or footage deleted: nothing can be (re)computed
+            results[trial.label] = "withdrawn" if trial.withdrawn_at else session.run_state.trial_status.get(
+                trial.label, "raw footage deleted")
             continue
         run_trial(session, root, trial.label, listener, cancel, resume, accept_sync=accept_sync)
         results[trial.label] = session.run_state.trial_status[trial.label]

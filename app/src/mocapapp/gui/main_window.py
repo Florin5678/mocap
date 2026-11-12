@@ -24,7 +24,15 @@ from PySide6.QtWidgets import (
 from mocapapp import CITATION, __version__
 from mocapapp.core.session import Session, load_session, save_session
 from mocapapp.core.texts import s
-from mocapapp.gui.common import Background, error_box, heading, recent_sessions, remember_session, settings
+from mocapapp.gui.common import (
+    Background,
+    error_box,
+    forget_session,
+    heading,
+    recent_sessions,
+    remember_session,
+    settings,
+)
 
 TUTORIAL_PAGE = {"setup": 0, "videos": 3, "intrinsics": 3, "scene": 4, "extrinsics": 3, "run": 5, "results": 0}
 
@@ -126,6 +134,8 @@ class MainWindow(QMainWindow):
         self.recent_menu.aboutToShow.connect(self._fill_recent)
         self._action(file, "Try with &sample data ...", self.make_sample)
         file.addSeparator()
+        self.data_action = self._action(file, "&Participant data and deletion ...", self.show_participant_data)
+        file.addSeparator()
         self._action(file, "&Quit", self.close, QKeySequence.StandardKey.Quit)
         help_menu = self.menuBar().addMenu("&Help")
         self._action(help_menu, "&How it works", lambda: self.show_tutorial(0), QKeySequence.StandardKey.HelpContents)
@@ -147,8 +157,14 @@ class MainWindow(QMainWindow):
         paths = recent_sessions()
         if not paths:
             self.recent_menu.addAction("(none)").setEnabled(False)
+        from mocapapp.core.deletion import session_reminders
+
         for p in paths:
-            self.recent_menu.addAction(str(p), lambda p=p: self.open_session(p))
+            notes = session_reminders(p)  # §8.4 item 6: footage still stored
+            action = self.recent_menu.addAction(str(p) + ("   - raw footage to delete" if notes else ""),
+                                                lambda p=p: self.open_session(p))
+            action.setToolTip(" ".join(notes))
+        self.recent_menu.setToolTipsVisible(True)
 
     # ---------- session ----------
 
@@ -158,6 +174,7 @@ class MainWindow(QMainWindow):
             remember_session(root)
             settings().setValue("output_root", str(Path(root).parent))
         self.session_label.setText(f"Session: {root.name}" if root else "")
+        self.data_action.setEnabled(session is not None)
         self.setWindowTitle(f"{s('app_name')} - {root.name}" if root else s("app_name"))
         for page in self.pages:
             page.refresh()
@@ -212,6 +229,22 @@ class MainWindow(QMainWindow):
 
         Background(self, make_sample_session, Path(folder), on_done=done, on_error=failed,
                    on_progress=dlg.setLabelText, progress=True)
+
+    def show_participant_data(self) -> None:
+        """Consent, retention and deletion for every trial; reachable at any time (§8.4)."""
+        from mocapapp.gui.privacy_dialog import ParticipantDataDialog
+
+        if self.session is None or self.busy:
+            return
+        root = self.root
+        dlg = ParticipantDataDialog(self, self.session, root)
+        dlg.exec()
+        if dlg.session_deleted:
+            forget_session(root)
+            self.set_session(None, None)
+            self.go(0)
+            return
+        self.set_session(root, self.session)  # pages show deleted/withdrawn trials
 
     # ---------- navigation ----------
 

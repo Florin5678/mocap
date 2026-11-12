@@ -84,9 +84,22 @@ class ResultsPage(Page):
         self.export_box.toggled.connect(body.setVisible)
         QVBoxLayout(self.export_box).addWidget(body)
         layout.addWidget(self.export_box)
+        data_box = QGroupBox("Raw footage and participant data")
+        dl = QVBoxLayout(data_box)
         self.deletion = QLabel()
         self.deletion.setWordWrap(True)
-        layout.addWidget(self.deletion)
+        dl.addWidget(self.deletion)
+        drow = QHBoxLayout()
+        self.delete_now = QPushButton("Delete raw footage now ...")
+        self.delete_now.setToolTip("For the trials marked 'delete' at setup. Shows the exact files first.")
+        self.delete_now.clicked.connect(self.delete_marked)
+        self.data_button = QPushButton("Participant data and deletion ...")
+        self.data_button.clicked.connect(self.win.show_participant_data)
+        drow.addWidget(self.delete_now)
+        drow.addWidget(self.data_button)
+        drow.addStretch()
+        dl.addLayout(drow)
+        layout.addWidget(data_box)
         layout.addStretch()
         area = QScrollArea()
         area.setWidgetResizable(True)
@@ -132,11 +145,34 @@ class ResultsPage(Page):
         self.source.setText("Joint angles, the scaled model and the BVH animation are computed from "
                             f"<b>{'LSTM-augmented markers' if st.use_augmentation else 'filtered keypoints'}</b>. "
                             "File names start with the trial code (a pseudonym).")
-        keep = [t for t in self.session.trials if not t.delete_raw]
-        self.deletion.setText("<b>Raw footage:</b> " + "; ".join(
-            f"trial {t.label} ({t.code}): {'to be deleted' if t.delete_raw else 'kept (storage consented)'}"
-            for t in self.session.trials) + ("" if not keep else ". Footage kept with consent must be deleted when "
-                                             "the analysis is finished."))
+        self._show_deletion_state()
+
+    def _due(self) -> list:
+        """Trials marked for deletion at setup whose footage is still there."""
+        return [t for t in self.session.active_trials if t.delete_raw and t.raw_present]
+
+    def _show_deletion_state(self) -> None:
+        lines = []
+        for t in self.session.trials:
+            if t.withdrawn_at:
+                state = f"all data deleted on {t.withdrawn_at[:10]} (withdrawn)"
+            elif t.raw_deleted_at:
+                state = f"deleted on {t.raw_deleted_at[:10]}"
+            elif t.delete_raw:
+                state = "<b>still stored</b>, marked for deletion after export"
+            else:
+                state = "kept with consent until the analysis is finished - delete it then"
+            lines.append(f"Trial {html.escape(t.label)} ({html.escape(t.code)}): {state}")
+        self.deletion.setText("<br>".join(lines))
+        self.delete_now.setEnabled(bool(self._due()) and not self.win.busy)
+
+    def delete_marked(self) -> None:
+        """§8.4 safeguard 1: the deletion chosen at setup runs only once results are complete and exported."""
+        from mocapapp.gui.privacy_dialog import DeleteDialog
+
+        for t in self._due():
+            DeleteDialog(self, self.session, self.root, "raw", t.label, after_run=True).exec()
+        self.win.set_session(self.root, self.session)
 
     def do_export(self) -> None:
         selection = [k for k, b in self.boxes.items() if b.isChecked()]
@@ -147,6 +183,8 @@ class ResultsPage(Page):
         self.win.set_busy(True)
         self.close_button.setEnabled(False)
         self.export_button.setEnabled(False)
+        self.delete_now.setEnabled(False)
+        self.data_button.setEnabled(False)
         self.export_state.setText("Exporting ...")
 
         def done(result):
@@ -154,6 +192,8 @@ class ResultsPage(Page):
             self.win.set_busy(False)
             self.close_button.setEnabled(True)
             self.export_button.setEnabled(True)
+            self.data_button.setEnabled(True)
+            self._show_deletion_state()
             self.completeChanged.emit()
             self.export_state.setText(f"Exported to {out}" + ("<br>" + "<br>".join(html.escape(w) for w in warnings)
                                                                 if warnings else ""))
@@ -162,6 +202,8 @@ class ResultsPage(Page):
             self.win.set_busy(False)
             self.close_button.setEnabled(True)
             self.export_button.setEnabled(True)
+            self.data_button.setEnabled(True)
+            self._show_deletion_state()
             self.export_state.setText("")
             error_box(self, "Export failed", msg, details)
 

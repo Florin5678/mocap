@@ -254,7 +254,8 @@ LIGHT_COLOR = {"green": "#2e7d32", "amber": "#b26a00", "red": "#c62828", "grey":
 
 def write_report(session: Session, root: Path, labels: list[str] | None = None) -> tuple[Path, list[TrialQA]]:
     layout = Layout(root)
-    results = [trial_qa(session, root, t.label) for t in session.trials if not labels or t.label in labels]
+    results = [trial_qa(session, root, t.label) for t in session.active_trials
+               if not labels or t.label in labels]
     layout.qa.mkdir(parents=True, exist_ok=True)
     atomic_write_text(layout.qa / "qa.json", json.dumps({
         "thresholds": THRESHOLDS, "trials": [r.to_dict() for r in results]}, indent=2) + "\n")

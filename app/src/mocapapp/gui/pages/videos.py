@@ -106,6 +106,14 @@ class VideosPage(Page):
         self._fill_calib()
         self._fill_grid()
         self.prepare_button.setEnabled(self.report is not None and self.report.ok)
+        frozen = self.session.frozen
+        if frozen:  # §8.4: after a deletion the session's videos stay as they are
+            self.status.setText("Raw footage was deleted in this session, so its videos can no longer be checked "
+                                "or changed. Start a new session for new recordings.")
+        for b in (self.check_button, self.save_mapping_button):
+            b.setEnabled(not frozen)
+        if frozen:
+            self.prepare_button.setEnabled(False)
 
     # ---------- check ----------
 

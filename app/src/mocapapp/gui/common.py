@@ -38,6 +38,10 @@ def remember_session(root: Path) -> None:
     settings().setValue("recent_sessions", paths[:MAX_RECENT])
 
 
+def forget_session(root: Path) -> None:
+    settings().setValue("recent_sessions", [str(p) for p in recent_sessions() if Path(p) != Path(root)])
+
+
 def last_output_root() -> str:
     return str(settings().value("output_root", "") or "")
 

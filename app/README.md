@@ -2,7 +2,7 @@
 
 Desktop app around Pose2Sim: multi-camera videos of one person → validated 3D pose (`.trc`/`.c3d`) and OpenSim kinematics (`.osim`/`.mot`/`.bvh`). **Research use only.** Spec: [`../PROJECT.md`](../PROJECT.md).
 
-Status: Milestone 4 - the app window (greeting dialog, tutorial, a step-by-step wizard from session setup to export) on top of the headless core (session setup, validation and trial mapping, video normalisation, lens and camera-position calibration, the Pose2Sim runner with resume/cancel and sync checks, QA report with 3D preview, export with manifest), plus the printable calibration board and consent-form PDFs. Privacy features (M5) are next. Upstream findings: [`docs/upstream-notes.md`](docs/upstream-notes.md).
+Status: Milestone 4 - the app window (greeting dialog, tutorial, a step-by-step wizard from session setup to export) on top of the headless core (session setup, validation and trial mapping, video normalisation, lens and camera-position calibration, the Pose2Sim runner with resume/cancel and sync checks, QA report with 3D preview, export with manifest), plus the printable calibration board and consent-form PDFs, and the privacy features of Milestone 5 (per-trial consent records, raw-footage deletion with safeguards, withdrawal, retention reminders; see [`docs/privacy.md`](docs/privacy.md)). Packaging and the user guide (M6) are next. Upstream findings: [`docs/upstream-notes.md`](docs/upstream-notes.md).
 
 ## The app window
 
@@ -11,7 +11,7 @@ uv run mocapapp gui                       # greeting dialog -> tutorial or a new
 uv run mocapapp gui --session <dir>       # reopen a session
 ```
 
-Steps: Session -> Videos -> Lens calibration -> Reference points -> Camera positions -> Run -> Results. **File > Try with sample data** builds a ready-to-run session from upstream's demo (its calibration is imported, so the calibration steps are skipped).
+Steps: Session -> Videos -> Lens calibration -> Reference points -> Camera positions -> Run -> Results. **File > Try with sample data** builds a ready-to-run session from upstream's demo (its calibration is imported, so the calibration steps are skipped). **File > Participant data and deletion** (also on the Session and Results steps) deletes raw footage or all data of a participant at any time; every deletion lists the exact files first.
 
 ## Command line
 
@@ -38,6 +38,9 @@ mocapapp run --session <dir> [--trial 1] [--restart] [--accept-sync] [--verbose]
 mocapapp run --session <dir> --trial 1 --fix-sync          # open upstream's sync player, then continue
 mocapapp qa --session <dir>                                # qa/qa_report.html, qa/qa.json, qa/trial_<label>_preview.html
 mocapapp export --session <dir> [--select config,trc.filt_lstm,c3d.filt_lstm,osim,mot,bvh]
+mocapapp delete-raw --session <dir> --trial 1 [--include-originals] [--after-run]     # lists only; add --yes [--confirm CODE]
+mocapapp delete-session --session <dir> [--trial 1] [--include-originals]           # withdrawal / whole session; --yes --confirm
+mocapapp reminders --root <output root>                    # sessions whose raw footage is still stored
 ```
 
 Stage output is logged to `trials/trial_<label>/mocap_logs/<stage>.log`. The slow end-to-end tests on upstream's demo (CLI and GUI, ~4 min each): `uv run pytest -m slow`. GUI tests run offscreen; `MOCAP_SCREENSHOTS=<folder>` saves a PNG of every wizard step.

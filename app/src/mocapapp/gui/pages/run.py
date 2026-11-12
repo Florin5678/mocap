@@ -170,6 +170,10 @@ class RunPage(Page):
         work = Layout(root).calibration_work
         rows = []
         for t in ses.trials:
+            if not t.raw_present:
+                gone = "all data deleted (withdrawn)" if t.withdrawn_at else "raw footage deleted"
+                rows.append(f"<tr><td>{t.label}</td><td>{html.escape(t.code)}</td><td colspan=3>{gone}</td></tr>")
+                continue
             h = f"{t.height_m:.2f} m" if t.height_m else "estimated"
             rows.append(f"<tr><td>{t.label}</td><td>{html.escape(t.code)}</td><td>{h}</td>"
                         f"<td>{'yes' if t.consent.attested else '<b>no</b>'}</td>"
@@ -236,6 +240,10 @@ class RunPage(Page):
         self.trials.setRowCount(len(self.session.trials))
         for r, t in enumerate(self.session.trials):
             status = rs.trial_status.get(t.label, "pending")
+            if t.withdrawn_at:
+                status = "withdrawn"
+            elif not t.raw_present and status != "done":
+                status = "raw footage deleted"
             msg = rs.errors.get(t.label) or "; ".join(rs.sync.get(t.label, {}).get("issues", []))
             self.trials.setItem(r, 0, readonly(t.label))
             self.trials.setItem(r, 1, readonly(t.code))
@@ -257,7 +265,9 @@ class RunPage(Page):
         if self.session is None:
             return False
         st = self.session.run_state.trial_status
-        return bool(self.session.trials) and all(st.get(t.label) == "done" for t in self.session.trials)
+        # trials whose footage was deleted can never run again: they do not hold the wizard back
+        return bool(self.session.trials) and all(st.get(t.label) == "done" or not t.raw_present
+                                                 for t in self.session.trials)
 
     # ---------- running ----------
 

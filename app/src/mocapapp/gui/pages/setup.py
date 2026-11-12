@@ -222,6 +222,13 @@ class SetupPage(Page):
         self.people.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self.people.horizontalHeader().setStretchLastSection(True)
         bl.addWidget(self.people)
+        data_row = QHBoxLayout()
+        self.data_button = QPushButton("Participant data and deletion ...")
+        self.data_button.setToolTip("Delete raw footage or all data of a participant, at any time.")
+        self.data_button.clicked.connect(self.win.show_participant_data)
+        data_row.addWidget(self.data_button)
+        data_row.addStretch()
+        bl.addLayout(data_row)
         layout.addWidget(box)
         self.existing_issues = IssueView()
         self.existing_issues.setMaximumHeight(160)
@@ -244,6 +251,11 @@ class SetupPage(Page):
         self.people.setVerticalHeaderLabels([f"Trial {t.label}" for t in self.session.trials])
         for r, t in enumerate(self.session.trials):
             self.people.setItem(r, 0, readonly(t.code))
+            if not t.raw_present:  # nothing left to set up for this participant
+                gone = (f"all data deleted {t.withdrawn_at[:10]}" if t.withdrawn_at
+                        else f"raw footage deleted {t.raw_deleted_at[:10]}")
+                self.people.setItem(r, 1, readonly(gone))
+                continue
             h = QLineEdit(height_text(t.height_m))
             h.setPlaceholderText("estimate")
             h.editingFinished.connect(lambda t=t, h=h: self._set_height(t, h))
@@ -294,6 +306,8 @@ class SetupPage(Page):
     def _check_existing(self) -> None:
         issues = []
         for t in self.session.trials:
+            if not t.raw_present:
+                continue
             where = f"trial {t.label} ({t.code})"
             if not t.consent.attested:
                 issues.append(Issue("action", where, "Signed consent not yet confirmed (needed before Run).", ""))
