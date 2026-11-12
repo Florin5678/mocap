@@ -14,13 +14,22 @@ dependencies = [
     "rtoml>=0.11",
     "tomlkit>=0.13",
     "imageio-ffmpeg>=0.5",
+    "reportlab>=4.2,<5",
 ]
 
 [project.scripts]
 mocapapp = "mocapapp.cli.main:main"
 
+[project.gui-scripts]
+mocapapp-gui = "mocapapp.gui.app:main"
+
 [dependency-groups]
-dev = ["pytest>=8.3", "ruff>=0.7"]
+dev = [
+    "pypdf>=5",
+    "pytest>=8.3",
+    "pytest-qt>=4.4",
+    "ruff>=0.7",
+]
 
 [tool.uv.sources]
 pose2sim = { path = "..", editable = true }

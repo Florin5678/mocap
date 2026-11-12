@@ -82,13 +82,23 @@ def prepare_inputs(plan: Plan, report: Report, progress: Progress = print) -> di
                       f"{plan.bytes_free / 1e9:.1f} GB free. Free up space or choose another output folder.")
     done = {}
     for i, (src, dst, _how) in enumerate(plan.jobs, 1):
-        if dst.exists():
+        stamp = _source_stamp(src, plan.target_fps)
+        stamp_file = dst.with_name(dst.name + ".source")
+        if dst.exists() and stamp_file.is_file() and stamp_file.read_text(encoding="utf-8") == stamp:
             done[str(dst)] = "existing"
             continue
+        dst.unlink(missing_ok=True)  # another source was chosen since (new mapping or calibration video)
         progress(f"[{i}/{len(plan.jobs)}] {src.name} -> {dst.parent.name}/{dst.name}")
         info = report.probes.get(str(src))
         done[str(dst)] = media.normalise(src, dst, info, plan.target_fps)
+        stamp_file.write_text(stamp, encoding="utf-8")
     return done
+
+
+def _source_stamp(src: Path, fps: float | None) -> str:
+    st = Path(src).stat()
+    return json.dumps({"source": str(Path(src).resolve()), "size": st.st_size, "mtime": int(st.st_mtime),
+                       "fps": fps})
 
 
 def _link_or_copy(src: Path, dst: Path) -> None:

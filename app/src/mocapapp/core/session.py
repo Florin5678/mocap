@@ -115,6 +115,8 @@ class Session(BaseModel):
     settings: Settings = Field(default_factory=Settings)
     run_state: RunState = Field(default_factory=RunState)
     sync_cue_confirmed: bool = False
+    # "app" = computed with the app's calibration steps; "imported" = an existing Calib file (sample data only)
+    calibration_source: Literal["app", "imported"] = "app"
 
     model_config = {"populate_by_name": True}
 

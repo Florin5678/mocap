@@ -102,7 +102,7 @@ class FakeStages:
         stem = f"{tdir.name}_1-20"
         folder = {"poseEstimation": "pose", "synchronization": "pose-sync", "personAssociation": "pose-associated"}
         if stage in folder:
-            for cam in ("cam01", "cam02"):
+            for cam in sorted(v.stem for v in (tdir / "videos").glob("*.mp4")) or ["cam01", "cam02"]:
                 d = tdir / folder[stage] / f"{cam}_json"
                 d.mkdir(parents=True, exist_ok=True)
                 (d / f"{cam}_000001.json").write_text("{}")

@@ -1,0 +1,325 @@
+"""One window, a linear wizard with a step bar and a non-destructive Back (PROJECT.md §7)."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QAction, QKeySequence
+from PySide6.QtWidgets import (
+    QFileDialog,
+    QHBoxLayout,
+    QLabel,
+    QListWidget,
+    QListWidgetItem,
+    QMainWindow,
+    QMessageBox,
+    QProgressDialog,
+    QPushButton,
+    QStackedWidget,
+    QVBoxLayout,
+    QWidget,
+)
+
+from mocapapp import CITATION, __version__
+from mocapapp.core.session import Session, load_session, save_session
+from mocapapp.core.texts import s
+from mocapapp.gui.common import Background, error_box, heading, recent_sessions, remember_session, settings
+
+TUTORIAL_PAGE = {"setup": 0, "videos": 3, "intrinsics": 3, "scene": 4, "extrinsics": 3, "run": 5, "results": 0}
+
+
+class Page(QWidget):
+    """A wizard step. Pages call core functions only; `refresh` re-reads the session."""
+
+    key = ""
+    title = ""
+    completeChanged = Signal()
+
+    def __init__(self, win: MainWindow):
+        super().__init__()
+        self.win = win
+
+    @property
+    def session(self) -> Session | None:
+        return self.win.session
+
+    @property
+    def root(self) -> Path | None:
+        return self.win.root
+
+    def refresh(self) -> None:
+        pass
+
+    def is_complete(self) -> bool:
+        return True
+
+    def skipped(self) -> bool:
+        """True when this step does not apply to the session (e.g. calibration of the sample data)."""
+        return False
+
+
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        from mocapapp.gui.pages.calibration import ExtrinsicsPage, IntrinsicsPage, ScenePage
+        from mocapapp.gui.pages.results import ResultsPage
+        from mocapapp.gui.pages.run import RunPage
+        from mocapapp.gui.pages.setup import SetupPage
+        from mocapapp.gui.pages.videos import VideosPage
+
+        self.root: Path | None = None
+        self.session: Session | None = None
+        self.busy = False
+        self.setWindowTitle(s("app_name"))
+        self.resize(1180, 780)
+
+        self.pages: list[Page] = [SetupPage(self), VideosPage(self), IntrinsicsPage(self), ScenePage(self),
+                                  ExtrinsicsPage(self), RunPage(self), ResultsPage(self)]
+        self.steps = QListWidget()
+        self.steps.setFixedWidth(230)
+        self.steps.currentRowChanged.connect(self._step_clicked)
+        self.stack = QStackedWidget()
+        for page in self.pages:
+            self.steps.addItem(QListWidgetItem(page.title))
+            self.stack.addWidget(page)
+            page.completeChanged.connect(self.update_nav)
+
+        self.purpose = QLabel()
+        self.purpose.setWordWrap(True)
+        self.purpose.setTextFormat(Qt.TextFormat.RichText)
+        self.purpose.linkActivated.connect(lambda _: self.show_tutorial(TUTORIAL_PAGE[self.current_page().key]))
+        self.back_button = QPushButton("< Back")
+        self.next_button = QPushButton("Next >")
+        self.back_button.clicked.connect(lambda: self.go(self.stack.currentIndex() - 1))
+        self.next_button.clicked.connect(lambda: self.go(self.stack.currentIndex() + 1))
+
+        right = QVBoxLayout()
+        self.page_title = heading("", 16)
+        right.addWidget(self.page_title)
+        right.addWidget(self.purpose)
+        right.addWidget(self.stack, 1)
+        nav = QHBoxLayout()
+        nav.addWidget(self.back_button)
+        nav.addStretch()
+        self.session_label = QLabel()
+        self.session_label.setStyleSheet("color: palette(placeholder-text)")
+        nav.addWidget(self.session_label)
+        nav.addStretch()
+        nav.addWidget(self.next_button)
+        right.addLayout(nav)
+        central = QWidget()
+        layout = QHBoxLayout(central)
+        layout.addWidget(self.steps)
+        layout.addLayout(right, 1)
+        self.setCentralWidget(central)
+        self._menus()
+        self.go(0)
+
+    # ---------- menus ----------
+
+    def _menus(self) -> None:
+        file = self.menuBar().addMenu("&File")
+        self._action(file, "&New session", self.new_session, QKeySequence.StandardKey.New)
+        self._action(file, "&Open session ...", self.open_session_dialog, QKeySequence.StandardKey.Open)
+        self.recent_menu = file.addMenu("Recent sessions")
+        self.recent_menu.aboutToShow.connect(self._fill_recent)
+        self._action(file, "Try with &sample data ...", self.make_sample)
+        file.addSeparator()
+        self._action(file, "&Quit", self.close, QKeySequence.StandardKey.Quit)
+        help_menu = self.menuBar().addMenu("&Help")
+        self._action(help_menu, "&How it works", lambda: self.show_tutorial(0), QKeySequence.StandardKey.HelpContents)
+        self._action(help_menu, "Calibration &board PDF ...", self.save_board_pdf)
+        self._action(help_menu, "&Consent form PDF ...", lambda: self.save_consent_pdf(""))
+        self._action(help_menu, "&Environment check", self.show_doctor)
+        self._action(help_menu, "&About", self.show_about)
+
+    def _action(self, menu, text, slot, shortcut=None) -> QAction:
+        action = QAction(text, self)
+        action.triggered.connect(slot)
+        if shortcut is not None:
+            action.setShortcut(shortcut)
+        menu.addAction(action)
+        return action
+
+    def _fill_recent(self) -> None:
+        self.recent_menu.clear()
+        paths = recent_sessions()
+        if not paths:
+            self.recent_menu.addAction("(none)").setEnabled(False)
+        for p in paths:
+            self.recent_menu.addAction(str(p), lambda p=p: self.open_session(p))
+
+    # ---------- session ----------
+
+    def set_session(self, root: Path | None, session: Session | None) -> None:
+        self.root, self.session = root, session
+        if root is not None:
+            remember_session(root)
+            settings().setValue("output_root", str(Path(root).parent))
+        self.session_label.setText(f"Session: {root.name}" if root else "")
+        self.setWindowTitle(f"{s('app_name')} - {root.name}" if root else s("app_name"))
+        for page in self.pages:
+            page.refresh()
+        self.update_nav()
+
+    def save(self) -> None:
+        if self.session is not None and self.root is not None:
+            save_session(self.session, self.root)
+
+    def new_session(self) -> None:
+        if self.busy:
+            return
+        self.set_session(None, None)
+        self.go(0)
+
+    def open_session_dialog(self) -> None:
+        folder = QFileDialog.getExistingDirectory(self, "Open a session folder", str(Path.home()))
+        if folder:
+            self.open_session(Path(folder))
+
+    def open_session(self, root: Path) -> None:
+        if self.busy:
+            return
+        try:
+            session = load_session(root)
+        except (OSError, ValueError) as exc:
+            error_box(self, "Cannot open session", f"{root} is not a readable session folder: {exc}")
+            return
+        self.set_session(root, session)
+        self.go(self.first_incomplete())
+
+    def make_sample(self) -> None:
+        from mocapapp.core.sample import make_sample_session
+
+        folder = QFileDialog.getExistingDirectory(
+            self, "Where should the sample session be created? (ASCII-only path)", str(Path.home()))
+        if not folder:
+            return
+        dlg = QProgressDialog("Preparing the sample session ...", None, 0, 0, self)
+        dlg.setWindowModality(Qt.WindowModality.WindowModal)
+        dlg.setMinimumDuration(0)
+        dlg.show()
+
+        def done(result):
+            dlg.close()
+            self.set_session(*result)
+            self.go(self.first_incomplete())
+
+        def failed(msg, details):
+            dlg.close()
+            error_box(self, "Sample session not created", msg, details)
+
+        Background(self, make_sample_session, Path(folder), on_done=done, on_error=failed,
+                   on_progress=dlg.setLabelText, progress=True)
+
+    # ---------- navigation ----------
+
+    def current_page(self) -> Page:
+        return self.pages[self.stack.currentIndex()]
+
+    def reachable(self, index: int) -> bool:
+        if index == 0:
+            return True
+        if self.session is None:
+            return False
+        return all(p.is_complete() or p.skipped() for p in self.pages[:index])
+
+    def first_incomplete(self) -> int:
+        for i, page in enumerate(self.pages):
+            if not (page.is_complete() or page.skipped()):
+                return i
+        return len(self.pages) - 1
+
+    def go(self, index: int) -> None:
+        if not 0 <= index < len(self.pages) or self.busy:
+            return
+        # skip steps that do not apply, in the direction of travel
+        step = 1 if index >= self.stack.currentIndex() else -1
+        while 0 < index < len(self.pages) - 1 and self.pages[index].skipped():
+            index += step
+        if not self.reachable(index):
+            return
+        self.stack.setCurrentIndex(index)
+        page = self.pages[index]
+        page.refresh()
+        self.page_title.setText(page.title)
+        self.purpose.setText(f"{s('steps.' + page.key)} <a href='why'>Why?</a>")
+        self.steps.blockSignals(True)
+        self.steps.setCurrentRow(index)
+        self.steps.blockSignals(False)
+        self.update_nav()
+
+    def _step_clicked(self, row: int) -> None:
+        if self.reachable(row) and not self.busy:
+            self.go(row)
+        else:
+            self.steps.blockSignals(True)
+            self.steps.setCurrentRow(self.stack.currentIndex())
+            self.steps.blockSignals(False)
+
+    def update_nav(self) -> None:
+        i = self.stack.currentIndex()
+        for k, page in enumerate(self.pages):
+            item = self.steps.item(k)
+            mark = "✓ " if self.session is not None and page.is_complete() and not page.skipped() else (
+                "- " if self.session is not None and page.skipped() else "   ")
+            item.setText(f"{mark}{k + 1}. {page.title}" + (" (not needed)" if self.session and page.skipped()
+                                                             else ""))
+            flags = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+            item.setFlags(flags if self.reachable(k) else Qt.ItemFlag.NoItemFlags)
+        self.back_button.setEnabled(i > 0 and not self.busy)
+        self.next_button.setEnabled(i < len(self.pages) - 1 and not self.busy and self.session is not None
+                                    and (self.pages[i].is_complete() or self.pages[i].skipped()))
+
+    def set_busy(self, busy: bool) -> None:
+        self.busy = busy
+        self.steps.setEnabled(not busy)
+        self.menuBar().setEnabled(not busy)
+        self.update_nav()
+
+    # ---------- help ----------
+
+    def show_tutorial(self, page: int = 0) -> None:
+        from mocapapp.gui.greeting import TutorialDialog
+
+        dlg = TutorialDialog(self, standalone=True)
+        dlg.show_page(page)
+        dlg.exec()
+
+    def board_spec(self):
+        from mocapapp.core.calibration.intrinsics import BoardSpec
+        from mocapapp.core.session import Settings
+
+        return BoardSpec.from_settings(self.session.settings if self.session else Settings())
+
+    def save_board_pdf(self) -> None:
+        from mocapapp.gui.greeting import save_pdf
+
+        save_pdf(self, "board", board_spec=self.board_spec())
+
+    def save_consent_pdf(self, code: str) -> None:
+        from mocapapp.gui.greeting import save_pdf
+
+        save_pdf(self, "consent", code=code)
+
+    def show_doctor(self) -> None:
+        from mocapapp.core.env import run_checks
+
+        checks = run_checks(Path(self.root).parent if self.root else None)
+        lines = [f"{'OK' if c.ok else 'PROBLEM'} - {c.name}: {c.detail}" + (f"\n      -> {c.fix}" if not c.ok and
+                                                                               c.fix else "") for c in checks]
+        QMessageBox.information(self, "Environment check", "\n".join(lines))
+
+    def show_about(self) -> None:
+        QMessageBox.about(self, "About", f"<b>{s('app_name')}</b> {__version__}<br>{s('research_only')}<br><br>"
+                          f"Built on Pose2Sim (BSD-3-Clause) and OpenSim.<br><br>Please cite:<br>{CITATION}")
+
+    def closeEvent(self, event) -> None:  # noqa: N802 (Qt name)
+        if self.busy and not QMessageBox.question(
+                self, "Work in progress", "Something is still running. Quit anyway? Finished stages are kept and "
+                "can be resumed.") == QMessageBox.StandardButton.Yes:
+            event.ignore()
+            return
+        self.save()
+        event.accept()

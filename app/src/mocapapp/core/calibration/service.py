@@ -116,6 +116,9 @@ def run_extrinsics(session: Session, root: Path, camera: str, clicks: list[extri
 def calibration_state(session: Session, root: Path) -> dict[str, str]:
     """Per camera: 'ready', or what is still missing/blocking."""
     work = Layout(root).calibration_work
+    if session.calibration_source == "imported":
+        ok = Layout(root).calib_file.is_file()
+        return {c.name: "ready" if ok else "imported calibration file missing" for c in session.cameras}
     state = {}
     for cam in session.cameras:
         i = intrinsics.load_result(work, cam.name)

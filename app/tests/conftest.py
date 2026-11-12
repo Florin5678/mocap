@@ -1,5 +1,11 @@
+import os
 import subprocess
 from pathlib import Path
+
+# GUI tests run without opening windows; screenshots still work (set QT_QPA_FONTDIR for real fonts on Windows)
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+if os.name == "nt":
+    os.environ.setdefault("QT_QPA_FONTDIR", os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts"))
 
 import pytest
 

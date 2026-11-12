@@ -30,21 +30,8 @@ def _pairs(values: list[str] | None, what: str) -> dict[str, str]:
 
 
 def _cmd_session_new(args: argparse.Namespace) -> int:
-    from mocapapp.core.privacy import make_code, normalise_study
-    from mocapapp.core.session import (
-        CalibVideo,
-        Camera,
-        Session,
-        Trial,
-        VideoRef,
-        existing_codes,
-        parse_height,
-        save_session,
-        session_dir_name,
-    )
-    from mocapapp.core.validate import check_output_root
+    from mocapapp.core.workflow import NewSession, SetupError, check_new_session, create_session
 
-    study = normalise_study(args.study)
     cams = _pairs(args.cam, "cam")
     if not cams:
         raise SystemExit("Give at least two cameras: --cam cam01=<folder> --cam cam02=<folder>.")
@@ -53,59 +40,23 @@ def _cmd_session_new(args: argparse.Namespace) -> int:
     if names != expected:
         raise SystemExit(f"Name cameras {', '.join(expected)} (got {', '.join(names)}); "
                          "the order must match the calibration file.")
-    heights = [h for h in (args.heights or "").split(",")] if args.heights else []
-    if heights and len(heights) != args.trials:
-        raise SystemExit(f"--heights has {len(heights)} values but --trials is {args.trials}.")
+    picks = {(n, "intrinsic"): Path(f) for n, f in _pairs(args.intrinsic, "intrinsic").items()}
+    picks |= {(n, "extrinsic"): Path(f) for n, f in _pairs(args.extrinsic, "extrinsic").items()}
+    spec = NewSession(out_root=Path(args.out), n_trials=args.trials, camera_dirs=[Path(cams[n]) for n in names],
+                      study=args.study or "", heights=args.heights.split(",") if args.heights else [], picks=picks)
+    for issue in check_new_session(spec):
+        if issue.level != "error":
+            print(issue)
     try:
-        parsed = [parse_height(h) for h in heights] or [None] * args.trials
-    except ValueError as exc:
-        raise SystemExit(str(exc)) from exc
-
-    out_root = Path(args.out)
-    for issue in check_output_root(out_root):
-        print(issue)
-        if issue.level == "error":
-            return 1
-    root = out_root / session_dir_name(study)
-    if root.exists():
-        raise SystemExit(f"{root} already exists; wait a minute or choose another output folder.")
-    existing = existing_codes(out_root)
-    codes: list[str] = []
-    for _ in range(args.trials):
-        codes.append(make_code(study, existing | set(codes)))
-    intr, extr = _pairs(args.intrinsic, "intrinsic"), _pairs(args.extrinsic, "extrinsic")
-    session = Session(
-        study_code=study, n_trials=args.trials,
-        trials=[Trial(label=str(i + 1), code=c, height_m=h)
-                for i, (c, h) in enumerate(zip(codes, parsed, strict=True))],
-        cameras=[Camera(name=n, source_dir=str(Path(cams[n]).resolve()),
-                        intrinsic=CalibVideo(file=str(Path(intr[n]).resolve()), origin="manual") if n in intr else None,
-                        extrinsic=VideoRef(file=str(Path(extr[n]).resolve()), origin="manual") if n in extr else None)
-                 for n in names],
-    )
-    _fill_versions(session)
-    print(f"Session created: {save_session(session, root).parent}")
+        root, session = create_session(spec)
+    except SetupError as exc:
+        print(exc)
+        return 1
+    print(f"Session created: {root}")
     for t in session.trials:
         print(f"  trial {t.label}: code {t.code}, height {t.height_m or 'auto (not recommended)'}")
     print("Next: mocapapp validate --session", root)
     return 0
-
-
-def _fill_versions(session) -> None:
-    import subprocess
-
-    import Pose2Sim
-
-    repo = Path(Pose2Sim.__file__).parents[1]
-    proc = subprocess.run(["git", "-C", str(repo), "rev-parse", "--short", "HEAD"], capture_output=True, text=True,
-                          check=False)
-    session.pose2sim_commit = proc.stdout.strip() or None
-    try:
-        import opensim
-
-        session.opensim_version = opensim.GetVersion()
-    except Exception:  # OpenSim missing is reported by `doctor`
-        session.opensim_version = None
 
 
 def _print_mapping(session, report) -> None:
@@ -160,17 +111,17 @@ def _cmd_map(args: argparse.Namespace) -> int:
 
 
 def _cmd_pick(args: argparse.Namespace) -> int:
-    from mocapapp.core.session import CalibVideo, VideoRef, load_session, save_session
+    from mocapapp.core.session import load_session, save_session
+    from mocapapp.core.workflow import SetupError, pick_video
 
     root = Path(args.session)
     session = load_session(root)
-    path = Path(args.file).resolve()
-    if not path.is_file():
-        raise SystemExit(f"{path} does not exist.")
-    cls = CalibVideo if args.role == "intrinsic" else VideoRef
-    setattr(session.camera(args.camera), args.role, cls(file=str(path), origin="manual"))
+    try:
+        pick_video(session, args.camera, args.role, Path(args.file))
+    except SetupError as exc:
+        raise SystemExit(str(exc)) from exc
     save_session(session, root)
-    print(f"{args.camera} {args.role} = {path}. Run `mocapapp validate` again.")
+    print(f"{args.camera} {args.role} = {Path(args.file).resolve()}. Run `mocapapp validate` again.")
     return 0
 
 
@@ -420,6 +371,43 @@ def _cmd_export(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_pdf(args: argparse.Namespace) -> int:
+    from mocapapp.core import pdfs
+
+    if args.pdf_command == "board":
+        from mocapapp.core.calibration.intrinsics import BoardSpec
+
+        spec = BoardSpec(args.type, (args.rows - 1, args.cols - 1), args.square_mm, args.marker_bits)
+        try:
+            print(pdfs.board_pdf(Path(args.out), spec))
+        except pdfs.PdfError as exc:
+            print(exc)
+            return 1
+    else:
+        print(pdfs.consent_pdf(Path(args.out), args.code or ""))
+    return 0
+
+
+def _cmd_sample(args: argparse.Namespace) -> int:
+    from mocapapp.core.sample import SampleError, make_sample_session
+
+    try:
+        root, _ = make_sample_session(Path(args.out))
+    except SampleError as exc:
+        print(exc)
+        return 1
+    print(f"Sample session ready: {root}")
+    print(f'Next: mocapapp confirm --session "{root}" --sync-cue; mocapapp consent --session "{root}" --trial 1 '
+          f'--attest; mocapapp run --session "{root}"')
+    return 0
+
+
+def _cmd_gui(args: argparse.Namespace) -> int:
+    from mocapapp.gui.app import run_gui
+
+    return run_gui(Path(args.session) if args.session else None)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="mocapapp", description="Markerless mocap with Pose2Sim (research use only).")
@@ -428,6 +416,29 @@ def build_parser() -> argparse.ArgumentParser:
     doctor = sub.add_parser("doctor", help="check that everything needed is installed")
     doctor.add_argument("--dir", help="folder where sessions will be stored (for the disk-space check)")
     doctor.set_defaults(func=_cmd_doctor)
+
+    gui = sub.add_parser("gui", help="open the app window")
+    gui.add_argument("--session", help="open this session directly")
+    gui.set_defaults(func=_cmd_gui)
+
+    pdf = sub.add_parser("pdf", help="printable calibration board and consent form")
+    psub = pdf.add_subparsers(dest="pdf_command", required=True)
+    pb = psub.add_parser("board", help="calibration board PDF (print at 100 %%)")
+    pb.add_argument("--out", required=True)
+    pb.add_argument("--type", choices=["charuco", "chess"], default="charuco")
+    pb.add_argument("--cols", type=int, default=9, help="squares across (default 9)")
+    pb.add_argument("--rows", type=int, default=6, help="squares down (default 6)")
+    pb.add_argument("--square-mm", type=float, default=25.0)
+    pb.add_argument("--marker-bits", type=int, default=4, help=argparse.SUPPRESS)
+    pc = psub.add_parser("consent", help="fillable consent form template")
+    pc.add_argument("--out", required=True)
+    pc.add_argument("--code", help="pre-fill this trial code")
+    for p in (pb, pc):
+        p.set_defaults(func=_cmd_pdf)
+
+    sample = sub.add_parser("sample", help="create a ready-to-run session from the bundled sample data")
+    sample.add_argument("--out", required=True)
+    sample.set_defaults(func=_cmd_sample)
 
     session = sub.add_parser("session", help="create sessions")
     ssub = session.add_subparsers(dest="session_command", required=True)

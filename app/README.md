@@ -2,12 +2,24 @@
 
 Desktop app around Pose2Sim: multi-camera videos of one person → validated 3D pose (`.trc`/`.c3d`) and OpenSim kinematics (`.osim`/`.mot`/`.bvh`). **Research use only.** Spec: [`../PROJECT.md`](../PROJECT.md).
 
-Status: Milestone 3 (session setup, validation and trial mapping, video normalisation, lens and camera-position calibration, per-trial project assembly, the Pose2Sim runner with resume/cancel and sync checks, QA report with 3D preview, export with manifest). The GUI wizard (M4) is next. Upstream findings: [`docs/upstream-notes.md`](docs/upstream-notes.md).
+Status: Milestone 4 - the app window (greeting dialog, tutorial, a step-by-step wizard from session setup to export) on top of the headless core (session setup, validation and trial mapping, video normalisation, lens and camera-position calibration, the Pose2Sim runner with resume/cancel and sync checks, QA report with 3D preview, export with manifest), plus the printable calibration board and consent-form PDFs. Privacy features (M5) are next. Upstream findings: [`docs/upstream-notes.md`](docs/upstream-notes.md).
 
-## Command line (so far)
+## The app window
+
+```
+uv run mocapapp gui                       # greeting dialog -> tutorial or a new session
+uv run mocapapp gui --session <dir>       # reopen a session
+```
+
+Steps: Session -> Videos -> Lens calibration -> Reference points -> Camera positions -> Run -> Results. **File > Try with sample data** builds a ready-to-run session from upstream's demo (its calibration is imported, so the calibration steps are skipped).
+
+## Command line
 
 ```
 mocapapp doctor
+mocapapp pdf board --out board.pdf [--type charuco|chess --cols 9 --rows 6 --square-mm 25]
+mocapapp pdf consent --out consent.pdf [--code PA26-K7M2QX4]
+mocapapp sample --out <root>                           # ready-to-run session from the demo videos
 mocapapp session new --study PA26 --trials 2 --heights 178,1.65 --cam cam01=<folder> --cam cam02=<folder> --out <root>
 mocapapp validate --session <root>/<session>          # checks inputs, prints the trial mapping table
 mocapapp pick --session <dir> --camera cam02 --role extrinsic --file <any video>
@@ -28,7 +40,7 @@ mocapapp qa --session <dir>                                # qa/qa_report.html, 
 mocapapp export --session <dir> [--select config,trc.filt_lstm,c3d.filt_lstm,osim,mot,bvh]
 ```
 
-Stage output is logged to `trials/trial_<label>/mocap_logs/<stage>.log`. The slow end-to-end test on upstream's demo: `uv run pytest -m slow`.
+Stage output is logged to `trials/trial_<label>/mocap_logs/<stage>.log`. The slow end-to-end tests on upstream's demo (CLI and GUI, ~4 min each): `uv run pytest -m slow`. GUI tests run offscreen; `MOCAP_SCREENSHOTS=<folder>` saves a PNG of every wizard step.
 
 Each camera folder holds `intrinsic.<ext>`, `extrinsic.<ext>` and one video per trial. The output root must be an ASCII-only path.
 
@@ -55,7 +67,8 @@ uv run python scripts/m0_spike.py <empty output folder>
 ```
 src/mocapapp/core/   headless logic (no GUI imports)
 src/mocapapp/cli/    `mocapapp ...` commands
-src/mocapapp/gui/    PySide6 wizard (Milestone 4)
+src/mocapapp/gui/    PySide6 wizard (calls core only)
+src/mocapapp/resources/  tutorial.md, strings.toml, consent_template.md (English texts, editable)
 docs/                decisions.md, upstream-notes.md, upstream-patches.md
 scripts/             one-off and spike scripts
 ```
