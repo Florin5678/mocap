@@ -95,6 +95,9 @@ class Settings(BaseModel):
 
 class RunState(BaseModel):
     stage_done: dict[str, list[str]] = Field(default_factory=dict)  # trial label -> finished stages
+    trial_status: dict[str, str] = Field(default_factory=dict)  # label -> pending|running|needs_sync_fix|failed|done
+    sync: dict[str, dict] = Field(default_factory=dict)  # label -> {"offsets", "issues", "accepted"}
+    errors: dict[str, str] = Field(default_factory=dict)  # label -> plain-language failure cause
     last_error: str | None = None
 
 

@@ -99,3 +99,9 @@ None. `QApplication` appears only in `common.py` and plotting utilities (`trc_pl
 ## 15. Intrinsics on the owner's pilot videos (M2 check)
 
 Same videos, upstream vs. app (`every 0.5 s`): cam01 0.29 px from 22/28 frames, coverage 50 % → warn; cam03 9/22 usable frames → fail; cam04 board found in 1/24 frames → error. Upstream had used 4 and 6 partial detections for cam03/cam04 and produced distortion values of -0.8 to -0.9.
+
+## 16. Runner findings (M3)
+
+- Sync log lines end with a full stop (`… correlation 0.86.`), so a loose `[\d.]+` captures `0.86.`; the runner's pattern takes digits with at most one decimal point.
+- `Pose2SimPipeline().synchronization()` with `synchronization_gui = true` is the only way to reach upstream's offset player; the app turns it on just for `--fix-sync` and restores the generated Config afterwards.
+- `kinematics/_ik_marker_errors.sto` has the per-frame `marker_error_RMS` (metres) used for the QA "model fit" metric.

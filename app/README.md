@@ -2,7 +2,7 @@
 
 Desktop app around Pose2Sim: multi-camera videos of one person → validated 3D pose (`.trc`/`.c3d`) and OpenSim kinematics (`.osim`/`.mot`/`.bvh`). **Research use only.** Spec: [`../PROJECT.md`](../PROJECT.md).
 
-Status: Milestone 2 (session setup, validation and trial mapping, video normalisation, lens and camera-position calibration, per-trial project assembly). The runner (M3) is next. Upstream findings: [`docs/upstream-notes.md`](docs/upstream-notes.md).
+Status: Milestone 3 (session setup, validation and trial mapping, video normalisation, lens and camera-position calibration, per-trial project assembly, the Pose2Sim runner with resume/cancel and sync checks, QA report with 3D preview, export with manifest). The GUI wizard (M4) is next. Upstream findings: [`docs/upstream-notes.md`](docs/upstream-notes.md).
 
 ## Command line (so far)
 
@@ -20,7 +20,15 @@ mocapapp calibrate frame --session <dir> --camera cam01          # PNG to read p
 mocapapp calibrate extrinsics --session <dir> --camera cam01 --points clicks.csv   # label,u,v or hidden
 mocapapp calibrate status --session <dir>
 mocapapp assemble --session <dir>                       # build trials/trial_<label>/ with Config.toml + calibration
+mocapapp confirm --session <dir> --sync-cue                # a sync cue was recorded in every trial
+mocapapp consent --session <dir> --trial 1 --attest [--raw-storage yes|no]
+mocapapp run --session <dir> [--trial 1] [--restart] [--accept-sync] [--verbose]   # resumes by default; Ctrl+C stops
+mocapapp run --session <dir> --trial 1 --fix-sync          # open upstream's sync player, then continue
+mocapapp qa --session <dir>                                # qa/qa_report.html, qa/qa.json, qa/trial_<label>_preview.html
+mocapapp export --session <dir> [--select config,trc.filt_lstm,c3d.filt_lstm,osim,mot,bvh]
 ```
+
+Stage output is logged to `trials/trial_<label>/mocap_logs/<stage>.log`. The slow end-to-end test on upstream's demo: `uv run pytest -m slow`.
 
 Each camera folder holds `intrinsic.<ext>`, `extrinsic.<ext>` and one video per trial. The output root must be an ASCII-only path.
 

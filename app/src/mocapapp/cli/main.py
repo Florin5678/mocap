@@ -286,6 +286,140 @@ def _cmd_calibrate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_confirm(args: argparse.Namespace) -> int:
+    from mocapapp.core.session import load_session, save_session
+
+    root = Path(args.session)
+    session = load_session(root)
+    session.sync_cue_confirmed = bool(args.sync_cue)
+    save_session(session, root)
+    print("Sync cue confirmed for every trial." if args.sync_cue else "Nothing confirmed.")
+    return 0
+
+
+def _cmd_consent(args: argparse.Namespace) -> int:
+    from datetime import datetime
+
+    from mocapapp.core.session import load_session, save_session
+
+    root = Path(args.session)
+    session = load_session(root)
+    trial = session.trial(args.trial)
+    if args.attest:
+        trial.consent.attested = True
+        trial.consent.attested_at = datetime.now().isoformat(timespec="seconds")
+    if args.raw_storage is not None:
+        trial.consent.raw_footage_storage = args.raw_storage == "yes"
+        trial.delete_raw = not trial.consent.raw_footage_storage  # default follows consent (§6.2)
+    save_session(session, root)
+    print(f"Trial {trial.label} ({trial.code}): consent attested={trial.consent.attested}, "
+          f"raw footage storage={trial.consent.raw_footage_storage}, delete raw after run={trial.delete_raw}.")
+    return 0
+
+
+def _cmd_run(args: argparse.Namespace) -> int:
+    import threading
+
+    from mocapapp.core import runner
+    from mocapapp.core.session import load_session
+
+    root = Path(args.session)
+    session = load_session(root)
+    labels = [args.trial] if args.trial else [t.label for t in session.trials]
+    if args.fix_sync:
+        if not args.trial:
+            raise SystemExit("--fix-sync needs --trial.")
+        ok = runner.fix_sync(session, root, args.trial, _printer(args.verbose))
+        return 0 if ok else 1
+    issues = runner.preflight(session, root, labels)
+    if not _print_issues(issues):
+        print("\nFix the items above before running.")
+        return 1
+    est = runner.estimate_seconds(session, root, labels)
+    print(f"Rough time estimate on CPU: {est / 60:.0f} min. You can stop with Ctrl+C and resume later.\n")
+    cancel = threading.Event()
+    try:
+        results = runner.run_session(session, root, labels, _printer(args.verbose), cancel, resume=not args.restart,
+                                     accept_sync=args.accept_sync)
+    except (KeyboardInterrupt, runner.Cancelled):
+        cancel.set()
+        print("\nStopped. Run the same command again to resume.")
+        return 130
+    print()
+    for label, status in results.items():
+        msg = session.run_state.errors.get(label) or "; ".join(session.run_state.sync.get(label, {}).get("issues", []))
+        print(f"trial {label}: {status}" + (f" - {msg}" if msg and status != "done" else ""))
+        if status == "needs_sync_fix":
+            print(f"    -> check it with: mocapapp run --session {root} --trial {label} --fix-sync"
+                  f"   (or accept as is with --accept-sync)")
+    from mocapapp.core.qa import write_report
+
+    report, _ = write_report(session, root, labels)
+    print(f"\nQuality report: {report}")
+    return 0 if all(s == "done" for s in results.values()) else 1
+
+
+def _printer(verbose: bool):
+    from mocapapp.core.runner import Event
+
+    last = {"pct": -1}
+
+    def show(e: Event) -> None:
+        if e.kind == "stage_start":
+            print(f"[trial {e.trial}] {e.message} ...", flush=True)
+        elif e.kind == "stage_end":
+            print(f"[trial {e.trial}]   {'done' if e.ok else 'FAILED'}: {e.message}", flush=True)
+        elif e.kind == "progress" and e.fraction is not None:
+            pct = int(e.fraction * 100)
+            if pct // 5 != last["pct"] // 5:
+                last["pct"] = pct
+                print(f"[trial {e.trial}]   {pct}% of this trial", flush=True)
+        elif e.kind == "needs_sync_fix":
+            print(f"[trial {e.trial}]   synchronisation needs checking: {e.message}", flush=True)
+        elif e.kind == "line" and verbose:
+            print(f"    {e.message}", flush=True)
+
+    return show
+
+
+def _cmd_qa(args: argparse.Namespace) -> int:
+    from mocapapp.core.qa import LIGHT_TEXT, write_report
+    from mocapapp.core.session import load_session
+
+    root = Path(args.session)
+    session = load_session(root)
+    path, results = write_report(session, root, [args.trial] if args.trial else None)
+    for r in results:
+        print(f"trial {r.label} ({r.code}): {LIGHT_TEXT[r.light]} [{r.status}]")
+        for m in r.metrics:
+            print(f"    {m.name}: {m.value} {m.unit} -> {LIGHT_TEXT[m.light]}")
+        for w in r.warnings:
+            print(f"    ! {w}")
+    print(f"Report: {path}")
+    return 0
+
+
+def _cmd_export(args: argparse.Namespace) -> int:
+    from mocapapp.core.export import default_selection, export
+    from mocapapp.core.qa import trial_qa
+    from mocapapp.core.session import load_session
+
+    root = Path(args.session)
+    session = load_session(root)
+    selection = args.select.split(",") if args.select else default_selection(session.settings.filter.type)
+    labels = [args.trial] if args.trial else None
+    qa = {t.label: trial_qa(session, root, t.label).light for t in session.trials if not labels or t.label in labels}
+    try:
+        out, warnings = export(session, root, selection, labels, qa)
+    except ValueError as exc:
+        print(exc)
+        return 1
+    for w in warnings:
+        print(f"! {w}")
+    print(f"Exported to {out}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="mocapapp", description="Markerless mocap with Pose2Sim (research use only).")
@@ -351,6 +485,39 @@ def build_parser() -> argparse.ArgumentParser:
     for p in (ci, cf, ce, cs):
         p.add_argument("--session", required=True)
         p.set_defaults(func=_cmd_calibrate)
+
+    conf = sub.add_parser("confirm", help="pre-run confirmations")
+    conf.add_argument("--session", required=True)
+    conf.add_argument("--sync-cue", action="store_true", help="I recorded a sync cue at the start of every trial")
+    conf.set_defaults(func=_cmd_confirm)
+
+    cons = sub.add_parser("consent", help="record that signed consent was received for a trial's participant")
+    cons.add_argument("--session", required=True)
+    cons.add_argument("--trial", required=True)
+    cons.add_argument("--attest", action="store_true", help="signed consent received for this trial's code")
+    cons.add_argument("--raw-storage", choices=["yes", "no"], help="participant consented to keeping raw footage")
+    cons.set_defaults(func=_cmd_consent)
+
+    run = sub.add_parser("run", help="run Pose2Sim on every trial (resumes by default)")
+    run.add_argument("--session", required=True)
+    run.add_argument("--trial")
+    run.add_argument("--restart", action="store_true", help="ignore finished stages and start over")
+    run.add_argument("--accept-sync", action="store_true", help="continue even if synchronisation looks unreliable")
+    run.add_argument("--fix-sync", action="store_true", help="open the synchronisation player for --trial")
+    run.add_argument("--verbose", action="store_true", help="show Pose2Sim's own output")
+    run.set_defaults(func=_cmd_run)
+
+    qa = sub.add_parser("qa", help="quality report (HTML + JSON) and 3D previews")
+    qa.add_argument("--session", required=True)
+    qa.add_argument("--trial")
+    qa.set_defaults(func=_cmd_qa)
+
+    exp = sub.add_parser("export", help="copy selected results to export/ with README and manifest")
+    exp.add_argument("--session", required=True)
+    exp.add_argument("--trial")
+    exp.add_argument("--select", help="comma list, e.g. config,trc.filt_lstm,c3d.filt_lstm,osim,mot,bvh "
+                                      "(default: the ticked-by-default items)")
+    exp.set_defaults(func=_cmd_export)
 
     mp = sub.add_parser("map", help="set the trial mapping by hand")
     mp.add_argument("--session", required=True)
