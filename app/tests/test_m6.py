@@ -86,6 +86,10 @@ def test_installer_scripts_are_consistent():
     uv_ps = re.search(r'\$UvVersion = "([\d.]+)"', ps1).group(1)
     uv_sh = re.search(r'UV_VERSION="([\d.]+)"', sh).group(1)
     assert uv_ps == uv_sh
+    # a source zip has no .git, so Pose2Sim's setuptools-scm version must be given, the same on both
+    p2s_ps = re.search(r'\$Pose2SimVersion = "([^"]+)"', ps1).group(1)
+    p2s_sh = re.search(r'POSE2SIM_VERSION="([^"]+)"', sh).group(1)
+    assert p2s_ps == p2s_sh and "SETUPTOOLS_SCM_PRETEND_VERSION_FOR_POSE2SIM" in ps1 + sh
     for text in (ps1, sh, iss):
         assert f"mocapapp-v{__version__}" in text  # installers fetch the tag of this version
     assert re.search(r'#define AppVersion "' + re.escape(__version__) + '"', iss)

@@ -7,11 +7,14 @@
 # Options (environment): MOCAPAPP_REF=<tag or branch>  MOCAPAPP_SOURCE=<local checkout>  MOCAPAPP_NO_MODELS=1
 set -euo pipefail
 
-REF="${MOCAPAPP_REF:-mocapapp-v0.1.0rc1}"
+REF="${MOCAPAPP_REF:-mocapapp-v0.1.0rc2}"
 SOURCE="${MOCAPAPP_SOURCE:-}"
 PREFIX="${MOCAPAPP_PREFIX:-$HOME/Library/Application Support/mocapapp}"
 APPDIR="$HOME/Applications"
 REPO="https://github.com/Florin5678/mocap"
+# Pose2Sim takes its version from git (setuptools-scm); a source zip has no .git folder, so it is
+# given here: the upstream release this fork is based on, marked as the mocapapp fork.
+POSE2SIM_VERSION="0.10.48+mocapapp"
 UV_VERSION="0.13.4"
 case "$(uname -m)" in
   arm64) UV_TARGET="aarch64-apple-darwin"; UV_SHA="e0b1d4743ce64c55d9f0f4a444afa6b81125680070ee04e853fcd0f6c1ebf8f1" ;;
@@ -70,6 +73,7 @@ fi
 
 step "Installing Python and the app's components (the longest step) ..."
 export UV_PYTHON_INSTALL_DIR="$PREFIX/python" UV_PROJECT_ENVIRONMENT="$PREFIX/venv" UV_CACHE_DIR="${UV_CACHE_DIR:-$PREFIX/cache}"
+[ -e "$APP/../.git" ] || export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_POSE2SIM="$POSE2SIM_VERSION"
 "$UV" sync --frozen --no-dev --python-preference only-managed --project "$APP"
 "$UV" cache prune --project "$APP" >/dev/null 2>&1 || true
 EXE="$PREFIX/venv/bin/mocapapp"

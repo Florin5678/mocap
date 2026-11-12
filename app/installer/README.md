@@ -36,11 +36,12 @@ On macOS, use `MOCAPAPP_SOURCE=~/mocap MOCAPAPP_PREFIX=/tmp/mocap-test ./"Instal
 ## Making a release
 
 1. Set the version in `app/pyproject.toml` and `app/src/mocapapp/__init__.py`, and use the same version in the default ref of the three installer scripts (`mocapapp-v<version>`). `tests/test_m6.py` checks that they agree.
-2. Run `uv lock`, the fast tests and the slow tests (`uv run pytest -m slow`).
-3. Push a tag `mocapapp-v<version>`. The `mocapapp` GitHub workflow then:
+2. If the fork was rebased on a newer Pose2Sim release, update the Pose2Sim version in `install.ps1` and `Install mocapapp.command`. Installs from a source zip cannot read it from git.
+3. Run `uv lock`, the fast tests and the slow tests (`uv run pytest -m slow`).
+4. Push a tag `mocapapp-v<version>`. The `mocapapp` GitHub workflow then:
    - runs the tests on Windows and macOS;
    - builds `mocapapp-setup.exe` (Inno Setup) and `mocapapp-macos.zip`;
    - attaches both to a **draft** pre-release.
-4. Try both installers on a clean machine, then publish the draft.
+5. Try both installers on a clean machine, then publish the draft.
 
 The installers are not code-signed. Windows SmartScreen asks *More info > Run anyway*. On macOS, right-click the file and choose *Open* the first time. The user guide explains both.

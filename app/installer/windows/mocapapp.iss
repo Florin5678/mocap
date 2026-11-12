@@ -1,12 +1,12 @@
 ; Inno Setup script: a small mocapapp-setup.exe that runs install.ps1 (the bootstrapper) with a visible
 ; progress window. Per-user install, no admin rights. Build: iscc mocapapp.iss  (Inno Setup 6)
-; The ref to install can be overridden at build time: iscc /DRef=mocapapp-v0.1.0rc1 mocapapp.iss
+; The ref to install can be overridden at build time: iscc /DRef=mocapapp-v0.1.0rc2 mocapapp.iss
 
 #ifndef Ref
-  #define Ref "mocapapp-v0.1.0rc1"
+  #define Ref "mocapapp-v0.1.0rc2"
 #endif
 #ifndef AppVersion
-  #define AppVersion "0.1.0rc1"
+  #define AppVersion "0.1.0rc2"
 #endif
 
 [Setup]

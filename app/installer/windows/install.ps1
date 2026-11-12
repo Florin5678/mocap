@@ -10,7 +10,7 @@ Bootstraps a private, pinned environment - nothing is installed system-wide and 
 Re-running it updates/repairs the installation. Session folders are never touched.
 #>
 param(
-    [string]$Ref = "mocapapp-v0.1.0rc1",           # git tag (or branch) of https://github.com/Florin5678/mocap
+    [string]$Ref = "mocapapp-v0.1.0rc2",           # git tag (or branch) of https://github.com/Florin5678/mocap
     [string]$Source = "",                          # use a local checkout instead of downloading (testing)
     [string]$Prefix = (Join-Path $env:LOCALAPPDATA "mocapapp"),
     [switch]$NoModels,
@@ -23,6 +23,9 @@ $ProgressPreference = "SilentlyContinue"            # Invoke-WebRequest is very 
 $UvVersion = "0.13.4"
 $UvSha256 = "ccec7508a07d9933d7cb1261880633efcf1f30d6e6eddab21823f1dae6f23225"
 $Repo = "https://github.com/Florin5678/mocap"
+# Pose2Sim takes its version from git (setuptools-scm); a source zip has no .git folder, so it is
+# given here: the upstream release this fork is based on, marked as the mocapapp fork.
+$Pose2SimVersion = "0.10.48+mocapapp"
 $Steps = 6
 $script:Step = 0
 
@@ -87,6 +90,7 @@ try {
     $env:UV_PYTHON_INSTALL_DIR = Join-Path $Prefix "python"
     $env:UV_PROJECT_ENVIRONMENT = Join-Path $Prefix "venv"
     if (-not $env:UV_CACHE_DIR) { $env:UV_CACHE_DIR = Join-Path $Prefix "cache" }
+    if (-not (Test-Path (Join-Path $app "..\.git"))) { $env:SETUPTOOLS_SCM_PRETEND_VERSION_FOR_POSE2SIM = $Pose2SimVersion }
     & $uv sync --frozen --no-dev --python-preference only-managed --project $app
     if ($LASTEXITCODE -ne 0) { throw "Installing the components failed (see the messages above)." }
     $exe = Join-Path $Prefix "venv\Scripts\mocapapp.exe"
@@ -126,7 +130,8 @@ try {
         ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $Prefix "install.json")
 
     Write-Host ""
-    if ($doctorOk) { Write-Host "Done: $version is installed. Start it from the Start menu or the desktop: mocapapp." -ForegroundColor Green }
+    $where = if ($NoShortcuts) { "with $gui" } else { "from the Start menu or the desktop: mocapapp" }
+    if ($doctorOk) { Write-Host "Done: $version is installed. Start it $where." -ForegroundColor Green }
     else { Write-Host "Installed, but the check above found problems; the app explains them when it starts." -ForegroundColor Yellow }
     Finish 0
 }
