@@ -15,6 +15,8 @@ foreach ($name in @("venv", "python", "uv", "src", "src-new", "cache", "install.
     $path = Join-Path $Prefix $name
     if (Test-Path $path) { Remove-Item -Recurse -Force $path }
 }
+# the folder itself only if nothing else is in it
+if ((Test-Path $Prefix) -and -not (Get-ChildItem -Force $Prefix)) { Remove-Item -Force $Prefix }
 if ($Models) {
     $cache = Join-Path $env:USERPROFILE ".cache\rtmlib"
     if (Test-Path $cache) { Remove-Item -Recurse -Force $cache }
