@@ -20,6 +20,10 @@ param(
 
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"            # Invoke-WebRequest is very slow with its progress bar
+# Started from PowerShell 7 (pwsh), this Windows PowerShell inherits pwsh's module path and then cannot
+# load its own cmdlets (Get-FileHash, Expand-Archive, ...). Use Windows PowerShell's own module path.
+$env:PSModulePath = (@((Join-Path ([Environment]::GetFolderPath("MyDocuments")) "WindowsPowerShell\Modules"),
+    [Environment]::GetEnvironmentVariable("PSModulePath", "Machine")) | Where-Object { $_ }) -join ";"
 $UvVersion = "0.13.4"
 $UvSha256 = "ccec7508a07d9933d7cb1261880633efcf1f30d6e6eddab21823f1dae6f23225"
 $Repo = "https://github.com/Florin5678/mocap"
@@ -28,6 +32,14 @@ $Repo = "https://github.com/Florin5678/mocap"
 $Pose2SimVersion = "0.10.48+mocapapp"
 $Steps = 6
 $script:Step = 0
+
+# .NET instead of Expand-Archive and Get-FileHash: those come from script modules that fail to load when
+# this script is started from PowerShell 7 (see PSModulePath above).
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+function Expand-Zip([string]$Zip, [string]$Dest) {
+    if (Test-Path $Dest) { Remove-Item -Recurse -Force $Dest }
+    [System.IO.Compression.ZipFile]::ExtractToDirectory($Zip, $Dest)
+}
 
 function Step([string]$Text) {
     $script:Step++
@@ -55,10 +67,12 @@ try {
     if (-not $haveUv) {
         $zip = Join-Path $env:TEMP "mocapapp-uv.zip"
         Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/astral-sh/uv/releases/download/$UvVersion/uv-x86_64-pc-windows-msvc.zip" -OutFile $zip
-        $hash = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLower()
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        $stream = [System.IO.File]::OpenRead($zip)
+        try { $hash = (($sha.ComputeHash($stream) | ForEach-Object { $_.ToString("x2") }) -join "") } finally { $stream.Dispose() }
         if ($hash -ne $UvSha256) { throw "The downloaded uv does not match its checksum (got $hash). Try again later." }
         if (Test-Path $uvDir) { Remove-Item -Recurse -Force $uvDir }
-        Expand-Archive -Path $zip -DestinationPath $uvDir -Force
+        Expand-Zip $zip $uvDir
         Remove-Item $zip -Force
         $found = Get-ChildItem -Path $uvDir -Recurse -Filter "uv.exe" | Select-Object -First 1
         if ($found.FullName -ne $uv) { Move-Item -Force $found.FullName $uv }
@@ -76,7 +90,7 @@ try {
         Invoke-WebRequest -UseBasicParsing -Uri "$Repo/archive/refs/$kind/$Ref.zip" -OutFile $zip
         $new = Join-Path $Prefix "src-new"
         if (Test-Path $new) { Remove-Item -Recurse -Force $new }
-        Expand-Archive -Path $zip -DestinationPath $new -Force
+        Expand-Zip $zip $new
         Remove-Item $zip -Force
         $top = Get-ChildItem -Path $new -Directory | Select-Object -First 1
         if (Test-Path $src) { Remove-Item -Recurse -Force $src }
