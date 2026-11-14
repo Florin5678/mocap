@@ -112,7 +112,7 @@ class SetupPage(Page):
         people = QGroupBox("Participants: one row per trial (each trial is a different participant)")
         pl = QVBoxLayout(people)
         pl.addWidget(para("Height in metres (cm is converted). Leave blank to estimate it - not recommended. "
-                            "Codes are generated when the session is created."))
+                            "Pseudonyms are generated when the session is created."))
         self.height_table = QTableWidget(0, 2)
         self.height_table.setHorizontalHeaderLabels(["Height", "Used as"])
         self.height_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
@@ -239,11 +239,11 @@ class SetupPage(Page):
         layout.addWidget(note(s("cameras_stay_put")))
         box = QGroupBox("Participants (one per trial)")
         bl = QVBoxLayout(box)
-        bl.addWidget(para("Tick <i>Signed consent received</i> once you hold the signed form for that code. "
+        bl.addWidget(para("Tick <i>Signed consent received</i> once you hold the signed form for that pseudonym. "
                             "<i>Delete raw footage</i> follows the storage consent by default; deletion is done after "
                             "a successful run and export, and is always possible later."))
         self.people = QTableWidget(0, 6)
-        self.people.setHorizontalHeaderLabels(["Code", "Height (m)", "Signed consent received",
+        self.people.setHorizontalHeaderLabels(["Pseudonym", "Height (m)", "Signed consent received",
                                                "Consented to storing raw footage", "Delete raw footage",
                                                "Consent form"])
         self.people.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)

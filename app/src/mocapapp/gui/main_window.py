@@ -108,7 +108,7 @@ class MainWindow(QMainWindow):
         self.back_button = QPushButton("< Back")
         self.next_button = QPushButton("Next >")
         self.back_button.clicked.connect(lambda: self.go(self.stack.currentIndex() - 1))
-        self.next_button.clicked.connect(lambda: self.go(self.stack.currentIndex() + 1))
+        self.next_button.clicked.connect(self._next)
 
         right = QVBoxLayout()
         self.page_title = heading("", 16)
@@ -313,8 +313,29 @@ class MainWindow(QMainWindow):
             flags = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
             item.setFlags(flags if self.reachable(k) else Qt.ItemFlag.NoItemFlags)
         self.back_button.setEnabled(i > 0 and not self.busy)
-        self.next_button.setEnabled(i < len(self.pages) - 1 and not self.busy and self.session is not None
+        last = i == len(self.pages) - 1
+        self.next_button.setText("Finished!" if last else "Next >")
+        self.next_button.setToolTip("Close this session and start a new one; export first" if last else "")
+        self.next_button.setEnabled(not self.busy and self.session is not None
                                     and (self.pages[i].is_complete() or self.pages[i].skipped()))
+
+    def _next(self) -> None:
+        if self.stack.currentIndex() < len(self.pages) - 1:
+            self.go(self.stack.currentIndex() + 1)
+        else:
+            self.finish()
+
+    def finish(self) -> None:
+        """Results exported: close the session and go back to step 1. Reminds about stored raw footage (§8.4)."""
+        from mocapapp.core.deletion import reminders
+
+        if self.session is None or self.busy:
+            return
+        self.save()
+        notes = reminders(self.session)
+        if notes:
+            QMessageBox.information(self, "Session finished", "\n\n".join(notes))
+        self.new_session()
 
     def set_busy(self, busy: bool) -> None:
         self.busy = busy

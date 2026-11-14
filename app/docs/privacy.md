@@ -9,19 +9,19 @@ How the app handles personal data (PROJECT.md §8). This is not legal advice. Th
 | Original recordings | the camera folders you chose (the app never changes them) | yes: video of an identifiable person |
 | Working copies | `inputs/camNN/trial_<label>.mp4`, `trials/trial_<label>/videos/` | yes |
 | Overlay videos/images, 2D keypoints | `trials/trial_<label>/pose/`, `pose-sync/camNN_json/`, `pose-associated/camNN_json/` | yes (faces are blurred, but not reliably) |
-| Height, trial code, consent record | `session.json`, `trials/trial_<label>/consent.json` | pseudonymised |
+| Height, pseudonym, consent record | `session.json`, `trials/trial_<label>/consent.json` | pseudonymised |
 | 3D markers, joint angles, scaled model | `pose-3d/`, `kinematics/`, `export/` | pseudonymised (movement can still identify a person) |
 
-The trial code (for example `PA26-K7M2QX4`) is a **pseudonym**, not anonymisation. The signed consent form, which links the code to a name, stays with the experimenter, stored separately from the data. The app never stores names, e-mail addresses or body mass.
+Each trial's **pseudonym** (for example `PA26-K7M2QX4`) is pseudonymisation, not anonymisation. The signed consent form, which links the pseudonym to a name, stays with the experimenter, stored separately from the data. The app never stores names, e-mail addresses or body mass.
 
 ## Consent
 
-Tick **Signed consent received** for each trial once you have the signed form for that code (`mocapapp consent --attest`). The app cannot verify the form. You cannot run a trial until its consent is ticked.
+Tick **Signed consent received** for each trial once you have the signed form for that pseudonym (`mocapapp consent --attest`). The app cannot verify the form. You cannot run a trial until its consent is ticked.
 
 The **Delete raw footage** option follows the participant's answer about storing raw footage:
 
 - no storage consent: the option is ticked;
-- storage consented: the option is unticked, and the footage is kept until the analysis is finished.
+- storage consented: the option is unticked, and the footage is kept until the study is finished.
 
 You can change the option either way. If storage was not consented and the option is unticked, the app shows a warning, because the consent form promises deletion.
 
@@ -36,7 +36,7 @@ Every deletion first lists the exact files and their sizes, in these groups:
 
 - **(a) Working copies** of the trial videos.
 - **(b) Derived material that shows or traces the person:** overlay videos/images and 2D keypoint files. These are always deleted together with (a).
-- **(c) The original recordings** in the camera folders. Only deleted if you choose to, and you must type the trial code to confirm.
+- **(c) The original recordings** in the camera folders. Only deleted if you choose to, and you must type the pseudonym to confirm.
 
 These are kept:
 
@@ -50,8 +50,8 @@ There are three kinds of deletion:
 
 | Action | What goes | Confirmation |
 |---|---|---|
-| **Delete raw footage** (`delete-raw`) | (a) + (b), optionally (c) | (c) needs the trial code typed |
-| **Delete all data of this participant**, for withdrawal (`delete-session --trial`) | (a) + (b) + every result of that trial: the trial folder, its QA files and its exports. Optionally (c). | always type the trial code |
+| **Delete raw footage** (`delete-raw`) | (a) + (b), optionally (c) | (c) needs the pseudonym typed |
+| **Delete all data of this participant**, for withdrawal (`delete-session --trial`) | (a) + (b) + every result of that trial: the trial folder, its QA files and its exports. Optionally (c). | always type the pseudonym |
 | **Delete the whole session** (`delete-session`) | the session folder, optionally every trial's originals | type the session folder name |
 
 On the command line, nothing is deleted without `--yes`; without it, the command only lists what would go.
@@ -67,7 +67,7 @@ You start this deletion on the Results step with **Delete raw footage now**; the
 **After a deletion:**
 
 - The session's videos are fixed. You cannot check, remap or prepare them again; start a new session for new recordings.
-- Every deletion is logged in `manifest.json` in the session folder, and also in `export/manifest.json` when it exists. The log records when, which trial and code, how many items and bytes, and session-relative paths. It records no names, and no paths of the original recordings, because those can contain names.
+- Every deletion is logged in `manifest.json` in the session folder, and also in `export/manifest.json` when it exists. The log records when, which trial and pseudonym, how many items and bytes, and session-relative paths. It records no names, and no paths of the original recordings, because those can contain names.
 - Withdrawing a participant also removes their height from `session.json` and their files from the export manifest.
 
 ## Limits of deletion: check these yourself

@@ -77,9 +77,9 @@ The board in the PDF always matches the board settings of the app.
 
 === 8. The participation consent form (PDF)
 
-Each trial is a different participant, and each participant gets their own **trial code**. The code is a pseudonym: the data are stored under the code, and only the signed participation consent form – which you keep separately – links the code to the person.
+Each trial is a different participant, and each participant gets their own **pseudonym**, such as `PA26-K7M2QX4`. The data are stored under the pseudonym, and only the signed participation consent form – which you keep separately – links it to the person.
 
-Fill in the study details (title, purpose, who is responsible, storage) in the boxes or on the lines, and have the form checked by your institution. During setup you can generate a form with a trial's code already filled in as the pseudonym.
+Fill in the study details (title, purpose, who is responsible, storage) in the boxes or on the lines, and have the form checked by your institution. During setup you can generate a form with a trial's pseudonym already filled in.
 
 The app does not see the signed forms. Before running, you confirm for each trial that signed consent was received.
 

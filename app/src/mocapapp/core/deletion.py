@@ -266,7 +266,7 @@ def plan_raw(session: Session, root: Path, label: str, include_originals: bool =
     if not include_originals and any(Path(f).exists() for c in session.cameras
                                      if (f := c.trial_files.get(label))):
         plan.notes.append("The original recordings in the camera folders are not included. Include them to delete "
-                          "them too (you will be asked to type the trial code).")
+                          "them too (you will be asked to type the pseudonym).")
     plan.notes.append(KEPT_NOTE)
     return plan
 
@@ -287,7 +287,7 @@ def plan_participant(session: Session, root: Path, label: str, include_originals
         plan.items += _originals(session, label)
     plan.confirm_text = trial.code  # withdrawal removes results too: always type the code
     plan.warnings += _cloud_warning(session, root, include_originals)
-    plan.notes.append("The trial code, the date and the list of deleted paths are kept in the deletion log "
+    plan.notes.append("The pseudonym, the date and the list of deleted paths are kept in the deletion log "
                       "(no personal data). The participant's height is removed from session.json.")
     if not include_originals and any(Path(f).exists() for c in session.cameras
                                      if (f := c.trial_files.get(label))):
@@ -349,7 +349,7 @@ def execute(plan: DeletionPlan, session: Session, typed: str | None = None) -> D
         raise DeletionError("Not deleted yet: " + " ".join(plan.blockers) +
                             " Finish and export the results first, or delete on request instead.")
     if not _confirmed(plan, typed):
-        what = "the session folder name" if plan.scope == "session" else "the trial code"
+        what = "the session folder name" if plan.scope == "session" else "the pseudonym"
         raise DeletionError(f"Not deleted: type {what} exactly ({plan.confirm_text}) to confirm.")
     result = DeletionResult()
     deleted: list[Item] = []
@@ -460,7 +460,7 @@ def reminders(session: Session) -> list[str]:
     kept = [t for t in session.active_trials if t.retention_until and t.raw_present]
     if kept:
         out.append(f"Raw footage kept with consent for {', '.join(t.code for t in kept)}: delete it when the "
-                   "analysis is finished.")
+                   "study is finished.")
     due = [t for t in session.active_trials if t.delete_raw and t.raw_present
            and session.run_state.trial_status.get(t.label) == "done"]
     if due:

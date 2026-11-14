@@ -41,15 +41,15 @@ The steps are listed on the left. A step becomes available when the previous one
 ### Step 1 – Session
 
 1. Choose an **output folder** whose path contains only plain letters (no æ/ø/å or other accents); the 3D software cannot save elsewhere.
-2. Optionally enter a **study code** (up to 8 letters or digits, e.g. `PA26`). It starts every trial code.
+2. Optionally enter a **study code** (up to 8 letters or digits, e.g. `PA26`). It starts every pseudonym.
 3. Enter the number of **trials** and add one **folder per camera**. Each folder holds the camera's `intrinsic` and `extrinsic` videos and one video per trial. If the folders are named after the cameras (`cam01`, `cam02`, ...) and sit side by side, choosing one with **Browse ...** fills in the others.
 4. Enter each participant's **height**, in metres or centimetres. Without it, the height is estimated, which is less accurate.
-5. Press **Create session**. Every trial gets a **trial code**, such as `PA26-K7M2QX4`.
-6. Use **Generate ...** to print a **participation consent form** with that code filled in as the participant's pseudonym. Fill in the study details in the boxes on screen, or by hand on paper.
+5. Press **Create session**. Every trial gets a **pseudonym**, such as `PA26-K7M2QX4`.
+6. Use **Generate ...** to print a **participation consent form** with that pseudonym filled in. Fill in the study details in the boxes on screen, or by hand on paper.
 7. When you hold a signed form, tick **Signed consent received** for that trial.
 8. Tick **Consented to storing raw footage** only if the participant agreed to it. **Delete raw footage** then follows automatically; you can change it.
 
-Keep the signed forms separate from the data: the code is the only link between a person and their data.
+Keep the signed forms separate from the data: the pseudonym is the only link between a person and their data.
 
 ### Step 2 – Videos
 
@@ -125,17 +125,19 @@ Each trial gets a **traffic light**: **Good**, **Check** or **Problem**. The met
 
 Open the **3D preview** and watch for limbs that jump or swap sides.
 
-Under **Export**, tick what you need and press **Export**. Files go to the session's `export/` folder, named `<trial code>_trial<label>_<content>`, together with:
+Under **Export**, tick what you need and press **Export**. Files go to the session's `export/` folder, named `<pseudonym>_trial<label>_<content>`, together with:
 
 - `README.txt`, which describes every file;
 - `manifest.json`, which records versions, settings and file checksums.
+
+When you are done, press **Finished!**. The app saves the session, reminds you of raw footage that is still stored, and returns to step 1 for the next session. You can reopen the session at any time from **File > Recent sessions**.
 
 ## 4. Participant data and deletion
 
 **File > Participant data and deletion** is available at any time, as are the buttons on the Session and Results steps. For each participant you can:
 
-- **Delete raw footage**: removes the copies of their videos, the overlay videos and the 2D keypoint files. The 3D results stay. Optionally, it also deletes the original recordings in the camera folders; you must type the trial code to confirm.
-- **Delete all data of this participant** (for example, when they withdraw consent): removes their footage, results and exported files. You must type the trial code to confirm.
+- **Delete raw footage**: removes the copies of their videos, the overlay videos and the 2D keypoint files. The 3D results stay. Optionally, it also deletes the original recordings in the camera folders; you must type the pseudonym to confirm.
+- **Delete all data of this participant** (for example, when they withdraw consent): removes their footage, results and exported files. You must type the pseudonym to confirm.
 
 You can also delete the **whole session**; you must type the session folder name to confirm.
 

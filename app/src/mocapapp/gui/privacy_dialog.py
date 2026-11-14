@@ -73,7 +73,7 @@ class DeleteDialog(QDialog):
                  "session": "Everything in the session folder is deleted, for every participant."}[scope]
         layout.addWidget(para(f"<b>{html.escape(intro)}</b>"))
         self.originals = QCheckBox("Also delete the original recordings in the camera folders"
-                                   + (" (you will type the trial code)" if scope != "session" else ""))
+                                   + (" (you will type the pseudonym)" if scope != "session" else ""))
         self.originals.toggled.connect(self._replan)
         layout.addWidget(self.originals)
         self.view = QTextBrowser()
@@ -114,7 +114,7 @@ class DeleteDialog(QDialog):
         need = self.plan.confirm_text
         self.confirm_row.setVisible(need is not None)
         if need:
-            what = "the session folder name" if self.scope == "session" else "the trial code"
+            what = "the session folder name" if self.scope == "session" else "the pseudonym"
             self.confirm_label.setText(f"To confirm, type {what} <b>{html.escape(need)}</b>:")
         self._update_button()
 
@@ -162,7 +162,7 @@ class ParticipantDataDialog(QDialog):
         self.reminder.setWordWrap(True)
         layout.addWidget(self.reminder)
         self.table = QTableWidget(0, 6)
-        self.table.setHorizontalHeaderLabels(["Code", "Storage consent", "Planned", "Raw footage", "", ""])
+        self.table.setHorizontalHeaderLabels(["Pseudonym", "Storage consent", "Planned", "Raw footage", "", ""])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setStretchLastSection(True)
         layout.addWidget(self.table)

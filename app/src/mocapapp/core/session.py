@@ -50,7 +50,7 @@ class Trial(BaseModel):
     height_m: float | None = None  # None = 'auto'
     consent: Consent = Field(default_factory=Consent)
     delete_raw: bool = True  # follows consent: no storage consent -> delete (PROJECT.md §6.2)
-    # PROJECT.md §8.4: set by save_session when raw footage is kept with consent ("analysis finished")
+    # PROJECT.md §8.4: set by save_session when raw footage is kept with consent ("study finished")
     retention_until: str | None = None
     raw_deleted_at: str | None = None  # working copies + overlays + 2D keypoints deleted (§8.4)
     withdrawn_at: str | None = None  # "Delete all participant data": every file of this trial is gone
@@ -214,12 +214,12 @@ def atomic_write_text(path: Path, text: str) -> None:
         raise
 
 
-RETENTION_TEXT = "analysis finished"
+RETENTION_TEXT = "study finished"
 CONSENT_FILE = "consent.json"
 
 
 def _sync_retention(trial: Trial) -> None:
-    """§8.4 item 6: storage consented and deletion declined -> keep until the analysis is finished."""
+    """§8.4 item 6: storage consented and deletion declined -> keep until the study is finished."""
     keep = trial.raw_present and not trial.delete_raw and trial.consent.raw_footage_storage
     trial.retention_until = RETENTION_TEXT if keep else None
 

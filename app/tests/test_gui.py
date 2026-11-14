@@ -235,6 +235,7 @@ def test_full_wizard(qtbot, tmp_path, monkeypatch):
     res = win.pages[6]
     assert win.current_page() is res and len(res.results) == 1
     assert "Trial 1" in res.qa.toPlainText()
+    assert win.next_button.text() == "Finished!" and not win.next_button.isEnabled()  # export first
     assert not res.boxes["bvh"].isChecked() and res.boxes["mot"].isChecked()
     res.boxes["bvh"].setChecked(True)
     res.do_export()
@@ -244,6 +245,14 @@ def test_full_wizard(qtbot, tmp_path, monkeypatch):
     code = win.session.trials[0].code
     assert f"{code}_trial1_skeleton_animation.bvh" in names and "manifest.json" in names
     assert "Exported to" in res.export_state.text()
+    assert win.next_button.text() == "Finished!" and win.next_button.isEnabled()
+    shown = []
+    from PySide6.QtWidgets import QMessageBox
+
+    monkeypatch.setattr(QMessageBox, "information", lambda *a: shown.append(a[2]))
+    win.next_button.click()  # back to step 1 with an empty session; reminds about footage still stored
+    assert win.session is None and win.stack.currentIndex() == 0 and win.next_button.text() == "Next >"
+    assert shown and "Raw footage" in shown[0]
 
 
 def test_sync_gate_buttons(qtbot, tmp_path, monkeypatch):

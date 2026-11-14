@@ -144,7 +144,7 @@ class ResultsPage(Page):
             self.boxes[k.key].setToolTip(k.describe)
         self.source.setText("Joint angles, the scaled model and the BVH animation are computed from "
                             f"<b>{'LSTM-augmented markers' if st.use_augmentation else 'filtered keypoints'}</b>. "
-                            "File names start with the trial code (a pseudonym).")
+                            "File names start with the participant's pseudonym.")
         self._show_deletion_state()
 
     def _due(self) -> list:
@@ -161,7 +161,7 @@ class ResultsPage(Page):
             elif t.delete_raw:
                 state = "<b>still stored</b>, marked for deletion after export"
             else:
-                state = "kept with consent until the analysis is finished - delete it then"
+                state = "kept with consent until the study is finished - delete it then"
             lines.append(f"Trial {html.escape(t.label)} ({html.escape(t.code)}): {state}")
         self.deletion.setText("<br>".join(lines))
         self.delete_now.setEnabled(bool(self._due()) and not self.win.busy)

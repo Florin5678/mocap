@@ -54,7 +54,7 @@ def _cmd_session_new(args: argparse.Namespace) -> int:
         return 1
     print(f"Session created: {root}")
     for t in session.trials:
-        print(f"  trial {t.label}: code {t.code}, height {t.height_m or 'auto (not recommended)'}")
+        print(f"  trial {t.label}: pseudonym {t.code}, height {t.height_m or 'auto (not recommended)'}")
     print("Next: mocapapp validate --session", root)
     return 0
 
@@ -62,7 +62,7 @@ def _cmd_session_new(args: argparse.Namespace) -> int:
 def _print_mapping(session, report) -> None:
     print(f"\nTrial mapping ({report.mapping_method}):")
     width = max([len(Path(f).name) for c in session.cameras for f in c.trial_files.values()] + [8])
-    print("  trial  code            " + "  ".join(f"{c.name:<{width}}" for c in session.cameras))
+    print("  trial  pseudonym       " + "  ".join(f"{c.name:<{width}}" for c in session.cameras))
     for t in session.trials:
         cells = []
         for c in session.cameras:
@@ -567,7 +567,7 @@ def build_parser() -> argparse.ArgumentParser:
     pb.add_argument("--marker-bits", type=int, default=4, help=argparse.SUPPRESS)
     pc = psub.add_parser("consent", help="fillable consent form template")
     pc.add_argument("--out", required=True)
-    pc.add_argument("--code", help="pre-fill this trial code")
+    pc.add_argument("--pseudonym", "--code", dest="code", help="pre-fill this pseudonym")
     for p in (pb, pc):
         p.set_defaults(func=_cmd_pdf)
 
@@ -640,7 +640,7 @@ def build_parser() -> argparse.ArgumentParser:
     cons = sub.add_parser("consent", help="record that signed consent was received for a trial's participant")
     cons.add_argument("--session", required=True)
     cons.add_argument("--trial", required=True)
-    cons.add_argument("--attest", action="store_true", help="signed consent received for this trial's code")
+    cons.add_argument("--attest", action="store_true", help="signed consent received for this trial's pseudonym")
     cons.add_argument("--raw-storage", choices=["yes", "no"], help="participant consented to keeping raw footage")
     cons.set_defaults(func=_cmd_consent)
 
@@ -680,7 +680,7 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--include-originals", action="store_true",
                        help="also delete the original recordings in the camera folders")
         p.add_argument("--yes", action="store_true", help="really delete (otherwise only list what would go)")
-        p.add_argument("--confirm", help="the trial code (or session folder name) when asked to type it")
+        p.add_argument("--confirm", help="the pseudonym (or session folder name) when asked to type it")
 
     rem = sub.add_parser("reminders", help="list sessions whose raw footage is still stored")
     rem.add_argument("--root", required=True, help="output folder holding sessions, or one session folder")

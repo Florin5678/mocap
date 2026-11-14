@@ -146,7 +146,7 @@ class RunPage(Page):
         res = QGroupBox("Trials")
         rl = QVBoxLayout(res)
         self.trials = QTableWidget(0, 5)
-        self.trials.setHorizontalHeaderLabels(["Trial", "Code", "State", "", ""])
+        self.trials.setHorizontalHeaderLabels(["Trial", "Pseudonym", "State", "", ""])
         self.trials.horizontalHeader().setStretchLastSection(False)
         rl.addWidget(self.trials)
         rl.addWidget(note("If a trial's synchronisation looks unreliable it stops before 3D positions are computed. "
@@ -208,7 +208,7 @@ class RunPage(Page):
                         f"<td>{html.escape(files)}</td></tr>")
         method = ses.trials[0].mapping_method if ses.trials else "?"
         self.summary.setHtml(
-            "<h3>Before you run</h3><table cellspacing=6><tr><th>Trial</th><th>Code</th><th>Height</th>"
+            "<h3>Before you run</h3><table cellspacing=6><tr><th>Trial</th><th>Pseudonym</th><th>Height</th>"
             f"<th>Consent</th><th>Raw footage</th></tr>{''.join(rows)}</table>"
             f"<p>Trial mapping: {html.escape(method or '?')}</p><table cellspacing=6><tr><th>Camera</th>"
             f"<th>Folder</th><th>Calibration</th><th>Trial files</th></tr>{''.join(cams)}</table>"

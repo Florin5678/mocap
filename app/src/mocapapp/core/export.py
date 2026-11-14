@@ -170,7 +170,7 @@ def _write_readme(out: Path, session: Session, selection: list[str], table: dict
     lines = [
         "Exported motion capture results (research use only)",
         "=" * 52, "",
-        "File names: <trial code>_trial<label>_<content>.<ext>. The trial code is the participant's pseudonym",
+        "File names: <pseudonym>_trial<label>_<content>.<ext>. The pseudonym is the participant's",
         "(pseudonymised, not anonymous); the key linking it to a person is kept separately by the experimenter.", "",
         "Coordinate frame of .trc/.c3d: Y up, metres. Scene axes map as X_out = scene Y, Y_out = scene Z (up),",
         "Z_out = scene X.", "",

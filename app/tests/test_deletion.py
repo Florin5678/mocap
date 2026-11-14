@@ -50,7 +50,7 @@ def test_consent_json_and_retention(tmp_path):
     save_session(session, tmp_path)
     rec = json.loads((Layout(tmp_path).trial("1") / CONSENT_FILE).read_text())
     assert rec["code"] == t.code and rec["attested"] is True and rec["template_version"] == "1"
-    assert rec["raw_footage_storage"] is True and rec["retention_until"] == "analysis finished"
+    assert rec["raw_footage_storage"] is True and rec["retention_until"] == "study finished"
     assert load_session(tmp_path).trials[1].retention_until is None  # no storage consent: delete, no retention
     t.delete_raw = True
     save_session(session, tmp_path)
@@ -131,7 +131,7 @@ def test_originals_need_the_typed_code_and_are_logged_without_paths(tmp_path, mo
     originals = [i for i in plan.items if i.group == "originals"]
     assert len(originals) == 2 and plan.confirm_text == "T1-ABCDEF2"
     for wrong in (None, "", "T1-ABCDEF1"):
-        with pytest.raises(deletion.DeletionError, match="type the trial code"):
+        with pytest.raises(deletion.DeletionError, match="type the pseudonym"):
             deletion.execute(plan, session, wrong)
     assert all(i.path.is_file() for i in originals)
     deletion.execute(plan, session, " t1-abcdef2 ")
@@ -213,7 +213,7 @@ def test_cli_dry_run_then_delete(tmp_path, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "dry run" in out and str(video) in out and video.is_file()
     assert main(["delete-raw", "--session", str(root), "--trial", "1", "--include-originals", "--yes"]) == 1
-    assert "type the trial code" in capsys.readouterr().out and video.is_file()
+    assert "type the pseudonym" in capsys.readouterr().out and video.is_file()
     assert main(["delete-raw", "--session", str(root), "--trial", "1", "--include-originals", "--yes",
                  "--confirm", "T1-ABCDEF1", "--after-run"]) == 0
     out = capsys.readouterr().out
