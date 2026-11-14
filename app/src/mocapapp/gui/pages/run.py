@@ -90,10 +90,14 @@ class RunPage(Page):
         self.bvh = QCheckBox("Also make a BVH animation file")
         form.addRow("Pose detection", self.mode)
         form.addRow("Smoothing cut-off", self.cutoff)
-        form.addRow(para("6 Hz suits walking and other slow movement; fast movements need 6-15 Hz."))
+        form.addRow(para("6 Hz suits walking and other slow movement; fast movements need 6-15 Hz. It must stay "
+                         "below half the video frame rate (below 15 Hz for 30 fps video)."))
         form.addRow(self.no_aug)
         form.addRow(self.bvh)
         form.addRow(para("Seated, crouching or lying movements: model scaling is less reliable (Pose2Sim)."))
+        self.stale_note = para("")
+        self.stale_note.setVisible(False)
+        form.addRow(self.stale_note)
         self.adv_inner.setVisible(False)
         adv.toggled.connect(self.adv_inner.setVisible)
         al = QVBoxLayout(adv)
@@ -163,9 +167,11 @@ class RunPage(Page):
         self.bvh.setChecked(st.make_bvh)
         self.sync_box.setChecked(ses.sync_cue_confirmed)
         self._loading = False
-        locked = any(ses.run_state.stage_done.values())
-        self.adv_inner.setEnabled(not locked or self.restart_box.isChecked())
-        self.adv_inner.setToolTip("Tick 'Start over' to change settings after a run." if locked else "")
+        # settings stay editable after a run: Run repeats only the stages a change affects (runner.stale_stages).
+        # After a deletion the footage is gone, so finished trials could not be redone.
+        self.adv_inner.setEnabled(not ses.frozen)
+        self.adv_inner.setToolTip("Settings cannot change after raw footage was deleted." if ses.frozen else "")
+        self._show_stale()
 
         work = Layout(root).calibration_work
         rows = []
@@ -232,7 +238,23 @@ class RunPage(Page):
         st.filter.cutoff_hz = self.cutoff.value()
         st.use_augmentation = not self.no_aug.isChecked()
         st.make_bvh = self.bvh.isChecked()
+        rs = self.session.run_state
+        for t in self.session.active_trials:  # results made with other settings are no longer final
+            if rs.trial_status.get(t.label) == "done" and runner.stale_stages(self.session, t.label):
+                rs.trial_status[t.label] = "partial"
         self.win.save()
+        self._show_stale()
+        self._check()
+        self._fill_trials()
+
+    def _show_stale(self) -> None:
+        stale = {s for t in self.session.active_trials for s in runner.stale_stages(self.session, t.label)}
+        first = min(stale, key=runner.STAGES.index) if stale else None
+        if first:
+            later = [runner.STAGE_TITLES[s].lower() for s in runner.STAGES[runner.STAGES.index(first):]]
+            self.stale_note.setText("<b>Changed after a run.</b> Run repeats " + ", ".join(later) +
+                                    " for the trials concerned; earlier stages are kept.")
+        self.stale_note.setVisible(bool(first))
 
     def _fill_trials(self) -> None:
         rs = self.session.run_state

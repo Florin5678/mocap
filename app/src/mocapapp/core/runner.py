@@ -7,6 +7,9 @@ not contain 'calib', upstream-notes §1).
 
 from __future__ import annotations
 
+import functools
+import json
+import math
 import os
 import queue
 import re
@@ -35,6 +38,28 @@ STAGE_TITLES = {
     "kinematics": "Scaling the OpenSim model and computing joint angles",
 }
 LOG_DIR = "mocap_logs"
+
+
+def stage_inputs(session: Session, stage: str) -> str:
+    """The settings a stage's result depends on. When they change, the stage (and every later one) runs again."""
+    st = session.settings
+    deps = {"poseEstimation": [st.pose_mode],
+            "filtering": [st.filter.type, st.filter.cutoff_hz, st.filter.order],
+            "markerAugmentation": [st.use_augmentation],
+            "kinematics": [st.use_augmentation, st.make_bvh]}.get(stage, [])
+    return json.dumps(deps)
+
+
+def stale_stages(session: Session, label: str) -> list[str]:
+    """Finished stages whose settings were changed since they ran (sessions from before 0.1.0rc6 count as current)."""
+    record = session.run_state.stage_settings.get(label, {})
+    return [s for s in session.run_state.stage_done.get(label, [])
+            if s in record and record[s] != stage_inputs(session, s)]
+
+
+def max_cutoff_hz(fps: float) -> int:
+    """Highest whole cut-off a Butterworth filter accepts at this frame rate (it must stay below fps / 2)."""
+    return math.ceil(fps / 2) - 1
 SYNC_MIN_CORRELATION = 0.5
 SYNC_MAX_OFFSET_S = 5.0
 CPU_FRAMES_PER_SECOND = 2.0  # pose estimation per video on the owner's laptop CPU (upstream-notes §6), rough
@@ -144,7 +169,13 @@ def check_outputs(trial_dir: Path, stage: str, cameras: list[str], session: Sess
         raw = [f for f in p3d.glob("*.trc") if "_filt_" not in f.name and "_LSTM" not in f.name]
         return None if raw else "No 3D positions were computed (check calibration and synchronisation)."
     if stage == "filtering":
-        return None if list(p3d.glob(f"*_filt_{session.settings.filter.type}.trc")) else "Filtering produced no file."
+        if list(p3d.glob(f"*_filt_{session.settings.filter.type}.trc")):
+            return None
+        log = trial_dir / LOG_DIR / "filtering.log"
+        if log.is_file() and "critical frequencies" in log.read_text(encoding="utf-8", errors="replace"):
+            return ("The smoothing cut-off is too high for this video's frame rate: it must be below half the frame "
+                    "rate. Lower 'Smoothing cut-off' under Advanced and press Run again.")
+        return "Filtering produced no file."
     if stage == "markerAugmentation":
         return None if list(p3d.glob("*_LSTM.trc")) else "Marker augmentation failed (it needs hips, knees, " \
             "ankles, heels and toes in every frame, and the participant height)."
@@ -229,6 +260,13 @@ def preflight(session: Session, root: Path, labels: list[str]) -> list[Issue]:
         if trial.height_m is None:
             issues.append(Issue("warning", where, "No participant height: it will be estimated (less accurate).",
                                 "Enter the measured height."))
+        flt = session.settings.filter
+        fps = _fps(tdir, [c.name for c in session.cameras]) if session.cameras else 0.0
+        if flt.type.startswith("butterworth") and fps > 0 and flt.cutoff_hz >= fps / 2:
+            issues.append(Issue("error", where, f"The smoothing cut-off ({flt.cutoff_hz:g} Hz) is too high for videos "
+                                f"at {fps:g} frames per second: it must be below half the frame rate ({fps / 2:g} Hz).",
+                                f"Set 'Smoothing cut-off' under Advanced to {max_cutoff_hz(fps)} Hz or less "
+                                "(6 Hz suits walking)."))
     return issues
 
 
@@ -251,12 +289,18 @@ def estimate_seconds(session: Session, root: Path, labels: list[str]) -> float:
 # ---------- trial runner ----------
 
 def _fps(trial_dir: Path, cameras: list[str]) -> float:
+    video = trial_dir / "videos" / f"{cameras[0]}.mp4"
+    try:
+        return _probe_fps(str(video), video.stat().st_mtime_ns)
+    except Exception:  # missing or unreadable video: callers treat 0 as unknown
+        return 0.0
+
+
+@functools.lru_cache(maxsize=64)
+def _probe_fps(video: str, mtime_ns: int) -> float:  # cached: the Run page checks every trial on each refresh
     from mocapapp.core.media import probe
 
-    try:
-        return probe(trial_dir / "videos" / f"{cameras[0]}.mp4").fps
-    except Exception:  # fps is only needed to judge sync offsets
-        return 0.0
+    return probe(Path(video)).fps
 
 
 def _sync_gate(session: Session, root: Path, label: str, accept: bool, listener: Listener) -> bool:
@@ -284,13 +328,14 @@ def run_trial(session: Session, root: Path, label: str, listener: Listener = lam
     cams = [c.name for c in session.cameras]
     rs = session.run_state
     done = rs.stage_done.setdefault(label, [])
+    stale = stale_stages(session, label)
     todo = stages or STAGES
     rs.trial_status[label] = "running"
     rs.errors.pop(label, None)
     save_session(session, root)
 
     for i, stage in enumerate(todo):
-        if resume and stage in done and check_outputs(tdir, stage, cams, session) is None:
+        if resume and stage in done and stage not in stale and check_outputs(tdir, stage, cams, session) is None:
             listener(Event("stage_end", label, stage, "already done", ok=True))
             if stage == "synchronization" and not _sync_gate(session, root, label, accept_sync, listener):
                 return False
@@ -325,6 +370,7 @@ def run_trial(session: Session, root: Path, label: str, listener: Listener = lam
             listener(Event("trial_end", label, stage, rs.errors[label], ok=False))
             return False
         done.append(stage)
+        rs.stage_settings.setdefault(label, {})[stage] = stage_inputs(session, stage)
         save_session(session, root)
         listener(Event("stage_end", label, stage, f"{time.perf_counter() - t0:.0f} s", ok=True))
 

@@ -275,6 +275,50 @@ def test_sync_gate_buttons(qtbot, tmp_path, monkeypatch):
     assert win.session.run_state.trial_status["1"] == "done"
 
 
+def test_changing_a_setting_after_a_run_repeats_only_later_stages(qtbot, tmp_path, monkeypatch):
+    import mocapapp.gui.pages.run  # noqa: F401 (loads the module for monkeypatch)
+    from mocapapp.core.session import save_session
+    from mocapapp.gui import pages
+    from mocapapp.gui.main_window import MainWindow
+    from tests.m3_fakes import make_session
+
+    monkeypatch.setattr(pages.run, "confirm", lambda *a, **k: True)
+    fake = FakeStages()
+    monkeypatch.setattr(runner, "run_stage", fake)
+    monkeypatch.setattr(runner, "_fps", lambda *a: 30.0)
+    monkeypatch.setattr(runner, "estimate_seconds", lambda *a: 60)
+    session = make_session(tmp_path, n_trials=1)
+    session.calibration_source = "imported"  # calibration done: nothing else keeps Run disabled
+    Layout(tmp_path).calibration_work.mkdir(exist_ok=True)
+    Layout(tmp_path).calib_file.write_text("[cam_1]\n")
+    save_session(session, tmp_path)
+    for cam in session.cameras:
+        Layout(tmp_path).inputs(cam.name).mkdir(parents=True)
+        (Layout(tmp_path).inputs(cam.name) / "trial_1.mp4").write_bytes(b"fake")
+    win = MainWindow()
+    qtbot.addWidget(win)
+    win.open_session(tmp_path)
+    run = win.pages[5]
+    run.refresh()
+    run.start()
+    wait_idle(qtbot, win)
+    assert win.session.run_state.trial_status["1"] == "done"
+    assert run.adv_inner.isEnabled()  # no longer locked after a run
+
+    assert run.run_button.isEnabled(), run.issues.toPlainText()
+    run.cutoff.setValue(15)  # too high for 30 fps: blocked before running
+    assert not run.run_button.isEnabled()
+    assert "below half the frame rate" in run.issues.toPlainText()
+    assert win.session.run_state.trial_status["1"] == "partial" and not run.stale_note.isHidden()
+    run.cutoff.setValue(8)
+    assert run.run_button.isEnabled(), run.issues.toPlainText()
+    fake.calls.clear()
+    run.start()
+    wait_idle(qtbot, win)
+    assert [s for _, s in fake.calls] == ["filtering", "markerAugmentation", "kinematics"]
+    assert win.session.run_state.trial_status["1"] == "done" and run.stale_note.isHidden()
+
+
 @pytest.mark.slow
 def test_sample_data_in_gui(qtbot, tmp_path, monkeypatch):
     """M4 exit criterion: the GUI flow on the bundled sample data, with the real Pose2Sim run (~4 min)."""

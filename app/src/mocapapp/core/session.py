@@ -106,6 +106,7 @@ class RunState(BaseModel):
     trial_status: dict[str, str] = Field(default_factory=dict)  # label -> pending|running|needs_sync_fix|failed|done
     sync: dict[str, dict] = Field(default_factory=dict)  # label -> {"offsets", "issues", "accepted"}
     errors: dict[str, str] = Field(default_factory=dict)  # label -> plain-language failure cause
+    stage_settings: dict[str, dict[str, str]] = Field(default_factory=dict)  # label -> stage -> settings it ran with
     last_error: str | None = None
 
 

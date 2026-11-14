@@ -143,3 +143,50 @@ def test_run_stage_cancel_kills_a_silent_process(tmp_path):
     with pytest.raises(runner.Cancelled):
         runner.run_stage(tmp_path, "poseEstimation", lambda s: None, cancel, code="import time; time.sleep(60)")
     assert time.perf_counter() - t0 < 10
+
+
+def test_preflight_rejects_a_cutoff_at_half_the_frame_rate(tmp_path, monkeypatch):
+    session = make_session(tmp_path, n_trials=1)
+    monkeypatch.setattr(runner, "_fps", lambda *a: 30.0)
+    session.settings.filter.cutoff_hz = 15.0  # = fps / 2: the Butterworth filter refuses it
+    errors = [i for i in runner.preflight(session, tmp_path, ["1"]) if i.level == "error"]
+    assert len(errors) == 1 and "below half the frame rate (15 Hz)" in errors[0].what and "14 Hz" in errors[0].fix
+    session.settings.filter.cutoff_hz = 14.0
+    assert not [i for i in runner.preflight(session, tmp_path, ["1"]) if i.level == "error"]
+
+
+def test_filter_failure_is_explained(tmp_path):
+    session = make_session(tmp_path, n_trials=1)
+    tdir = Layout(tmp_path).trial("1")
+    (tdir / runner.LOG_DIR).mkdir()
+    (tdir / runner.LOG_DIR / "filtering.log").write_text(
+        "ValueError: Digital filter critical frequencies must be 0 < Wn < 1\n")
+    assert "too high for this video's frame rate" in runner.check_outputs(tdir, "filtering", ["cam01"], session)
+
+
+@pytest.mark.parametrize("change, rerun", [
+    (lambda s: setattr(s.settings.filter, "cutoff_hz", 8.0), ["filtering", "markerAugmentation", "kinematics"]),
+    (lambda s: setattr(s.settings, "make_bvh", False), ["kinematics"]),
+    (lambda s: setattr(s.settings, "pose_mode", "lightweight"), runner.STAGES),
+])
+def test_changed_settings_rerun_only_the_affected_stages(tmp_path, fake, change, rerun):
+    f = fake()
+    session = make_session(tmp_path, n_trials=1)
+    runner.run_session(session, tmp_path)
+    change(session)
+    assert runner.stale_stages(session, "1") == rerun[:1]  # the changed stage; later ones follow
+    f.calls.clear()
+    assert runner.run_session(session, tmp_path) == {"1": "done"}
+    assert [s for _, s in f.calls] == rerun
+    assert runner.stale_stages(session, "1") == []
+
+
+def test_sessions_without_recorded_settings_are_not_rerun(tmp_path, fake):
+    f = fake()
+    session = make_session(tmp_path, n_trials=1)
+    runner.run_session(session, tmp_path)
+    session.run_state.stage_settings.clear()  # as in sessions made before 0.1.0rc6
+    session.settings.filter.cutoff_hz = 8.0
+    f.calls.clear()
+    runner.run_session(session, tmp_path)
+    assert f.calls == []

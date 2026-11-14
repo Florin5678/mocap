@@ -103,6 +103,9 @@ The summary shows every trial, camera and setting. Tick **I recorded a sync cue 
 
 **Advanced** settings (pose detection speed and accuracy, smoothing, BVH) are folded away. The defaults suit most studies.
 
+- **Smoothing cut-off:** 6 Hz suits walking. Faster movements need more, but the cut-off must stay below half the video frame rate: below 15 Hz for 30 fps video, below 30 Hz for 60 fps. The app checks this before it runs.
+- **Changing settings after a run:** allowed. **Run** then repeats only the stages the change affects, for example smoothing and everything after it. A change of pose detection repeats everything.
+
 ### Step 7 – Results
 
 Each trial gets a **traffic light**: **Good**, **Check** or **Problem**. The metrics behind it:
@@ -150,6 +153,7 @@ Details: the project's `app/docs/privacy.md`.
 | A trial stops with "needs sync fix" | Use **Check sync ...**. Next time, give a clear clap or jump at the start, visible to every camera. |
 | Large reprojection error | A camera may have moved after its `extrinsic` video, or a reference point was clicked or measured wrongly. Redo step 5 for that camera. |
 | Feet far above or below the floor | The reference points' heights or the floor (Z = 0) are off. Check the measurements. |
+| "The smoothing cut-off is too high for this video's frame rate" | Lower **Advanced > Smoothing cut-off** below half the frame rate (for 30 fps video: 14 Hz or less), then press **Run**. Only smoothing and later stages are repeated. |
 | Head below the feet | Z points down in your reference points: Z must point up. |
 | "Raw footage was deleted in this session" | After a deletion, the session's videos can no longer be changed. Start a new session for new recordings. |
 | Anything else | **Help > Copy diagnostics** copies version and setup information (without your name or any participant data); paste it into your bug report. |

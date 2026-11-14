@@ -10,7 +10,7 @@ Bootstraps a private, pinned environment - nothing is installed system-wide and 
 Re-running it updates/repairs the installation. Session folders are never touched.
 #>
 param(
-    [string]$Ref = "mocapapp-v0.1.0rc5",           # git tag (or branch) of https://github.com/Florin5678/mocap
+    [string]$Ref = "mocapapp-v0.1.0rc6",           # git tag (or branch) of https://github.com/Florin5678/mocap
     [string]$Source = "",                          # use a local checkout instead of downloading (testing)
     [string]$Prefix = (Join-Path $env:LOCALAPPDATA "mocapapp"),
     [switch]$NoModels,
