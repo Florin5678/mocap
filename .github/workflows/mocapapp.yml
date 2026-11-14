@@ -59,10 +59,28 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v6.0.2
+      - name: Test the setup end to end (silent install, check, uninstall)
+        shell: pwsh
+        timeout-minutes: 45
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\iscc.exe")) { choco install innosetup -y --no-progress }
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\iscc.exe"
+          # the same script as the release, but install.ps1 does not wait for Enter at the end
+          & $iscc "/DRef=${{ github.ref_name }}" "/DAppVersion=0.0.0-test" "/DPauseArg=" app\installer\windows\mocapapp.iss
+          if ($LASTEXITCODE) { throw "iscc failed" }
+          Start-Process app\dist\mocapapp-setup.exe -Wait -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"
+          $prefix = Join-Path $env:LOCALAPPDATA "mocapapp"
+          Get-Content "$prefix\install.log" -Tail 30 -ErrorAction SilentlyContinue
+          & "$prefix\venv\Scripts\mocapapp.exe" doctor --dir $env:USERPROFILE
+          if ($LASTEXITCODE) { throw "the installation made by mocapapp-setup.exe does not work" }
+          # the uninstaller relaunches itself from a temp copy, so wait for its result
+          Start-Process "$prefix\setup\unins000.exe" -Wait -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES"
+          for ($i = 0; ($i -lt 60) -and (Test-Path "$prefix\venv"); $i++) { Start-Sleep 2 }
+          if (Test-Path "$prefix\venv") { throw "the uninstaller left the installation behind" }
+          Remove-Item app\dist\mocapapp-setup.exe
       - name: Build mocapapp-setup.exe with Inno Setup 6
         shell: pwsh
         run: |
-          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\iscc.exe")) { choco install innosetup -y --no-progress }
           $tag = "${{ github.ref_name }}"
           $version = $tag -replace '^mocapapp-v', ''
           & "${env:ProgramFiles(x86)}\Inno Setup 6\iscc.exe" "/DRef=$tag" "/DAppVersion=$version" app\installer\windows\mocapapp.iss

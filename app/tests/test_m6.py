@@ -93,6 +93,7 @@ def test_installer_scripts_are_consistent():
     for text in (ps1, sh, iss):
         assert f"mocapapp-v{__version__}" in text  # installers fetch the tag of this version
     assert re.search(r'#define AppVersion "' + re.escape(__version__) + '"', iss)
+    assert "RedirectionGuard=no" in iss  # else uv's Python junction fails under setup.exe (os error 448)
     assert "--frozen" in ps1 and "--frozen" in sh  # always the locked versions
     assert len(re.findall(r"\b[0-9a-f]{64}\b", sh)) == 2 and len(re.findall(r"\b[0-9a-f]{64}\b", ps1)) == 1
 

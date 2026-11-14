@@ -17,7 +17,7 @@ Running the installer again repairs or updates the installation. Uninstalling ne
 | File | What it is |
 |---|---|
 | `windows/install.ps1`, `windows/uninstall.ps1` | The bootstrapper and its remover. Must stay ASCII: Windows PowerShell 5.1 reads BOM-less files as ANSI. |
-| `windows/mocapapp.iss` | Inno Setup 6 script. It builds `mocapapp-setup.exe`, a per-user setup that runs `install.ps1` in a visible progress window and registers the uninstaller. |
+| `windows/mocapapp.iss` | Inno Setup 6 script. It builds `mocapapp-setup.exe`, a per-user setup that runs `install.ps1` in a visible progress window and registers the uninstaller. It sets `RedirectionGuard=no`: with Windows' RedirectionGuard on, uv's Python junction fails with "untrusted mount point". |
 | `windows/license.txt` | Shown by the setup: research use only, plus Pose2Sim's BSD-3 licence. |
 | `macos/Install mocapapp.command`, `macos/Uninstall mocapapp.command` | Double-clickable in Finder. They create `~/Applications/mocapapp.app`. They need macOS 15 or newer, because OpenSim's wheels require it. |
 
@@ -40,6 +40,7 @@ On macOS, use `MOCAPAPP_SOURCE=~/mocap MOCAPAPP_PREFIX=/tmp/mocap-test ./"Instal
 3. Run `uv lock`, the fast tests and the slow tests (`uv run pytest -m slow`).
 4. Push a tag `mocapapp-v<version>`. The `mocapapp` GitHub workflow then:
    - runs the tests on Windows and macOS;
+   - installs a test build of `mocapapp-setup.exe` silently on Windows, runs `doctor`, and uninstalls it;
    - builds `mocapapp-setup.exe` (Inno Setup) and `mocapapp-macos.zip`;
    - attaches both to a **draft** pre-release.
 5. Try both installers on a clean machine, then publish the draft.
