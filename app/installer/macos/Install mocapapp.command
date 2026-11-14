@@ -7,7 +7,7 @@
 # Options (environment): MOCAPAPP_REF=<tag or branch>  MOCAPAPP_SOURCE=<local checkout>  MOCAPAPP_NO_MODELS=1
 set -euo pipefail
 
-REF="${MOCAPAPP_REF:-mocapapp-v0.1.0rc6}"
+REF="${MOCAPAPP_REF:-mocapapp-v0.1.0rc7}"
 SOURCE="${MOCAPAPP_SOURCE:-}"
 PREFIX="${MOCAPAPP_PREFIX:-$HOME/Library/Application Support/mocapapp}"
 APPDIR="$HOME/Applications"

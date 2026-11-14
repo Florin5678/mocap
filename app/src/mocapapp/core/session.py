@@ -91,10 +91,12 @@ class FilterSettings(BaseModel):
 
 class Settings(BaseModel):
     pose_mode: Literal["lightweight", "balanced", "performance"] = "balanced"
+    keypoints: Literal["Body_with_feet", "Whole_body_wrist", "Whole_body"] = "Body_with_feet"  # Pose2Sim pose_model
     device: str = "auto"
     filter: FilterSettings = Field(default_factory=FilterSettings)
     use_augmentation: bool = True
-    make_bvh: bool = True
+    make_bvh: bool = True  # always made since 0.1.0rc7; kept so that older session files load
+    simple_model: bool = False  # OpenSim: Model_Pose2Sim_simple (fast IK, no muscles) instead of the full model
     board_type: Literal["charuco", "chess"] = "charuco"
     corners_nb: tuple[int, int] = (5, 8)  # internal corners [rows-1, cols-1]
     square_size_mm: float = 25.0

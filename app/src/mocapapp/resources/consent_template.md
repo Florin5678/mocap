@@ -1,20 +1,20 @@
-# Participant information and consent (TEMPLATE)
+# Participation consent form
 
-This is a template. Replace every [PLACEHOLDER] and have the form reviewed by your institution before use. It is not legal advice. Adults (18 years or older) only.
+This form describes a research study that records your movement on video, and what happens to your data. Please read it and ask the researcher about anything that is unclear. If you agree to take part, tick the boxes and sign at the end.
 
 ## The study
 
-Title: [PLACEHOLDER: study title]
+Title: ____
 
-Purpose: [PLACEHOLDER: one or two sentences on what the study investigates and why movement is recorded]
+Purpose: ____
 
 ## Who is responsible
 
-Data controller: [PLACEHOLDER: institution, address]
+Data controller: ____
 
-Researcher and contact: [PLACEHOLDER: name, e-mail, phone]
+Researcher(s): ____
 
-Data protection officer: [PLACEHOLDER: e-mail]
+Contact: ____
 
 ## What we collect
 
@@ -22,34 +22,30 @@ Data protection officer: [PLACEHOLDER: e-mail]
 - Your body height.
 - 3D movement data computed from the videos (positions of body points and joint angles over time).
 
-We do not record your name together with the data. Your body mass is not collected.
+We do not record your name together with the data.
 
 ## Purpose and legal basis
 
 The data are used only for the research described above. The legal basis is your consent.
 
-## Pseudonymisation and the trial code
+## Pseudonymisation
 
-Your data are stored under a trial code (printed below), not under your name. This is pseudonymisation, not anonymisation: this signed form links the code to you and is kept separately from the data, accessible only to [PLACEHOLDER: who]. Movement patterns can in some cases identify a person.
+Your data are stored under a pseudonym, provided at the end of this form. This signed form links the pseudonym to you and is kept separately from the data. Movement patterns can in some cases identify a person.
 
 ## Storage, access and retention
 
-Data are stored at [PLACEHOLDER: storage location and security] and are accessible to [PLACEHOLDER: who]. They are kept until [PLACEHOLDER: retention period].
+Data are stored at ____ and are accessible to ____. They are kept until ____.
 
 ## Raw video
 
-Raw video shows you and is the most sensitive part of the data. Unless you agree below to its storage, the raw video and any videos derived from it are deleted once the 3D movement data have been computed. If you agree, they are kept only until the data analysis is finished and then deleted.
+Raw video shows you and is the most sensitive part of the data. Unless you agree below to its storage, the raw video and any videos derived from it are deleted once the 3D movement data have been computed. If you agree, they are kept only until the study is finished and then deleted.
 
 ## Risks and benefits
 
 Risks: video recordings carry a privacy risk; the movements may cause physical effort or mild discomfort. Tell the researcher at any time if you want to stop.
 
-Benefits or compensation: [PLACEHOLDER: e.g. none, or a gift card]
+Benefits or compensation: ____
 
 ## Voluntary participation and withdrawal
 
-Participation is voluntary. You may withdraw your consent at any time, without giving a reason and without any disadvantage. Data already analysed and pooled after [PLACEHOLDER: cut-off, e.g. publication or a date] can no longer be removed.
-
-## Your rights
-
-You have the right to access, rectify and erase your data, to restrict processing and, where applicable, to data portability. You can complain to the data protection authority (in Denmark: Datatilsynet, www.datatilsynet.dk). Contact: [PLACEHOLDER: contact for requests].
+Participation is voluntary. You may withdraw your consent at any time, without giving a reason and without any disadvantage. Data already published can no longer be removed.

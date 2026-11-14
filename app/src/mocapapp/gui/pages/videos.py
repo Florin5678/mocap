@@ -20,10 +20,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from mocapapp.core.assemble import plan_inputs
 from mocapapp.core.session import save_session
 from mocapapp.core.validate import scan_dir, validate
 from mocapapp.core.workflow import SetupError, inputs_ready, pick_video, prepare_session, set_mapping
-from mocapapp.gui.common import Background, IssueView, clear_table, confirm, error_box, fit_rows, note, para, readonly
+from mocapapp.gui.common import Background, IssueView, clear_table, error_box, fit_rows, note, readonly
 from mocapapp.gui.main_window import Page
 
 LOW = QColor("#fff3cd")
@@ -50,7 +51,6 @@ class VideosPage(Page):
 
         calib = QGroupBox("Calibration videos (one 'intrinsic' and one 'extrinsic' per camera)")
         cl = QVBoxLayout(calib)
-        cl.addWidget(para("If a video was not found or is the wrong one, choose it from any folder."))
         self.calib_table = QTableWidget(0, 5)
         self.calib_table.setHorizontalHeaderLabels(["Camera", "intrinsic", "extrinsic", "", ""])
         self.calib_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
@@ -75,9 +75,11 @@ class VideosPage(Page):
         prep = QGroupBox("Copy into the session")
         pl = QVBoxLayout(prep)
         pl.addWidget(note("The originals are never changed. Videos that are already constant-frame-rate, upright "
-                          "H.264 are linked or copied; others are converted (constant frame rate, rotation applied). "
-                          "You will see the list and the disk space needed first."))
-        self.prepare_button = QPushButton("Copy videos into the session ...")
+                          "H.264 are linked or copied; others are converted (constant frame rate, rotation applied)."))
+        self.space = QLabel()
+        self.space.setWordWrap(True)
+        pl.addWidget(self.space)
+        self.prepare_button = QPushButton("Copy videos into the session")
         self.prepare_button.clicked.connect(self.prepare)
         pl.addWidget(self.prepare_button)
         self.progress = QLabel()
@@ -105,7 +107,8 @@ class VideosPage(Page):
                             "Press <b>Check videos</b> to inspect every file (this reads each video once).")
         self._fill_calib()
         self._fill_grid()
-        self.prepare_button.setEnabled(self.report is not None and self.report.ok)
+        self.plan = self._plan()
+        self.prepare_button.setEnabled(self.plan is not None and self.plan.enough_space)
         frozen = self.session.frozen
         if frozen:  # §8.4: after a deletion the session's videos stay as they are
             self.status.setText("Raw footage was deleted in this session, so its videos can no longer be checked "
@@ -203,14 +206,10 @@ class VideosPage(Page):
                 item.setBackground(QBrush(LOW if (cam.name, t.label) in low else QColor(0, 0, 0, 0)))
                 self.grid.setItem(r, c, item)
         fit_rows(self.grid)
-        method = self.report.mapping_method if self.report else (trials[0].mapping_method if trials else None)
         review = self.report is not None and self.report.needs_mapping_review
-        texts = {"digit": "Matched by the last digit of each file name.",
-                 "chronological": "Matched by recording time (the file names did not give one digit per trial).",
-                 "manual": "Matched by hand.", None: "Not matched yet."}
-        self.mapping_note.setText(texts.get(method, "") + (" <b>Please check every row and correct it if needed, then "
-                                                           "save.</b> Highlighted cells are uncertain." if review
-                                                           else " You can still change it."))
+        self.mapping_note.setText("<b>Please check every row and correct it if needed, then save.</b> Highlighted "
+                                  "cells are uncertain." if review else "")
+        self.mapping_note.setVisible(review)
 
     def save_mapping(self) -> None:
         table = {}
@@ -232,20 +231,30 @@ class VideosPage(Page):
 
     # ---------- prepare ----------
 
-    def prepare(self) -> None:
+    plan = None
+
+    def _plan(self):
+        """What copying would do, shown on the page once the check passed (no extra dialog)."""
+        self.space.setText("")
+        if self.report is None or not self.report.ok or self.session.frozen:
+            return None
         try:
-            report, plan = prepare_session(self.session, self.root, dry_run=True)
+            plan = plan_inputs(self.session, self.root, self.report)
         except (OSError, ValueError) as exc:
-            error_box(self, "Cannot copy the videos", str(exc))
-            return
-        if plan is None:
-            self.issues.show_issues(report.issues)
-            return
+            self.space.setText(f"Cannot plan the copy: {exc}")
+            return None
+        converted = sum(how == "transcode" for _, _, how in plan.jobs)
+        text = (f"{len(plan.jobs)} videos ({converted} converted). Space needed: about "
+                f"{plan.bytes_needed / 1e9:.2f} GB; free: {plan.bytes_free / 1e9:.1f} GB.")
+        if plan.target_fps:
+            text += f" All videos will be converted to {plan.target_fps:g} fps."
         if not plan.enough_space:
-            error_box(self, "Not enough disk space", plan.describe())
-            return
-        if not confirm(self, "Copy videos into the session", "This will happen (originals are not changed):\n\n"
-                       + plan.describe(), "Copy"):
+            text = "<b>Not enough disk space.</b> " + text + " Free some space or choose another output folder."
+        self.space.setText(text)
+        return plan
+
+    def prepare(self) -> None:
+        if self.plan is None or not self.plan.enough_space:
             return
         self.win.set_busy(True)
 

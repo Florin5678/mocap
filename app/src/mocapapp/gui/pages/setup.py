@@ -27,7 +27,15 @@ from PySide6.QtWidgets import (
 from mocapapp.core.session import parse_height
 from mocapapp.core.texts import s
 from mocapapp.core.validate import Issue
-from mocapapp.core.workflow import MAX_TRIALS, NewSession, SetupError, check_new_session, create_session
+from mocapapp.core.workflow import (
+    MAX_TRIALS,
+    NewSession,
+    SetupError,
+    camera_number,
+    check_new_session,
+    create_session,
+    sibling_camera_dirs,
+)
 from mocapapp.gui.common import IssueView, clear_table, error_box, fit_rows, last_output_root, note, para, readonly
 from mocapapp.gui.main_window import Page
 
@@ -136,9 +144,28 @@ class SetupPage(Page):
         edit.editingFinished.connect(self._check_new)
         self.cam_table.setCellWidget(r, 1, edit)
         browse = QPushButton("Browse ...")
-        browse.clicked.connect(lambda: self._browse_into(edit, f"Folder of cam{r + 1:02d}"))
+        browse.clicked.connect(lambda _=False, row=r: self._browse_camera(row))
         self.cam_table.setCellWidget(r, 2, browse)
         fit_rows(self.cam_table)
+
+    def _browse_camera(self, row: int) -> None:
+        edit = self.cam_table.cellWidget(row, 1)
+        folder = QFileDialog.getExistingDirectory(self, f"Folder of cam{row + 1:02d}", edit.text() or str(Path.home()))
+        if folder:
+            edit.setText(folder)
+            self.fill_sibling_cameras(row, Path(folder))
+            self._check_new()
+
+    def fill_sibling_cameras(self, row: int, folder: Path) -> None:
+        """A folder named like its camera (cam02 for cam02): fill the empty rows from cam01, cam03, ... next to it."""
+        if camera_number(folder.name) != row + 1:
+            return
+        for n, path in sorted(sibling_camera_dirs(folder).items()):
+            while self.cam_table.rowCount() < n:
+                self._add_camera("")
+            edit = self.cam_table.cellWidget(n - 1, 1)
+            if not edit.text().strip():
+                edit.setText(str(path))
 
     def _remove_camera(self) -> None:
         if self.cam_table.rowCount() > 2:

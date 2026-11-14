@@ -1,6 +1,6 @@
 # Participant data, consent and deletion
 
-How the app handles personal data (PROJECT.md §8). This is not legal advice. The consent form is a **template**: the owner reviews it before use.
+How the app handles personal data (PROJECT.md §8). This is not legal advice. The participation consent form has blanks for the study's details; the owner fills them in and has the form reviewed before use.
 
 ## What is stored, and where
 

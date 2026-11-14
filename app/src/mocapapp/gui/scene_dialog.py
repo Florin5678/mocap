@@ -53,7 +53,7 @@ class SceneDiagram(QWidget):
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self.points: list[sp.ScenePoint] = []
-        self.setMinimumSize(420, 330)
+        self.setMinimumSize(300, 230)
 
     def set_points(self, points: list[sp.ScenePoint]) -> None:
         self.points = points
@@ -133,7 +133,7 @@ class SceneDialog(QDialog):
     def __init__(self, parent: QWidget | None, scene: sp.Scene | None, has_extrinsics: bool = False):
         super().__init__(parent)
         self.setWindowTitle("Reference points")
-        self.resize(1150, 760)
+        self.resize(900, 600)
         self.has_extrinsics = has_extrinsics
         self._original = scene.model_copy(deep=True) if scene else None
         scene = scene or sp.Scene()
@@ -185,7 +185,7 @@ class SceneDialog(QDialog):
             al.addWidget(w)
             w.textChanged.connect(self._validate)
         al.addWidget(para("<b>+Z</b> points up, away from the floor (fixed). The floor should be Z = 0."))
-        y = QLabel(f"<b>+Y</b> follows from X and Z: {sp.Y_AXIS_TEXT}")
+        y = QLabel("<b>+Y</b> follows from X and Z.")
         y.setWordWrap(True)
         al.addWidget(y)
         al.addWidget(self.y_note)
@@ -200,8 +200,8 @@ class SceneDialog(QDialog):
         split = QSplitter()
         split.addWidget(left)
         split.addWidget(right)
-        split.setSizes([480, 640])
-        self.issues = IssueView(min_height=110)
+        split.setSizes([400, 500])
+        self.issues = IssueView(min_height=80)
         help_box = QGroupBox("How to measure (click to show)")
         help_box.setCheckable(True)
         help_box.setChecked(False)

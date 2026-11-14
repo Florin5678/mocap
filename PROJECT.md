@@ -29,13 +29,13 @@ Changes from v0.1: owner decisions applied (§0.1); facts re-verified against th
 | D3 | Each camera directory must contain **two different calibration videos: `intrinsic` and `extrinsic`**. If either is missing, the user can **manually pick the file from any other directory**, per camera and per role. |
 | D4 | A **separate dialog for extrinsic reference points**: set X, Y, Z for ≥ 10 points (as in the settings file) and show what each axis means relative to the origin. |
 | D5 | **One extrinsic calibration per camera per session.** No per-trial groups; if cameras are repositioned, run a new session. (Still one Pose2Sim project per trial, §5.2.) |
-| D6 | `.mot` is derived from LSTM-augmented markers by default; label this clearly. *(BVH: v0.1 said "drop"; **revised** — this fork supports BVH natively, so it stays, unticked by default. §6.7)* |
+| D6 | `.mot` is derived from LSTM-augmented markers by default; label this clearly. *(BVH: v0.1 said "drop"; **revised** — this fork supports BVH natively, so it stays, unticked by default. §6.7. **Revised again 2026-11-14 (rc7): always made, no checkbox.**)* |
 | D7 | Trial/file mapping: implement the best solution — tiered resolver, §6.2. |
 | D8 | Raw-footage deletion is **optional**, but must exist (also after the fact, in case a participant requires it). |
 | D9 | Replace the 4-digit participant ID with a **trial-specific identifier** (§8.1). **Each trial is a different participant**, so the identifier, height, consent and delete option are all **per trial**. Ask **only for height**; no mass. **English only.** The owner reviews the consent form for compliance afterwards. |
 | D14 | If the delete option is selected, delete **both the raw footage and the overlay videos** (and the 2D keypoint JSONs). |
 | D15 | The app opens with a **greeting dialog** with exactly two buttons: "How it works" (recommended for first use) and "Start session" (§6.0). |
-| D16 | Target OS: Windows 10/11 + macOS. BVH export available, unticked by default. |
+| D16 | Target OS: Windows 10/11 + macOS. BVH export available, unticked by default *(revised 2026-11-14: always made)*. |
 | D10 | QA reports + 3D preview. |
 | D11 | Progress/resume; bootstrap installer; CPU-first. |
 | D12 | **Research use only** — no commercial use. |
@@ -272,7 +272,7 @@ A **separate dialog** that defines the physical points and the world axes. The p
 Per trial, via the subprocess runner: pose estimation → synchronisation → person association → triangulation → filtering → marker augmentation → kinematics, calling the pipeline with `do_calibration=False`.
 
 - FR-4.1 One-click Run. All human interaction (reference points, intrinsics review, extrinsics) is finished **before** the long compute so the user can leave the machine; the only later interaction is the "Fix sync" queue (FR-4.4), because sync needs 2D poses.
-- FR-4.2 Enforced config (written by `config_gen.py`, user-visible in "Advanced"): `pose_model='Body_with_feet'`, `mode='balanced'`, `device='auto'`, `multi_person=false`, `display_detection=false`, `blur_faces=true`, `save_video='to_video'` (overlay videos for QA, faces blurred), `synchronization_gui=false`, `display_sync_plots=false`, `display_figures=false`, filter `butterworth` 6 Hz order 4 with a plain-language hint (6 Hz suits walking-type movement; fast movements need 6–15 Hz), `reject_outliers=true`, `use_augmentation=true`, `participant_height=<that trial's participant height>` (or `'auto'`), `participant_mass` left at upstream default, `make_c3d=true` (all stages), `make_bvh=true`.
+- FR-4.2 Enforced config (written by `config_gen.py`, user-visible in "Advanced"): `pose_model='Body_with_feet'` (since rc7 a choice: also `Whole_body_wrist`, `Whole_body`), `mode='balanced'`, `device='auto'`, `multi_person=false`, `display_detection=false`, `blur_faces=true`, `save_video='to_video'` (overlay videos for QA, faces blurred), `synchronization_gui=false`, `display_sync_plots=false`, `display_figures=false`, filter `butterworth` 6 Hz order 4 with a plain-language hint (6 Hz suits walking-type movement; fast movements need 6–15 Hz), `reject_outliers=true`, `use_augmentation=true`, `participant_height=<that trial's participant height>` (or `'auto'`), `participant_mass` left at upstream default, `make_c3d=true` (all stages), `make_bvh=true`.
 - FR-4.3 Progress, ETA, cancel, resume per trial and stage; benchmark the first N frames for a time estimate; show "CPU run: expect ≈ X" when no GPU.
 - FR-4.4 **Synchronisation:** run automatically; compute and display per-camera offsets with a confidence plot. If confidence is low or the offset implausible, queue the trial for a **"Fix sync"** step (upstream's `synchronization_gui` player, or our own) — never continue silently.
 - FR-4.5 One failed trial never aborts others; list causes with fixes ("person not detected in cam02", "augmentation failed: NaNs remain").
@@ -288,7 +288,7 @@ Expand/collapse **Export**; (*) = ticked by default.
 | Config.toml (*) | the effective per-trial `Config.toml` + session settings | includes defaults and versions |
 | pose-3d → `.c3d`: raw / butterworth / butterworth LSTM (*) | `make_c3d` at triangulation / filtering / augmentation [VERIFIED] | pattern: raw `…trc`, `…_filt_butterworth.trc`, `…_filt_butterworth_LSTM.trc` [VERIFY exact stems] |
 | pose-3d → `.trc`: raw / butterworth / butterworth LSTM (*) | `pose-3d/` | as above |
-| kinematics → `.bvh` | **native** (`make_bvh`; `Utilities/osim_to_bvh`) [VERIFIED] | unticked by default; label the source (FR-4.6); [VERIFY] with a Blender/Motionbuilder import test |
+| kinematics → `.bvh` | **native** (`make_bvh`; `Utilities/osim_to_bvh`) [VERIFIED] | always made since rc7 (owner, 2026-11-14); label the source (FR-4.6); [VERIFY] with a Blender/Motionbuilder import test |
 | kinematics → `.osim` (*) | scaled model per trial | |
 | kinematics → `.mot` (*) | `kinematics/` | from augmented markers by default |
 
@@ -414,7 +414,7 @@ mocapapp delete-session --session <dir>              # withdrawal
 2. Identifier: one per trial/participant (D9).
 3. Overlay videos and 2D keypoint JSONs are deleted with the raw footage (D14).
 4. Target OS: Windows 10/11 + macOS (D16).
-5. BVH: available, unticked by default (D16).
+5. BVH: available, unticked by default (D16). *(Revised 2026-11-14: always made.)*
 
 ## 15. References
 

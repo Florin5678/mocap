@@ -166,7 +166,8 @@ def test_filter_failure_is_explained(tmp_path):
 
 @pytest.mark.parametrize("change, rerun", [
     (lambda s: setattr(s.settings.filter, "cutoff_hz", 8.0), ["filtering", "markerAugmentation", "kinematics"]),
-    (lambda s: setattr(s.settings, "make_bvh", False), ["kinematics"]),
+    (lambda s: setattr(s.settings, "simple_model", True), ["kinematics"]),
+    (lambda s: setattr(s.settings, "keypoints", "Whole_body"), runner.STAGES),
     (lambda s: setattr(s.settings, "pose_mode", "lightweight"), runner.STAGES),
 ])
 def test_changed_settings_rerun_only_the_affected_stages(tmp_path, fake, change, rerun):
@@ -190,3 +191,21 @@ def test_sessions_without_recorded_settings_are_not_rerun(tmp_path, fake):
     f.calls.clear()
     runner.run_session(session, tmp_path)
     assert f.calls == []
+
+
+def test_new_settings_at_their_defaults_keep_older_records_valid(tmp_path, fake):
+    """A record written before keypoints / simple_model existed still matches the defaults."""
+    import json
+
+    session = make_session(tmp_path, n_trials=1)
+    assert json.loads(runner.stage_inputs(session, "poseEstimation")) == ["balanced"]
+    assert json.loads(runner.stage_inputs(session, "kinematics")) == [True, True]
+
+
+def test_preflight_warns_when_pose_models_must_be_downloaded(tmp_path, monkeypatch):
+    session = make_session(tmp_path, n_trials=1)
+    monkeypatch.setattr(runner, "_missing_models", lambda mode, kp: ["x"] if kp == "Whole_body" else [])
+    assert not [i for i in runner.preflight(session, tmp_path, ["1"]) if i.where == "pose models"]
+    session.settings.keypoints = "Whole_body"
+    warn = [i for i in runner.preflight(session, tmp_path, ["1"]) if i.where == "pose models"]
+    assert len(warn) == 1 and warn[0].level == "warning" and "internet" in warn[0].what

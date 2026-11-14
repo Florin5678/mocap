@@ -43,10 +43,11 @@ LOG_DIR = "mocap_logs"
 def stage_inputs(session: Session, stage: str) -> str:
     """The settings a stage's result depends on. When they change, the stage (and every later one) runs again."""
     st = session.settings
-    deps = {"poseEstimation": [st.pose_mode],
+    # settings added later only appear when not at their default, so older records still match
+    deps = {"poseEstimation": [st.pose_mode] + ([st.keypoints] if st.keypoints != "Body_with_feet" else []),
             "filtering": [st.filter.type, st.filter.cutoff_hz, st.filter.order],
             "markerAugmentation": [st.use_augmentation],
-            "kinematics": [st.use_augmentation, st.make_bvh]}.get(stage, [])
+            "kinematics": [st.use_augmentation, True] + (["simple model"] if st.simple_model else [])}.get(stage, [])
     return json.dumps(deps)
 
 
@@ -55,6 +56,19 @@ def stale_stages(session: Session, label: str) -> list[str]:
     record = session.run_state.stage_settings.get(label, {})
     return [s for s in session.run_state.stage_done.get(label, [])
             if s in record and record[s] != stage_inputs(session, s)]
+
+
+KEYPOINT_TITLES = {"Body_with_feet": "Body with feet", "Whole_body_wrist": "Whole body with wrists",
+                   "Whole_body": "Whole body"}
+
+
+def _missing_models(mode: str, keypoints: str) -> list:
+    from mocapapp.core import models
+
+    try:
+        return models.missing((mode,), keypoints)
+    except Exception:  # rtmlib missing or changed: Pose2Sim reports the real problem when it runs
+        return []
 
 
 def max_cutoff_hz(fps: float) -> int:
@@ -181,7 +195,7 @@ def check_outputs(trial_dir: Path, stage: str, cameras: list[str], session: Sess
             "ankles, heels and toes in every frame, and the participant height)."
     if stage == "kinematics":
         kin = trial_dir / "kinematics"
-        missing = [ext for ext in ([".osim", ".mot"] + ([".bvh"] if session.settings.make_bvh else []))
+        missing = [ext for ext in (".osim", ".mot", ".bvh")
                    if not list(kin.glob(f"*{ext}"))]
         log = (trial_dir / LOG_DIR / "kinematics.log")
         text = log.read_text(encoding="utf-8", errors="replace") if log.is_file() else ""
@@ -229,6 +243,12 @@ def preflight(session: Session, root: Path, labels: list[str]) -> list[Issue]:
     if not session.sync_cue_confirmed:
         issues.append(Issue("action", "sync cue", "Confirm that a sync cue was recorded at the start of every trial.",
                             "mocapapp confirm --session <dir> --sync-cue"))
+    gone = _missing_models(session.settings.pose_mode, session.settings.keypoints)
+    if gone and labels:
+        issues.append(Issue("warning", "pose models", f"The {KEYPOINT_TITLES[session.settings.keypoints].lower()} "
+                            f"models ({session.settings.pose_mode}) are not downloaded yet. The run downloads them "
+                            "first, which needs an internet connection.",
+                            "Connect to the internet for the first run, or choose another keypoint set."))
     for label in labels:
         trial = session.trial(label)
         tdir = layout.trial(label)

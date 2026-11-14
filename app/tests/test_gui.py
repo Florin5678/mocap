@@ -104,7 +104,6 @@ def test_full_wizard(qtbot, tmp_path, monkeypatch):
     from mocapapp.gui import pages
     from mocapapp.gui.main_window import MainWindow
 
-    monkeypatch.setattr(pages.videos, "confirm", lambda *a, **k: True)
     monkeypatch.setattr(pages.run, "confirm", lambda *a, **k: True)
     monkeypatch.setattr(runner, "run_stage", FakeStages())
     monkeypatch.setattr(runner, "_fps", lambda *a: 30.0)
@@ -118,8 +117,10 @@ def test_full_wizard(qtbot, tmp_path, monkeypatch):
     assert not win.next_button.isEnabled() and not setup.create_button.isEnabled()
     setup.out_edit.setText(str(tmp_path / "sessions"))
     setup.study_edit.setText("GUI1")
-    for r, cam in enumerate(CAMS):
-        setup.cam_table.cellWidget(r, 1).setText(str(raw / cam))
+    # choosing cam02's folder fills cam01 and cam03 from the folders next to it
+    setup.cam_table.cellWidget(1, 1).setText(str(raw / "cam02"))
+    setup.fill_sibling_cameras(1, raw / "cam02")
+    assert [setup.cam_table.cellWidget(r, 1).text() for r in range(3)] == [str(raw / cam) for cam in CAMS]
     setup.height_table.item(0, 0).setText("178")
     assert setup.height_table.item(0, 1).text() == "1.78 m"
     setup._check_new()
@@ -143,8 +144,8 @@ def test_full_wizard(qtbot, tmp_path, monkeypatch):
     videos.check()
     wait_idle(qtbot, win)
     assert videos.report is not None and videos.report.ok, videos.report.issues
-    assert videos.prepare_button.isEnabled()
-    videos.prepare()
+    assert videos.prepare_button.isEnabled() and "Space needed" in videos.space.text()
+    videos.prepare()  # no confirmation dialog: the plan is already shown on the page
     wait_idle(qtbot, win)
     shot(win, "20_videos")
     assert videos.is_complete() and win.next_button.isEnabled()
@@ -317,6 +318,15 @@ def test_changing_a_setting_after_a_run_repeats_only_later_stages(qtbot, tmp_pat
     wait_idle(qtbot, win)
     assert [s for _, s in fake.calls] == ["filtering", "markerAugmentation", "kinematics"]
     assert win.session.run_state.trial_status["1"] == "done" and run.stale_note.isHidden()
+
+    # BVH is always made; the keypoint set and the OpenSim model are choices
+    assert not hasattr(run, "bvh")
+    run.body_model.setCurrentIndex(1)
+    assert win.session.settings.simple_model and "joint angles" in run.stale_note.text()
+    run.keypoints.setCurrentIndex(run.keypoints.findData("Whole_body"))
+    assert win.session.settings.keypoints == "Whole_body"
+    assert "finding body keypoints" in run.stale_note.text().lower()
+    assert "whole body" in run.summary.toPlainText().lower()
 
 
 @pytest.mark.slow

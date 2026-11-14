@@ -42,10 +42,10 @@ The steps are listed on the left. A step becomes available when the previous one
 
 1. Choose an **output folder** whose path contains only plain letters (no æ/ø/å or other accents); the 3D software cannot save elsewhere.
 2. Optionally enter a **study code** (up to 8 letters or digits, e.g. `PA26`). It starts every trial code.
-3. Enter the number of **trials** and add one **folder per camera**. Each folder holds the camera's `intrinsic` and `extrinsic` videos and one video per trial.
+3. Enter the number of **trials** and add one **folder per camera**. Each folder holds the camera's `intrinsic` and `extrinsic` videos and one video per trial. If the folders are named after the cameras (`cam01`, `cam02`, ...) and sit side by side, choosing one with **Browse ...** fills in the others.
 4. Enter each participant's **height**, in metres or centimetres. Without it, the height is estimated, which is less accurate.
 5. Press **Create session**. Every trial gets a **trial code**, such as `PA26-K7M2QX4`.
-6. Use **Generate ...** to print a consent form with that code filled in.
+6. Use **Generate ...** to print a **participation consent form** with that code filled in as the participant's pseudonym. Fill in the study details in the boxes on screen, or by hand on paper.
 7. When you hold a signed form, tick **Signed consent received** for that trial.
 8. Tick **Consented to storing raw footage** only if the participant agreed to it. **Delete raw footage** then follows automatically; you can change it.
 
@@ -64,7 +64,7 @@ Problems are listed with what to do. In particular:
 - If a calibration video is missing or named differently, use **Choose intrinsic/extrinsic ...**; the file may be in any folder.
 - If the app matched trial videos by recording time instead of by name, check the **mapping table** and correct it if needed.
 
-Then press **Copy videos into the session**. The app copies the videos, converting them if needed; your original files are never changed. The app shows how much space this needs before it starts.
+The page then shows how many videos will be copied and how much disk space this needs. Press **Copy videos into the session**: the app copies the videos, converting them if needed; your original files are never changed.
 
 ### Step 3 – Lens calibration
 
@@ -101,7 +101,12 @@ The summary shows every trial, camera and setting. Tick **I recorded a sync cue 
 - **Failures:** if one trial fails, the others continue. The reason is shown in plain words, with the full log under `trials/trial_<label>/mocap_logs/`.
 - **Synchronisation:** if the app is unsure that the cameras are lined up for a trial, that trial stops. Choose **Check sync ...** to inspect it in a player, or **Accept as is**.
 
-**Advanced** settings (pose detection speed and accuracy, smoothing, BVH) are folded away. The defaults suit most studies.
+**Advanced** settings are folded away. The defaults suit most studies.
+
+- **Pose detection:** lightweight is fastest, performance most accurate.
+- **Keypoints:** *Body with feet* (26 points) suits most studies. *Whole body* adds hands and face (133 points); it is slower and needs a further download of about 210 MB the first time. *Whole body with wrists* uses the same detection but keeps only two points per hand.
+- **OpenSim body model:** *Full* has muscles and joint constraints. *Simple* computes joint angles over 10 times faster, but without muscles and with a stiffer spine and shoulders.
+- A **BVH animation** is always made, next to the OpenSim results.
 
 - **Smoothing cut-off:** 6 Hz suits walking. Faster movements need more, but the cut-off must stay below half the video frame rate: below 15 Hz for 30 fps video, below 30 Hz for 60 fps. The app checks this before it runs.
 - **Changing settings after a run:** allowed. **Run** then repeats only the stages the change affects, for example smoothing and everything after it. A change of pose detection repeats everything.

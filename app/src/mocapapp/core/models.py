@@ -38,28 +38,43 @@ def cache_dir() -> Path:
     return Path(_get_rtmhub_dir()) / "checkpoints"
 
 
-def models(modes: tuple[str, ...] | list[str] = ("balanced",)) -> list[Model]:
-    """The detector and pose model of each mode for the app's pose model (Body_with_feet, HALPE_26)."""
-    from rtmlib.tools.solution.body_with_feet import BodyWithFeet
+KEYPOINTS = ("Body_with_feet", "Whole_body_wrist", "Whole_body")  # Pose2Sim pose_model values the app offers
 
+
+def _solution(keypoints: str):
+    if keypoints == "Body_with_feet":  # HALPE_26
+        from rtmlib.tools.solution.body_with_feet import BodyWithFeet
+
+        return BodyWithFeet
+    if keypoints in ("Whole_body_wrist", "Whole_body"):  # COCO_133: the same models, fewer points kept
+        from rtmlib.tools.solution.wholebody import Wholebody
+
+        return Wholebody
+    raise ValueError(f"Unknown keypoint set '{keypoints}'. Choose from: {', '.join(KEYPOINTS)}.")
+
+
+def models(modes: tuple[str, ...] | list[str] = ("balanced",), keypoints: str = "Body_with_feet") -> list[Model]:
+    """The person detector and pose model of each mode for a keypoint set."""
+    solution = _solution(keypoints)
     out = []
     for mode in modes:
         if mode not in MODES:
             raise ValueError(f"Unknown mode '{mode}'. Choose from: {', '.join(MODES)}.")
-        spec = BodyWithFeet.MODE[mode]
+        spec = solution.MODE[mode]
         out += [Model(mode, "person detector", spec["det"]), Model(mode, "pose", spec["pose"])]
     return out
 
 
-def missing(modes=("balanced",)) -> list[Model]:
-    return [m for m in models(modes) if not m.ready]
+def missing(modes=("balanced",), keypoints: str = "Body_with_feet") -> list[Model]:
+    return [m for m in models(modes, keypoints) if not m.ready]
 
 
-def download(modes=("balanced",), progress: Callable[[str], None] = print) -> list[Path]:
+def download(modes=("balanced",), progress: Callable[[str], None] = print,
+             keypoints: str = "Body_with_feet") -> list[Path]:
     """Download every missing model of `modes`. Raises OSError with a plain-language message when offline."""
     from rtmlib.tools.file import download_checkpoint
 
-    todo = missing(modes)
+    todo = missing(modes, keypoints)
     done = []
     for i, m in enumerate(todo, 1):
         progress(f"[{i}/{len(todo)}] Downloading the {m.mode} {m.role} model ...")
@@ -69,7 +84,7 @@ def download(modes=("balanced",), progress: Callable[[str], None] = print) -> li
             raise OSError(f"Could not download the {m.mode} {m.role} model ({type(exc).__name__}: {exc}). "
                           "Check the internet connection and try again; finished models are kept.") from exc
     _cleanup()
-    progress("All pose models are ready." if not missing(modes) else "Some models are still missing.")
+    progress("All pose models are ready." if not missing(modes, keypoints) else "Some models are still missing.")
     return done
 
 

@@ -19,7 +19,7 @@ from reportlab.platypus import Flowable, Paragraph, SimpleDocTemplate, Spacer
 
 from mocapapp.core.calibration.intrinsics import BoardSpec, charuco_board
 
-CONSENT_TEMPLATE_VERSION = "1"
+CONSENT_TEMPLATE_VERSION = "2"
 MARGIN_MM = 15
 PRINT_DICT_SIZE = 50  # smallest 4x4 dictionary; the detector also tries larger ones
 
@@ -100,11 +100,12 @@ def board_pdf(out: Path, spec: BoardSpec) -> Path:
 class _Field(Flowable):
     """An AcroForm field with a label, laid out by platypus."""
 
-    def __init__(self, kind: str, name: str, label: str, value: str = "", width_mm: float = 80):
+    def __init__(self, kind: str, name: str, label: str, value: str = "", width_mm: float = 80, lines: int = 1):
         super().__init__()
-        self.kind, self.name, self.label, self.value = kind, name, label, value
+        self.kind, self.name, self.label, self.value, self.lines = kind, name, label, value, lines
         self.width = 170 * mm
-        self.height = 9 * mm if kind == "text" else 8 * mm
+        self.box_h = (7 + 5 * (lines - 1)) * mm
+        self.height = self.box_h + 2 * mm if kind == "text" else 8 * mm
         self.field_w = width_mm * mm
 
     def draw(self):
@@ -116,10 +117,10 @@ class _Field(Flowable):
                           fillColor=colors.white, forceBorder=True, relative=True)
             c.drawString(8 * mm, 2 * mm, self.label)
         else:
-            c.drawString(0, 3 * mm, self.label)
-            form.textfield(name=self.name, value=self.value, x=55 * mm, y=0, width=self.field_w, height=7 * mm,
+            c.drawString(0, self.box_h - 4 * mm, self.label)
+            form.textfield(name=self.name, value=self.value, x=55 * mm, y=0, width=self.field_w, height=self.box_h,
                            borderColor=colors.black, fillColor=colors.white, fontSize=10, forceBorder=True,
-                           relative=True)
+                           relative=True, fieldFlags="multiline" if self.lines > 1 else "")
 
 
 def _template_blocks(text: str):
@@ -144,11 +145,24 @@ def consent_text() -> str:
     return resources.files("mocapapp.resources").joinpath("consent_template.md").read_text(encoding="utf-8")
 
 
+BLANK = "____"  # in the template: something the researcher fills in
+MULTILINE = {"Purpose"}  # labelled blanks that get a taller box
+
+
 def consent_pdf(out: Path, code: str = "", text: str | None = None) -> Path:
+    """The participation consent form. A paragraph 'Label: ____' becomes a fillable box (also fine on paper);
+    a blank inside a sentence becomes a line to write on."""
     styles = getSampleStyleSheet()
     story = []
     for kind, body in _template_blocks(text or consent_text()):
-        body = re.sub(r"\[PLACEHOLDER: ([^\]]+)\]", r"<font color='#b00000'>[\1]</font>", body)
+        field = re.fullmatch(r"([^:]{1,40}):\s*" + re.escape(BLANK), body) if kind == "p" else None
+        if field:
+            label = field.group(1)
+            story.append(_Field("text", re.sub(r"\W+", "_", label.lower()).strip("_"), label + ":", "", 115,
+                                lines=3 if label in MULTILINE else 1))
+            story.append(Spacer(1, 1 * mm))
+            continue
+        body = body.replace(BLANK, "_" * 30)
         if kind == "h1":
             story.append(Paragraph(body, styles["Title"]))
         elif kind == "h2":
@@ -159,22 +173,18 @@ def consent_pdf(out: Path, code: str = "", text: str | None = None) -> Path:
             story.append(Paragraph(body, styles["Normal"]))
             story.append(Spacer(1, 2 * mm))
     story += [Spacer(1, 6 * mm), Paragraph("Consent", styles["Heading3"]),
-              _Field("text", "trial_code", "Trial code", code, 50),
-              _Field("text", "height_m", "Height (m)", "", 30),
+              _Field("text", "pseudonym", "Pseudonym", code, 50),
               _Field("checkbox", "consent", "I have read this information and consent to taking part."),
-              _Field("checkbox", "raw_storage", "Optional: I consent to my raw video footage being stored until "
-                                                "the data analysis is finished."),
+              _Field("checkbox", "raw_storage", "(Optional) I consent to my raw video footage being stored until "
+                                                "the study is finished."),
               Spacer(1, 3 * mm),
-              _Field("text", "name", "Name (printed)", "", 100),
+              _Field("text", "name", "Name", "", 100),
               _Field("text", "date", "Date", "", 50),
               Spacer(1, 10 * mm),
-              Paragraph("Signature: ______________________________________", styles["Normal"]),
-              Spacer(1, 6 * mm),
-              Paragraph(f"<font size=8>Template version {CONSENT_TEMPLATE_VERSION}. Keep this signed form separate "
-                        "from the data; the trial code is the only link.</font>", styles["Normal"])]
+              Paragraph("Signature: ______________________________________", styles["Normal"])]
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
     doc = SimpleDocTemplate(str(out), pagesize=A4, leftMargin=20 * mm, rightMargin=20 * mm, topMargin=18 * mm,
-                            bottomMargin=18 * mm, title="Consent form (template)" + (f" {code}" if code else ""))
+                            bottomMargin=18 * mm, title="Participation consent form" + (f" {code}" if code else ""))
     doc.build(story)
     return out

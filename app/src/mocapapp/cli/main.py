@@ -498,18 +498,19 @@ def _cmd_models(args: argparse.Namespace) -> int:
     from mocapapp.core import models
 
     modes = models.MODES if args.mode == "all" else (args.mode,)
-    for m in models.models(modes):
+    kp = args.keypoints
+    for m in models.models(modes, kp):
         print(f"[{'OK  ' if m.ready else 'MISS'}] {m.mode} {m.role}: {m.onnx.name}")
-    gone = models.missing(modes)
+    gone = models.missing(modes, kp)
     if not gone:
         print("Everything needed is downloaded; processing works offline.")
         return 0
     if not args.download:
-        size = sum(models.SIZES_MB[m] for m in modes)
-        print(f"Missing {len(gone)} model(s). Download them (about {size} MB, once) with --download.")
+        size = f" (about {sum(models.SIZES_MB[m] for m in modes)} MB, once)" if kp == "Body_with_feet" else ""
+        print(f"Missing {len(gone)} model(s). Download them{size} with --download.")
         return 1
     try:
-        models.download(modes)
+        models.download(modes, keypoints=kp)
     except OSError as exc:
         print(exc)
         return 1
@@ -543,6 +544,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     mod = sub.add_parser("models", help="check or download the pose-estimation models (needed once, then offline)")
     mod.add_argument("--mode", choices=["lightweight", "balanced", "performance", "all"], default="balanced")
+    mod.add_argument("--keypoints", choices=["Body_with_feet", "Whole_body_wrist", "Whole_body"],
+                     default="Body_with_feet", help="keypoint set (Whole_body includes hands and face)")
     mod.add_argument("--download", action="store_true", help="download what is missing")
     mod.set_defaults(func=_cmd_models)
 

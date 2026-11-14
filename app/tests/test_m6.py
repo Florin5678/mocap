@@ -119,3 +119,29 @@ def test_cli_video_steps_explain_imported_sessions(tmp_path, capsys):
     for cmd in ("validate", "assemble"):
         assert main([cmd, "--session", str(root)]) == 0
         assert "Checking or copying videos is not needed" in capsys.readouterr().out
+
+
+def test_whole_body_models_and_config(tmp_path):
+    from mocapapp.core.config_gen import overrides
+    from tests.m3_fakes import make_session
+
+    pose = [m for m in models.models(("balanced",), "Whole_body") if m.role == "pose"][0]
+    assert "rtmw" in pose.url  # rtmlib's whole-body (COCO_133) model
+    with pytest.raises(ValueError, match="Unknown keypoint set"):
+        models.models(("balanced",), "Animal")
+    session = make_session(tmp_path, n_trials=1)
+    session.settings.keypoints, session.settings.simple_model = "Whole_body_wrist", True
+    session.settings.make_bvh = False  # ignored since rc7: BVH is always made
+    values = overrides(session, session.trials[0])
+    assert values["pose.pose_model"] == "Whole_body_wrist" and values["kinematics.use_simple_model"] is True
+    assert values["kinematics.make_bvh"] is True
+
+
+def test_sibling_camera_folders(tmp_path):
+    from mocapapp.core.workflow import camera_number, sibling_camera_dirs
+
+    for name in ("cam01", "CAM2", "cam03", "cam03_old", "notes"):
+        (tmp_path / name).mkdir()
+    assert [camera_number(n) for n in ("cam02", "CAM2", "cam0", "camera2", "cam02b")] == [2, 2, None, None, None]
+    found = sibling_camera_dirs(tmp_path / "CAM2")
+    assert {n: p.name for n, p in found.items()} == {1: "cam01", 2: "CAM2", 3: "cam03"}

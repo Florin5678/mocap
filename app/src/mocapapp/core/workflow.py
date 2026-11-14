@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -21,6 +22,27 @@ from mocapapp.core.session import (
 from mocapapp.core.validate import Issue, check_output_root
 
 MAX_TRIALS = 10
+CAMERA_DIR_RE = re.compile(r"cam0*(\d+)", re.IGNORECASE)
+
+
+def camera_number(name: str) -> int | None:
+    """1 for a folder named cam01, cam1 or CAM01; None for other names."""
+    m = CAMERA_DIR_RE.fullmatch(name.strip())
+    return int(m.group(1)) if m and int(m.group(1)) > 0 else None
+
+
+def sibling_camera_dirs(folder: Path) -> dict[int, Path]:
+    """Camera folders next to `folder` (cam01, cam02, ...), by camera number."""
+    try:
+        entries = [d for d in Path(folder).parent.iterdir() if d.is_dir()]
+    except OSError:
+        return {}
+    found = {}
+    for d in sorted(entries):
+        n = camera_number(d.name)
+        if n is not None and n not in found:
+            found[n] = d
+    return found
 SOFT_MAX_CAMERAS = 16
 
 

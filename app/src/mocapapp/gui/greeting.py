@@ -57,7 +57,8 @@ def save_pdf(parent: QWidget, kind: str, code: str = "", board_spec=None) -> Pat
     """Ask where to save the board or consent PDF, write it, and open it."""
     from mocapapp.core import pdfs
 
-    default = "calibration_board.pdf" if kind == "board" else (f"consent_{code}.pdf" if code else "consent_form.pdf")
+    consent = f"participation_consent_{code}.pdf" if code else "participation_consent_form.pdf"
+    default = "calibration_board.pdf" if kind == "board" else consent
     name, _ = QFileDialog.getSaveFileName(parent, "Save PDF", str(Path.home() / default), "PDF (*.pdf)")
     if not name:
         return None
@@ -99,7 +100,7 @@ class TutorialDialog(QDialog):
         layout.addWidget(self.body, 1)
         self.downloads = QHBoxLayout()
         self.board_button = QPushButton("Save the board PDF ...")
-        self.consent_button = QPushButton("Save the consent form PDF ...")
+        self.consent_button = QPushButton("Save the participation consent form PDF ...")
         self.board_button.clicked.connect(lambda: save_pdf(self, "board"))
         self.consent_button.clicked.connect(lambda: save_pdf(self, "consent"))
         self.downloads.addWidget(self.board_button)

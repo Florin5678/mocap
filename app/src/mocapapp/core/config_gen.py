@@ -39,7 +39,7 @@ def overrides(session: Session, trial: Trial, scene_points: list[list[float]] | 
         "project.participant_height": trial.height_m if trial.height_m is not None else "auto",
         "project.multi_person": False,
         "project.frame_rate": "auto",
-        "pose.pose_model": "Body_with_feet",
+        "pose.pose_model": s.keypoints,
         "pose.mode": s.pose_mode,
         "pose.device": s.device,
         "pose.display_detection": False,
@@ -65,7 +65,8 @@ def overrides(session: Session, trial: Trial, scene_points: list[list[float]] | 
         f"filtering.{s.filter.type}.cut_off_frequency": s.filter.cutoff_hz,
         "markerAugmentation.make_c3d": True,
         "kinematics.use_augmentation": s.use_augmentation,
-        "kinematics.make_bvh": s.make_bvh,
+        "kinematics.make_bvh": True,
+        "kinematics.use_simple_model": s.simple_model,
     }
     if s.filter.type == "butterworth":
         values["filtering.butterworth.order"] = s.filter.order

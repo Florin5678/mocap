@@ -86,14 +86,22 @@ class RunPage(Page):
         self.cutoff = QDoubleSpinBox()
         self.cutoff.setRange(1, 30)
         self.cutoff.setSuffix(" Hz")
+        self.keypoints = QComboBox()
+        for key, title in runner.KEYPOINT_TITLES.items():
+            self.keypoints.addItem(title, key)
+        self.body_model = QComboBox()
+        self.body_model.addItem("Full (muscles, joint constraints)", False)
+        self.body_model.addItem("Simple (over 10x faster, no muscles, stiffer spine and shoulders)", True)
         self.no_aug = QCheckBox("Compute kinematics from the filtered keypoints instead of the LSTM-augmented markers")
-        self.bvh = QCheckBox("Also make a BVH animation file")
         form.addRow("Pose detection", self.mode)
+        form.addRow("Keypoints", self.keypoints)
+        form.addRow(para("Body with feet (26 points) suits most studies. Whole body adds hands and face (133 points; "
+                         "slower, a larger download); 'with wrists' keeps only two points per hand."))
         form.addRow("Smoothing cut-off", self.cutoff)
         form.addRow(para("6 Hz suits walking and other slow movement; fast movements need 6-15 Hz. It must stay "
                          "below half the video frame rate (below 15 Hz for 30 fps video)."))
         form.addRow(self.no_aug)
-        form.addRow(self.bvh)
+        form.addRow("OpenSim body model", self.body_model)
         form.addRow(para("Seated, crouching or lying movements: model scaling is less reliable (Pose2Sim)."))
         self.stale_note = para("")
         self.stale_note.setVisible(False)
@@ -102,7 +110,7 @@ class RunPage(Page):
         adv.toggled.connect(self.adv_inner.setVisible)
         al = QVBoxLayout(adv)
         al.addWidget(self.adv_inner)
-        for w in (self.mode, self.cutoff, self.no_aug, self.bvh):
+        for w in (self.mode, self.keypoints, self.cutoff, self.no_aug, self.body_model):
             sig = (w.currentIndexChanged if isinstance(w, QComboBox) else
                    w.valueChanged if isinstance(w, QDoubleSpinBox) else w.toggled)
             sig.connect(self._settings_changed)
@@ -164,7 +172,8 @@ class RunPage(Page):
         self.mode.setCurrentText(st.pose_mode)
         self.cutoff.setValue(st.filter.cutoff_hz)
         self.no_aug.setChecked(not st.use_augmentation)
-        self.bvh.setChecked(st.make_bvh)
+        self.keypoints.setCurrentIndex(max(0, self.keypoints.findData(st.keypoints)))
+        self.body_model.setCurrentIndex(1 if st.simple_model else 0)
         self.sync_box.setChecked(ses.sync_cue_confirmed)
         self._loading = False
         # settings stay editable after a run: Run repeats only the stages a change affects (runner.stale_stages).
@@ -203,8 +212,10 @@ class RunPage(Page):
             f"<th>Consent</th><th>Raw footage</th></tr>{''.join(rows)}</table>"
             f"<p>Trial mapping: {html.escape(method or '?')}</p><table cellspacing=6><tr><th>Camera</th>"
             f"<th>Folder</th><th>Calibration</th><th>Trial files</th></tr>{''.join(cams)}</table>"
-            "<p>Kinematics (.mot/.osim/.bvh) are computed from "
-            f"{'LSTM-augmented markers' if st.use_augmentation else 'filtered keypoints'}.</p>")
+            f"<p>Keypoints: {runner.KEYPOINT_TITLES[st.keypoints].lower()} ({st.pose_mode}). "
+            "Kinematics (.mot/.osim/.bvh) are computed from "
+            f"{'LSTM-augmented markers' if st.use_augmentation else 'filtered keypoints'} with the "
+            f"{'simple' if st.simple_model else 'full'} OpenSim model.</p>")
         self._check()
         self._fill_trials()
 
@@ -237,15 +248,14 @@ class RunPage(Page):
         st.pose_mode = self.mode.currentText()
         st.filter.cutoff_hz = self.cutoff.value()
         st.use_augmentation = not self.no_aug.isChecked()
-        st.make_bvh = self.bvh.isChecked()
+        st.keypoints = self.keypoints.currentData()
+        st.simple_model = bool(self.body_model.currentData())
         rs = self.session.run_state
         for t in self.session.active_trials:  # results made with other settings are no longer final
             if rs.trial_status.get(t.label) == "done" and runner.stale_stages(self.session, t.label):
                 rs.trial_status[t.label] = "partial"
         self.win.save()
-        self._show_stale()
-        self._check()
-        self._fill_trials()
+        self.refresh()  # summary, stale note, checks and trial states
 
     def _show_stale(self) -> None:
         stale = {s for t in self.session.active_trials for s in runner.stale_stages(self.session, t.label)}

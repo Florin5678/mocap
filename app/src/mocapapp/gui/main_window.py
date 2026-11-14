@@ -148,7 +148,7 @@ class MainWindow(QMainWindow):
         help_menu = self.menuBar().addMenu("&Help")
         self._action(help_menu, "&How it works", lambda: self.show_tutorial(0), QKeySequence.StandardKey.HelpContents)
         self._action(help_menu, "Calibration &board PDF ...", self.save_board_pdf)
-        self._action(help_menu, "&Consent form PDF ...", lambda: self.save_consent_pdf(""))
+        self._action(help_menu, "Participation &consent form PDF ...", lambda: self.save_consent_pdf(""))
         self._action(help_menu, "&Environment check", self.show_doctor)
         self._action(help_menu, "Download pose &models ...", self.download_models)
         self._action(help_menu, "Copy &diagnostics", self.copy_diagnostics)

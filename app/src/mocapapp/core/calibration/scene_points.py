@@ -29,8 +29,7 @@ BELOW_FLOOR_M = -0.02
 
 Y_AXIS_TEXT = ("Seen from above, +Y is 90 degrees counter-clockwise from +X (right-hand rule): standing at the "
                "origin facing +X with Z up, +Y is on your left.")
-OPENSIM_NOTE = ("In exported .trc/OpenSim files the axes become X = this Y, Y = this Z (up), Z = this X. "
-                "The participant's own heading in the room does not matter.")
+OPENSIM_NOTE = "In exported .trc/OpenSim files the axes become X = this Y, Y = this Z (up), Z = this X."
 
 
 class ScenePoint(BaseModel):

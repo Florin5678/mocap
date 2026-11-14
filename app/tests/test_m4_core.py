@@ -46,12 +46,16 @@ def test_consent_pdf_fields_and_placeholders(tmp_path):
     out = pdfs.consent_pdf(tmp_path / "c.pdf", "PA26-K7M2QX4")
     reader = pypdf.PdfReader(out)
     fields = reader.get_fields()
-    assert fields["trial_code"]["/V"] == "PA26-K7M2QX4"
-    assert {"height_m", "consent", "raw_storage", "name", "date"} <= set(fields)
+    assert fields["pseudonym"]["/V"] == "PA26-K7M2QX4"
+    assert {"title", "purpose", "data_controller", "researcher_s", "contact", "benefits_or_compensation",
+            "consent", "raw_storage", "name", "date"} <= set(fields)
+    assert not {"height_m", "trial_code"} & set(fields)
     assert "mass" not in " ".join(fields).lower()
     text = " ".join(" ".join(p.extract_text().split()) for p in reader.pages)
-    assert "TEMPLATE" in text and "pseudonymisation, not anonymisation" in text
-    assert "withdraw" in text and "Datatilsynet" in text and "[study title]" in text
+    assert text.startswith("Participation consent form") and "pseudonym" in text and "withdraw" in text
+    for gone in ("TEMPLATE", "Your rights", "[", "Template version", "(printed)", "Height"):
+        assert gone not in text, gone
+    assert "(Optional) I consent" in text and "Data already published can no longer be removed." in text
 
 
 def test_cli_pdf(tmp_path, capsys):
