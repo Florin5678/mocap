@@ -8,17 +8,28 @@ import numpy as np
 
 from mocapapp.core import runner
 from mocapapp.core.config_gen import build_config
-from mocapapp.core.session import Camera, Consent, Layout, Session, Trial, atomic_write_text, save_session
+from mocapapp.core.session import (
+    Camera,
+    Consent,
+    Layout,
+    Participant,
+    Session,
+    Trial,
+    atomic_write_text,
+    save_session,
+)
 
 MARKERS = ["Hip", "RHip", "LHip", "RKnee", "LKnee", "RAnkle", "LAnkle", "RHeel", "LHeel", "RBigToe", "LBigToe",
            "Neck", "Head", "Nose"]
 
 
 def make_session(root: Path, n_trials: int = 2, n_cams: int = 2, ready: bool = True) -> Session:
-    trials = [Trial(label=str(i), code=f"T1-ABCDEF{i}", height_m=1.75,
-                    consent=Consent(attested=ready)) for i in range(1, n_trials + 1)]
+    people = [Participant(label=str(i), code=f"T1-ABCDEF{i}", height_m=1.75, consent=Consent(attested=ready))
+              for i in range(1, n_trials + 1)]
     cams = [Camera(name=f"cam{c:02d}", source_dir=str(root / "raw")) for c in range(1, n_cams + 1)]
-    session = Session(n_trials=n_trials, trials=trials, cameras=cams, sync_cue_confirmed=ready, study_code="T1")
+    session = Session(n_trials=n_trials, participants=people, cameras=cams, sync_cue_confirmed=ready,
+                      study_code="T1", trials=[Trial(label=p.label, participant=p.label) for p in people])
+    trials = session.trials
     layout = Layout(root)
     for t in trials:
         tdir = layout.trial(t.label)

@@ -42,8 +42,10 @@ def _cmd_session_new(args: argparse.Namespace) -> int:
                          "the order must match the calibration file.")
     picks = {(n, "intrinsic"): Path(f) for n, f in _pairs(args.intrinsic, "intrinsic").items()}
     picks |= {(n, "extrinsic"): Path(f) for n, f in _pairs(args.extrinsic, "extrinsic").items()}
-    spec = NewSession(out_root=Path(args.out), n_trials=args.trials, camera_dirs=[Path(cams[n]) for n in names],
-                      study=args.study or "", heights=args.heights.split(",") if args.heights else [], picks=picks)
+    spec = NewSession(out_root=Path(args.out), n_participants=args.participants,
+                      camera_dirs=[Path(cams[n]) for n in names], study=args.study or "",
+                      heights=args.heights.split(",") if args.heights else [], picks=picks,
+                      trials_per_participant=args.trials_per_participant)
     for issue in check_new_session(spec):
         if issue.level != "error":
             print(issue)
@@ -53,8 +55,10 @@ def _cmd_session_new(args: argparse.Namespace) -> int:
         print(exc)
         return 1
     print(f"Session created: {root}")
-    for t in session.trials:
-        print(f"  trial {t.label}: pseudonym {t.code}, height {t.height_m or 'auto (not recommended)'}")
+    for p in session.participants:
+        trials = ", ".join(t.label for t in session.trials_of(p.label))
+        print(f"  participant {p.label}: pseudonym {p.code}, height {p.height_m or 'auto (not recommended)'}, "
+              f"trial{'s' if session.trials_per_participant > 1 else ''} {trials}")
     print("Next: mocapapp validate --session", root)
     return 0
 
@@ -417,7 +421,10 @@ def _cmd_pdf(args: argparse.Namespace) -> int:
             print(exc)
             return 1
     else:
-        print(pdfs.consent_pdf(Path(args.out), args.code or ""))
+        from mocapapp.core.session import load_session
+
+        info = load_session(Path(args.session)).study_info if args.session else None
+        print(pdfs.consent_pdf(Path(args.out), args.code or "", info=info))
     return 0
 
 
@@ -568,6 +575,7 @@ def build_parser() -> argparse.ArgumentParser:
     pc = psub.add_parser("consent", help="fillable consent form template")
     pc.add_argument("--out", required=True)
     pc.add_argument("--pseudonym", "--code", dest="code", help="pre-fill this pseudonym")
+    pc.add_argument("--session", help="fill in the study details saved in this session folder")
     for p in (pb, pc):
         p.set_defaults(func=_cmd_pdf)
 
@@ -579,8 +587,11 @@ def build_parser() -> argparse.ArgumentParser:
     ssub = session.add_subparsers(dest="session_command", required=True)
     new = ssub.add_parser("new", help="create a new session folder")
     new.add_argument("--study", default="", help="optional study label, A-Z/0-9, up to 8 characters")
-    new.add_argument("--trials", type=int, required=True, help="number of trials (one participant each), 1-10")
-    new.add_argument("--heights", help="participant heights in trial order, metres or cm, comma separated")
+    new.add_argument("--participants", "--trials", dest="participants", type=int, required=True,
+                     help="number of participants")
+    new.add_argument("--trials-per-participant", type=int, default=1,
+                     help="trials recorded per participant (default 1); at most 10 trials in total")
+    new.add_argument("--heights", help="participant heights in participant order, metres or cm, comma separated")
     new.add_argument("--cam", action="append", metavar="camNN=FOLDER", help="camera folder; repeat per camera")
     new.add_argument("--intrinsic", action="append", metavar="camNN=FILE", help="intrinsic video outside the folder")
     new.add_argument("--extrinsic", action="append", metavar="camNN=FILE", help="extrinsic video outside the folder")

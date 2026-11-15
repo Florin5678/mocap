@@ -42,12 +42,15 @@ The steps are listed on the left. A step becomes available when the previous one
 
 1. Choose an **output folder** whose path contains only plain letters (no æ/ø/å or other accents); the 3D software cannot save elsewhere.
 2. Optionally enter a **study code** (up to 8 letters or digits, e.g. `PA26`). It starts every pseudonym.
-3. Enter the number of **trials** and add one **folder per camera**. Each folder holds the camera's `intrinsic` and `extrinsic` videos and one video per trial. If the folders are named after the cameras (`cam01`, `cam02`, ...) and sit side by side, choosing one with **Browse ...** fills in the others.
-4. Enter each participant's **height**, in metres or centimetres. Without it, the height is estimated, which is less accurate.
-5. Press **Create session**. Every trial gets a **pseudonym**, such as `PA26-K7M2QX4`.
-6. Use **Generate ...** to print a **participation consent form** with that pseudonym filled in. Fill in the study details in the boxes on screen, or by hand on paper.
-7. When you hold a signed form, tick **Signed consent received** for that trial.
-8. Tick **Consented to storing raw footage** only if the participant agreed to it. **Delete raw footage** then follows automatically; you can change it.
+3. Add one **folder per camera**. Each folder holds the camera's `intrinsic` and `extrinsic` videos and one video per trial; before the recordings, the folders may still be empty. If the folders are named after the cameras (`cam01`, `cam02`, ...) and sit side by side, choosing one with **Browse ...** fills in the others.
+4. Set **Trials per participant** (usually 1). A session holds at most 10 trials in total.
+5. Add a row per participant with **Add participant** and enter each **height**, in metres or centimetres. Without it, the height is estimated, which is less accurate.
+6. Press **Create session**. Every participant gets a **pseudonym**, such as `PA26-K7M2QX4`. You can still add a participant later, or remove one who has no videos yet (select the row, then **Remove participant**).
+7. Press **Generate ...** in a participant's row for their **participation consent form**. The first time, a window asks for the study details: study name, purpose, researchers, data handling, risks and compensation. Leave a field blank to fill it in by hand. The details are kept for the next forms of the session; only the pseudonym changes.
+8. When you hold a signed form, tick **Signed consent received** for that participant.
+9. Tick **Consented to storing raw footage** only if the participant agreed to it. **Delete raw footage** then follows automatically; you can change it.
+
+A typical day: create the session and print the forms before the recordings, have the participants sign them, record, then continue with step 2.
 
 Keep the signed forms separate from the data: the pseudonym is the only link between a person and their data.
 
@@ -63,6 +66,7 @@ Problems are listed with what to do. In particular:
 
 - If a calibration video is missing or named differently, use **Choose intrinsic/extrinsic ...**; the file may be in any folder.
 - If the app matched trial videos by recording time instead of by name, check the **mapping table** and correct it if needed.
+- With more than one trial per participant, the mapping table also has a **Participant** column: choose whose trial each row is, then **Save this mapping**. The app fills it in recording order (the first participant's trials first).
 
 The page then shows how many videos will be copied and how much disk space this needs. Press **Copy videos into the session**: the app copies the videos, converting them if needed; your original files are never changed.
 

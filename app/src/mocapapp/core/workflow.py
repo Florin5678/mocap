@@ -11,6 +11,8 @@ from mocapapp.core.privacy import make_code, normalise_study
 from mocapapp.core.session import (
     CalibVideo,
     Camera,
+    Layout,
+    Participant,
     Session,
     Trial,
     VideoRef,
@@ -53,18 +55,27 @@ class SetupError(ValueError):
 @dataclass
 class NewSession:
     out_root: Path
-    n_trials: int
+    n_participants: int
     camera_dirs: list[Path]  # cam01, cam02, ... in this order
     study: str = ""
-    heights: list[str | float | None] = field(default_factory=list)  # one per trial, '' / None = auto
+    heights: list[str | float | None] = field(default_factory=list)  # one per participant, '' / None = auto
     picks: dict[tuple[str, str], Path] = field(default_factory=dict)  # (camNN, intrinsic|extrinsic) -> file
+    trials_per_participant: int = 1
+
+    @property
+    def n_trials(self) -> int:
+        return self.n_participants * self.trials_per_participant
 
 
 def check_new_session(spec: NewSession) -> list[Issue]:
     """Problems with the form before anything is written (errors block)."""
     issues = list(check_output_root(spec.out_root))
-    if not 1 <= spec.n_trials <= MAX_TRIALS:
-        issues.append(Issue("error", "trials", f"Number of trials must be 1 to {MAX_TRIALS}.", "Change the number."))
+    if spec.n_participants < 1 or spec.trials_per_participant < 1:
+        issues.append(Issue("error", "participants", "At least one participant with one trial is needed.",
+                            "Add a participant."))
+    elif spec.n_trials > MAX_TRIALS:
+        issues.append(Issue("error", "trials", f"{spec.n_trials} trials in total; at most {MAX_TRIALS} per session.",
+                            "Use fewer participants or trials per participant, or a second session."))
     if len(spec.camera_dirs) < 2:
         issues.append(Issue("error", "cameras", "At least two cameras are needed.", "Add a folder per camera."))
     elif len(spec.camera_dirs) == 2:
@@ -75,16 +86,16 @@ def check_new_session(spec: NewSession) -> list[Issue]:
     for i, d in enumerate(spec.camera_dirs, 1):
         if not Path(d).is_dir():
             issues.append(Issue("error", f"cam{i:02d}", f"{d} is not a folder.", "Choose the camera's folder."))
-    if spec.heights and len(spec.heights) != spec.n_trials:
-        issues.append(Issue("error", "heights", f"{len(spec.heights)} heights for {spec.n_trials} trials.",
-                            "Give one height per trial (blank = estimate)."))
+    if spec.heights and len(spec.heights) != spec.n_participants:
+        issues.append(Issue("error", "heights", f"{len(spec.heights)} heights for {spec.n_participants} participants.",
+                            "Give one height per participant (blank = estimate)."))
     for i, h in enumerate(spec.heights, 1):
         try:
             if parse_height(h) is None:
-                issues.append(Issue("warning", f"trial {i}", "No height: it will be estimated (not recommended).",
-                                    "Enter the participant's measured height."))
+                issues.append(Issue("warning", f"participant {i}", "No height: it will be estimated (not "
+                                    "recommended).", "Enter the participant's measured height."))
         except ValueError as exc:
-            issues.append(Issue("error", f"trial {i}", str(exc), "Enter the height in metres or centimetres."))
+            issues.append(Issue("error", f"participant {i}", str(exc), "Enter the height in metres or centimetres."))
     try:
         normalise_study(spec.study)
     except ValueError as exc:
@@ -103,9 +114,10 @@ def create_session(spec: NewSession) -> tuple[Path, Session]:
         raise SetupError(f"{root} already exists; wait a minute or choose another output folder.")
     taken = existing_codes(Path(spec.out_root))
     codes: list[str] = []
-    for _ in range(spec.n_trials):
+    for _ in range(spec.n_participants):
         codes.append(make_code(study, taken | set(codes)))
-    heights = [parse_height(h) for h in spec.heights] if spec.heights else [None] * spec.n_trials
+    heights = [parse_height(h) for h in spec.heights] if spec.heights else [None] * spec.n_participants
+    k = spec.trials_per_participant
     cameras = []
     for i, d in enumerate(spec.camera_dirs, 1):
         name = f"cam{i:02d}"
@@ -114,9 +126,10 @@ def create_session(spec: NewSession) -> tuple[Path, Session]:
             name=name, source_dir=str(Path(d).resolve()),
             intrinsic=CalibVideo(file=str(Path(intr).resolve()), origin="manual") if intr else None,
             extrinsic=VideoRef(file=str(Path(extr).resolve()), origin="manual") if extr else None))
-    session = Session(study_code=study, n_trials=spec.n_trials, cameras=cameras,
-                      trials=[Trial(label=str(i + 1), code=c, height_m=h)
-                              for i, (c, h) in enumerate(zip(codes, heights, strict=True))])
+    session = Session(study_code=study, n_trials=spec.n_trials, cameras=cameras, trials_per_participant=k,
+                      participants=[Participant(label=str(i + 1), code=c, height_m=h)
+                                    for i, (c, h) in enumerate(zip(codes, heights, strict=True))],
+                      trials=[Trial(label=str(i + 1), participant=str(i // k + 1)) for i in range(spec.n_trials)])
     fill_versions(session)
     save_session(session, root)
     return root, session
@@ -138,6 +151,64 @@ def fill_versions(session: Session) -> None:
         session.opensim_version = opensim.GetVersion()
     except Exception:  # OpenSim missing is reported by `doctor`
         session.opensim_version = None
+
+
+def _next_label(labels) -> str:
+    return str(max((int(x) for x in labels if str(x).isdigit()), default=0) + 1)
+
+
+def add_participant(session: Session, root: Path, height: str | float | None = None) -> Participant:
+    """A participant added after the session was created: a new pseudonym and trials_per_participant trials."""
+    ensure_not_frozen(session)
+    if len(session.trials) + session.trials_per_participant > MAX_TRIALS:
+        raise SetupError(f"A session holds at most {MAX_TRIALS} trials. Start a second session for more "
+                         "participants.")
+    taken = existing_codes(Path(root).parent) | {p.code for p in session.participants}
+    person = Participant(label=_next_label(p.label for p in session.participants),
+                         code=make_code(session.study_code, taken), height_m=parse_height(height))
+    session.participants.append(person)
+    for _ in range(session.trials_per_participant):
+        session.trials.append(Trial(label=_next_label(t.label for t in session.trials), participant=person.label))
+    session.link()
+    save_session(session, root)
+    return person
+
+
+def remove_participant(session: Session, root: Path, label: str) -> None:
+    """Remove a participant who has no data in the session yet (for example, one who did not come)."""
+    person = session.participant(label)
+    if len(session.participants) == 1:
+        raise SetupError("A session needs at least one participant.")
+    layout = Layout(root)
+    for t in session.trials_of(label):
+        if layout.trial(t.label).exists() or t.label in session.run_state.trial_status:
+            raise SetupError(f"Participant {label} ({person.code}) already has videos or results in this session. "
+                             "Use 'Participant data and deletion' on the Results step to delete their data instead.")
+    gone = {t.label for t in session.trials_of(label)}
+    session.trials = [t for t in session.trials if t.label not in gone]
+    session.participants = [p for p in session.participants if p.label != label]
+    for cam in session.cameras:
+        cam.trial_files = {k: v for k, v in cam.trial_files.items() if k not in gone}
+        for k in gone:
+            _drop_input(layout.inputs(cam.name) / f"trial_{k}.mp4")
+    session.link()
+    save_session(session, root)
+
+
+def set_trial_participants(session: Session, table: dict[str, str]) -> None:
+    """Which participant each trial belongs to (trial label -> participant label), from the Videos step."""
+    ensure_not_frozen(session)
+    known = {p.label for p in session.active_participants}
+    for trial_label, person in table.items():
+        trial = session.trial(trial_label)
+        if person not in known:
+            raise SetupError(f"There is no participant {person} for trial {trial_label}.")
+        if trial.participant != person and session.run_state.stage_done.get(trial_label):
+            raise SetupError(f"Trial {trial_label} was already processed for participant {trial.participant}; "
+                             "it cannot be moved to another participant.")
+    for trial_label, person in table.items():
+        session.trial(trial_label).participant = person
+    session.link()
 
 
 def ensure_not_frozen(session: Session) -> None:

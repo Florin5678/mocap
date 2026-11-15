@@ -146,20 +146,39 @@ def consent_text() -> str:
 
 
 BLANK = "____"  # in the template: something the researcher fills in
-MULTILINE = {"Purpose"}  # labelled blanks that get a taller box
+MULTILINE = {"Purpose", "Researcher(s)", "Risks"}  # labelled blanks that get a taller box
+CHARS_PER_LINE = 60  # in a 115 mm box at 10 pt
 
 
-def consent_pdf(out: Path, code: str = "", text: str | None = None) -> Path:
-    """The participation consent form. A paragraph 'Label: ____' becomes a fillable box (also fine on paper);
-    a blank inside a sentence becomes a line to write on."""
+def study_values(info) -> dict[str, str]:
+    """The consent dialog's answers (StudyInfo) by template label; empty answers stay boxes to fill by hand."""
+    if info is None:
+        return {}
+    people = [f"{name} ({contact})" if contact.strip() else name for name, contact in info.researchers
+              if name.strip() or contact.strip()]
+    return {"Study name": info.study_name, "Purpose": info.purpose, "Researcher(s)": "\n".join(people),
+            "Place of storage": info.storage_place, "Access": info.access, "Usage": info.usage,
+            "Retention": info.retention, "Risks": info.risks, "Compensation": info.compensation}
+
+
+def _box_lines(label: str, value: str) -> int:
+    needed = sum(max(1, -(-len(line) // CHARS_PER_LINE)) for line in value.splitlines()) if value.strip() else 1
+    return max(3 if label in MULTILINE else 1, needed)
+
+
+def consent_pdf(out: Path, code: str = "", text: str | None = None, info=None) -> Path:
+    """The participation consent form. A paragraph 'Label: ____' becomes a fillable box (also fine on paper),
+    pre-filled from `info` (the session's StudyInfo); a blank inside a sentence becomes a line to write on."""
     styles = getSampleStyleSheet()
+    values = study_values(info)
     story = []
     for kind, body in _template_blocks(text or consent_text()):
         field = re.fullmatch(r"([^:]{1,40}):\s*" + re.escape(BLANK), body) if kind == "p" else None
         if field:
             label = field.group(1)
-            story.append(_Field("text", re.sub(r"\W+", "_", label.lower()).strip("_"), label + ":", "", 115,
-                                lines=3 if label in MULTILINE else 1))
+            value = values.get(label, "").strip()
+            story.append(_Field("text", re.sub(r"\W+", "_", label.lower()).strip("_"), label + ":", value, 115,
+                                lines=_box_lines(label, value)))
             story.append(Spacer(1, 1 * mm))
             continue
         body = body.replace(BLANK, "_" * 30)

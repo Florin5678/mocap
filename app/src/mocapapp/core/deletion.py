@@ -71,7 +71,7 @@ class DeletionPlan:
     items: list[Item] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     blockers: list[str] = field(default_factory=list)  # unmet safeguards: execute() refuses
-    confirm_text: str | None = None  # must be typed to go ahead (trial code, or the session folder name)
+    confirm_text: str | None = None  # must be typed to go ahead (pseudonym, or the session folder name)
     notes: list[str] = field(default_factory=list)
 
     @property
@@ -86,7 +86,10 @@ class DeletionPlan:
 
     def describe(self) -> str:
         """Plain-text list shown before anything is deleted (CLI; the GUI renders the same items)."""
-        who = ", ".join(f"trial {lbl} ({code})" for lbl, code in zip(self.labels, self.codes, strict=True))
+        if self.scope == "participant":
+            who = f"participant {self.codes[0]} (trial{'s' if len(self.labels) > 1 else ''} {', '.join(self.labels)})"
+        else:
+            who = ", ".join(f"trial {lbl} ({code})" for lbl, code in zip(self.labels, self.codes, strict=True))
         lines = [f"Deletion plan for {who or self.root.name}:"]
         if not self.items:
             lines.append("  Nothing left to delete.")
@@ -272,25 +275,32 @@ def plan_raw(session: Session, root: Path, label: str, include_originals: bool =
 
 
 def plan_participant(session: Session, root: Path, label: str, include_originals: bool = False) -> DeletionPlan:
-    """'Delete all participant data' for one trial (withdrawal): raw footage plus every result of that code."""
+    """'Delete all participant data' (withdrawal), given one of their trials: raw footage plus every result of
+    every trial of that participant."""
     _check_trial(session, label)
     trial = session.trial(label)
-    plan = DeletionPlan("participant", root, [label], [trial.code])
-    raw = _working(session, root, label) + _derived(root, label)
+    labels = [t.label for t in session.trials_of(trial.participant)]
+    plan = DeletionPlan("participant", root, labels, [trial.code] * len(labels))
+    raw = [i for lbl in labels for i in _working(session, root, lbl) + _derived(root, lbl)]
     raw_paths = {i.path for i in raw}
-    results = [r for r in _results(session, root, label) if r.path not in raw_paths]
+    results, seen = [], set()
+    for lbl in labels:
+        for r in _results(session, root, lbl):
+            if r.path not in raw_paths and r.path not in seen:
+                seen.add(r.path)
+                results.append(r)
     for r in results:  # the trial folder holds the raw items: list both, count their bytes once
         if r.is_dir:
             r.size -= sum(i.size for i in raw if r.path in i.path.parents)
     plan.items = raw + results
     if include_originals:
-        plan.items += _originals(session, label)
-    plan.confirm_text = trial.code  # withdrawal removes results too: always type the code
+        plan.items += [i for lbl in labels for i in _originals(session, lbl)]
+    plan.confirm_text = trial.code  # withdrawal removes results too: always type the pseudonym
     plan.warnings += _cloud_warning(session, root, include_originals)
     plan.notes.append("The pseudonym, the date and the list of deleted paths are kept in the deletion log "
                       "(no personal data). The participant's height is removed from session.json.")
-    if not include_originals and any(Path(f).exists() for c in session.cameras
-                                     if (f := c.trial_files.get(label))):
+    if not include_originals and any(Path(f).exists() for c in session.cameras for lbl in labels
+                                     if (f := c.trial_files.get(lbl))):
         plan.notes.append("The original recordings in the camera folders are not included.")
     return plan
 
@@ -365,24 +375,25 @@ def execute(plan: DeletionPlan, session: Session, typed: str | None = None) -> D
                                    "(video player, Explorer preview) and delete again.")
     if plan.scope == "session":
         return result
-    for name in (*KEYPOINT_FOLDERS, "videos"):  # folders emptied by the deletion
-        folder = Layout(plan.root).trial(plan.labels[0]) / name
-        if folder.is_dir() and not any(folder.iterdir()):
-            folder.rmdir()
+    for label in plan.labels:
+        for name in (*KEYPOINT_FOLDERS, "videos"):  # folders emptied by the deletion
+            folder = Layout(plan.root).trial(label) / name
+            if folder.is_dir() and not any(folder.iterdir()):
+                folder.rmdir()
 
     now = datetime.now().isoformat(timespec="seconds")
-    label = plan.labels[0]
-    trial = session.trial(label)
+    trial = session.trial(plan.labels[0])
     if any(i.group in ("working", "derived") for i in deleted) or not plan.items:
         trial.raw_deleted_at = trial.raw_deleted_at or now
     if plan.scope == "participant":
-        trial.withdrawn_at = now
+        trial.withdrawn_at = now  # the participant's: every trial of theirs
         trial.height_m = None
-        trial.raw_deleted_at = trial.raw_deleted_at or now
-        session.run_state.trial_status[label] = "withdrawn"
-        session.run_state.stage_done.pop(label, None)
-        session.run_state.sync.pop(label, None)
-        session.run_state.errors.pop(label, None)
+        for label in plan.labels:
+            session.trial(label).raw_deleted_at = session.trial(label).raw_deleted_at or now
+            session.run_state.trial_status[label] = "withdrawn"
+            session.run_state.stage_done.pop(label, None)
+            session.run_state.sync.pop(label, None)
+            session.run_state.errors.pop(label, None)
     save_session(session, plan.root)
     log_deletion(plan, deleted, result, now)
     if plan.scope == "participant":
@@ -406,6 +417,7 @@ def log_deletion(plan: DeletionPlan, deleted: list[Item], result: DeletionResult
         groups[g] = {"items": len(done), "bytes": sum(i.size for i in done)}
     entry = {
         "at": when, "scope": plan.scope, "trial": plan.labels[0], "code": plan.codes[0], "groups": groups,
+        **({"trials": plan.labels} if len(plan.labels) > 1 and plan.scope != "session" else {}),
         "paths": [_relative(i.path, plan.root) for i in deleted if i.group != "originals"],
         "originals_deleted_for": sorted({i.camera for i in deleted if i.group == "originals"}),
         "failures": len(result.failures),

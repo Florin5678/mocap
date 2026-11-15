@@ -364,9 +364,20 @@ class MainWindow(QMainWindow):
         save_pdf(self, "board", board_spec=self.board_spec())
 
     def save_consent_pdf(self, code: str) -> None:
+        """For a participant: ask the study details first (kept for the session's next forms). From the Help
+        menu (no pseudonym): a form with the open session's details, or a blank one."""
         from mocapapp.gui.greeting import save_pdf
 
-        save_pdf(self, "consent", code=code)
+        info = self.session.study_info if self.session is not None else None
+        if code and self.session is not None:
+            from mocapapp.gui.consent_dialog import ConsentInfoDialog
+
+            dlg = ConsentInfoDialog(self, info, code)
+            if dlg.exec() != ConsentInfoDialog.DialogCode.Accepted:
+                return
+            self.session.study_info = info = dlg.info()
+            self.save()
+        save_pdf(self, "consent", code=code, info=info)
 
     def show_doctor(self) -> None:
         from mocapapp.core.env import run_checks

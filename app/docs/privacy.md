@@ -12,11 +12,11 @@ How the app handles personal data (PROJECT.md §8). This is not legal advice. Th
 | Height, pseudonym, consent record | `session.json`, `trials/trial_<label>/consent.json` | pseudonymised |
 | 3D markers, joint angles, scaled model | `pose-3d/`, `kinematics/`, `export/` | pseudonymised (movement can still identify a person) |
 
-Each trial's **pseudonym** (for example `PA26-K7M2QX4`) is pseudonymisation, not anonymisation. The signed consent form, which links the pseudonym to a name, stays with the experimenter, stored separately from the data. The app never stores names, e-mail addresses or body mass.
+Each participant's **pseudonym** (for example `PA26-K7M2QX4`) is pseudonymisation, not anonymisation. The signed consent form, which links the pseudonym to a name, stays with the experimenter, stored separately from the data. The app never stores names, e-mail addresses or body mass.
 
 ## Consent
 
-Tick **Signed consent received** for each trial once you have the signed form for that pseudonym (`mocapapp consent --attest`). The app cannot verify the form. You cannot run a trial until its consent is ticked.
+Tick **Signed consent received** for each participant once you have the signed form for that pseudonym (`mocapapp consent --attest`). The app cannot verify the form. You cannot run a participant's trials until their consent is ticked.
 
 The **Delete raw footage** option follows the participant's answer about storing raw footage:
 
@@ -27,7 +27,7 @@ You can change the option either way. If storage was not consented and the optio
 
 ## Deleting
 
-Deleting is always possible, at any time, for one trial (one participant) at a time:
+Deleting is always possible, at any time: raw footage one trial at a time, and all data one participant (with all their trials) at a time:
 
 - **in the app:** *File > Participant data and deletion*, or the buttons on the Session and Results steps;
 - **from the command line:** the `delete-raw` and `delete-session` commands.
@@ -51,7 +51,7 @@ There are three kinds of deletion:
 | Action | What goes | Confirmation |
 |---|---|---|
 | **Delete raw footage** (`delete-raw`) | (a) + (b), optionally (c) | (c) needs the pseudonym typed |
-| **Delete all data of this participant**, for withdrawal (`delete-session --trial`) | (a) + (b) + every result of that trial: the trial folder, its QA files and its exports. Optionally (c). | always type the pseudonym |
+| **Delete all data of this participant**, for withdrawal (`delete-session --trial`) | (a) + (b) + every result of every trial of that participant: the trial folders, their QA files and their exports. Optionally (c). | always type the pseudonym |
 | **Delete the whole session** (`delete-session`) | the session folder, optionally every trial's originals | type the session folder name |
 
 On the command line, nothing is deleted without `--yes`; without it, the command only lists what would go.

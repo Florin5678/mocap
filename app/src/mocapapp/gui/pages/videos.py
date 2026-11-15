@@ -23,7 +23,14 @@ from PySide6.QtWidgets import (
 from mocapapp.core.assemble import plan_inputs
 from mocapapp.core.session import save_session
 from mocapapp.core.validate import scan_dir, validate
-from mocapapp.core.workflow import SetupError, inputs_ready, pick_video, prepare_session, set_mapping
+from mocapapp.core.workflow import (
+    SetupError,
+    inputs_ready,
+    pick_video,
+    prepare_session,
+    set_mapping,
+    set_trial_participants,
+)
 from mocapapp.gui.common import Background, IssueView, clear_table, error_box, fit_rows, note, readonly
 from mocapapp.gui.main_window import Page
 
@@ -60,7 +67,7 @@ class VideosPage(Page):
         cl.addWidget(self.calib_table)
         layout.addWidget(calib)
 
-        mapping = QGroupBox("Trial mapping: which file is which trial, per camera")
+        mapping = QGroupBox("Trial mapping: which participant and which file is which trial, per camera")
         ml = QVBoxLayout(mapping)
         self.mapping_note = QLabel()
         self.mapping_note.setWordWrap(True)
@@ -171,16 +178,37 @@ class VideosPage(Page):
 
     # ---------- mapping ----------
 
+    def with_participants(self) -> bool:
+        """Several trials per participant: the mapping also says whose trial each one is."""
+        s = self.session
+        return s.trials_per_participant > 1 or len(s.trials) != len(s.participants)
+
     def _fill_grid(self) -> None:
         trials, cams = self.session.trials, self.session.cameras
+        first = 1 if self.with_participants() else 0
         self.grid.clear()
         self.grid.setRowCount(len(trials))
-        self.grid.setColumnCount(len(cams))
-        self.grid.setHorizontalHeaderLabels([c.name for c in cams])
-        self.grid.setVerticalHeaderLabels([f"Trial {t.label} ({t.code})" for t in trials])
+        self.grid.setColumnCount(first + len(cams))
+        self.grid.setHorizontalHeaderLabels((["Participant"] if first else []) + [c.name for c in cams])
+        self.grid.setVerticalHeaderLabels([f"Trial {t.label}" if first else f"Trial {t.label} ({t.code})"
+                                           for t in trials])
         self.grid.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         low = self.report.low_confidence if self.report else set()
-        for c, cam in enumerate(cams):
+        if first:
+            people = self.session.active_participants
+            for r, t in enumerate(trials):
+                box = QComboBox()
+                for p in people:
+                    box.addItem(f"Participant {p.label} ({p.code})", p.label)
+                if t.withdrawn_at:
+                    box.addItem(f"Participant {t.participant} (withdrawn)", t.participant)
+                box.setCurrentIndex(max(0, box.findData(t.participant)))
+                if self.session.run_state.stage_done.get(t.label):
+                    box.setEnabled(False)
+                    box.setToolTip("Already processed for this participant.")
+                self.grid.setCellWidget(r, 0, box)
+                self.grid.setItem(r, 0, readonly(""))
+        for c, cam in enumerate(cams, first):
             try:
                 candidates = scan_dir(Path(cam.source_dir)).trials
             except OSError:
@@ -213,7 +241,10 @@ class VideosPage(Page):
 
     def save_mapping(self) -> None:
         table = {}
-        for c, cam in enumerate(self.session.cameras):
+        first = 1 if self.with_participants() else 0
+        owners = {t.label: self.grid.cellWidget(r, 0).currentData()
+                  for r, t in enumerate(self.session.trials)} if first else {}
+        for c, cam in enumerate(self.session.cameras, first):
             for r, t in enumerate(self.session.trials):
                 data = self.grid.cellWidget(r, c).currentData()
                 if not data:
@@ -225,7 +256,13 @@ class VideosPage(Page):
             if len(set(files)) != len(files):
                 error_box(self, "Mapping not saved", f"{cam.name}: the same file is used for two trials.")
                 return
-        set_mapping(self.session, table, self.root)
+        try:
+            if owners:
+                set_trial_participants(self.session, owners)
+            set_mapping(self.session, table, self.root)
+        except SetupError as exc:
+            error_box(self, "Mapping not saved", str(exc))
+            return
         self.win.save()
         self.check()
 

@@ -7,7 +7,7 @@ You film one person with two or more cameras at the same time. The app turns tho
 
 The steps, in order:
 
-1. **Session setup** – one folder per camera, one row per participant.
+1. **Session setup** – one folder per camera, one row per participant, and their consent forms.
 2. **Lens calibration** (intrinsic) – from a video of a printed board, once per camera.
 3. **Reference points** – measured points in the room that define the floor and the directions X, Y, Z.
 4. **Camera positions** (extrinsic) – you click the reference points in one picture per camera.
@@ -77,10 +77,10 @@ The board in the PDF always matches the board settings of the app.
 
 === 8. The participation consent form (PDF)
 
-Each trial is a different participant, and each participant gets their own **pseudonym**, such as `PA26-K7M2QX4`. The data are stored under the pseudonym, and only the signed participation consent form – which you keep separately – links it to the person.
+Each participant gets their own **pseudonym**, such as `PA26-K7M2QX4`. The data are stored under the pseudonym, and only the signed participation consent form – which you keep separately – links it to the person.
 
-Fill in the study details (title, purpose, who is responsible, storage) in the boxes or on the lines, and have the form checked by your institution. During setup you can generate a form with a trial's pseudonym already filled in.
+During setup, **Generate ...** makes each participant's form with their pseudonym filled in. The study details (study name, purpose, researchers, data handling, risks, compensation) are asked once and printed on every form of the session; blank ones can be filled in by hand. Have the form checked by your institution.
 
-The app does not see the signed forms. Before running, you confirm for each trial that signed consent was received.
+The app does not see the signed forms. Before running, you confirm for each participant that signed consent was received.
 
 [[download:consent]]

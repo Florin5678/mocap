@@ -31,9 +31,11 @@ from mocapapp.core.workflow import (
     MAX_TRIALS,
     NewSession,
     SetupError,
+    add_participant,
     camera_number,
     check_new_session,
     create_session,
+    remove_participant,
     sibling_camera_dirs,
 )
 from mocapapp.gui.common import IssueView, clear_table, error_box, fit_rows, last_output_root, note, para, readonly
@@ -84,8 +86,8 @@ class SetupPage(Page):
         self.trials_spin = QSpinBox()
         self.trials_spin.setRange(1, MAX_TRIALS)
         self.trials_spin.setValue(1)
-        self.trials_spin.valueChanged.connect(self._resize_participants)
-        form.addRow("Number of trials", self.trials_spin)
+        self.trials_spin.valueChanged.connect(lambda _: self._check_new())
+        form.addRow("Trials per participant", self.trials_spin)
         layout.addLayout(form)
 
         cams = QGroupBox("Cameras: one folder per camera")
@@ -109,7 +111,7 @@ class SetupPage(Page):
         cl.addLayout(row)
         layout.addWidget(cams)
 
-        people = QGroupBox("Participants: one row per trial (each trial is a different participant)")
+        people = QGroupBox("Participants")
         pl = QVBoxLayout(people)
         pl.addWidget(para("Height in metres (cm is converted). Leave blank to estimate it - not recommended. "
                             "Pseudonyms are generated when the session is created."))
@@ -118,6 +120,14 @@ class SetupPage(Page):
         self.height_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.height_table.itemChanged.connect(self._height_edited)
         pl.addWidget(self.height_table)
+        prow = QHBoxLayout()
+        add_p, remove_p = QPushButton("Add participant"), QPushButton("Remove last participant")
+        add_p.clicked.connect(lambda: self._resize_participants(self.height_table.rowCount() + 1))
+        remove_p.clicked.connect(lambda: self._resize_participants(self.height_table.rowCount() - 1))
+        prow.addWidget(add_p)
+        prow.addWidget(remove_p)
+        prow.addStretch()
+        pl.addLayout(prow)
         layout.addWidget(people)
 
         self.new_issues = IssueView()
@@ -174,9 +184,10 @@ class SetupPage(Page):
             self._check_new()
 
     def _resize_participants(self, n: int) -> None:
+        n = max(1, n)
         self.height_table.blockSignals(True)
         self.height_table.setRowCount(n)
-        self.height_table.setVerticalHeaderLabels([f"Trial {i + 1}" for i in range(n)])
+        self.height_table.setVerticalHeaderLabels([f"Participant {i + 1}" for i in range(n)])
         for r in range(n):
             if self.height_table.item(r, 0) is None:
                 self.height_table.setItem(r, 0, QTableWidgetItem(""))
@@ -201,8 +212,9 @@ class SetupPage(Page):
     def spec(self) -> NewSession:
         dirs = [Path(self.cam_table.cellWidget(r, 1).text().strip()) for r in range(self.cam_table.rowCount())]
         heights = [self.height_table.item(r, 0).text().strip() for r in range(self.height_table.rowCount())]
-        return NewSession(out_root=Path(self.out_edit.text().strip() or "."), n_trials=self.trials_spin.value(),
-                          camera_dirs=dirs, study=self.study_edit.text(), heights=heights)
+        return NewSession(out_root=Path(self.out_edit.text().strip() or "."), n_participants=len(heights),
+                          camera_dirs=dirs, study=self.study_edit.text(), heights=heights,
+                          trials_per_participant=self.trials_spin.value())
 
     def _check_new(self) -> list[Issue]:
         spec = self.spec()
@@ -237,25 +249,31 @@ class SetupPage(Page):
         layout.addWidget(self.info)
         layout.addWidget(note(s("sync_reminder"), "important"))
         layout.addWidget(note(s("cameras_stay_put")))
-        box = QGroupBox("Participants (one per trial)")
+        box = QGroupBox("Participants")
         bl = QVBoxLayout(box)
-        bl.addWidget(para("Tick <i>Signed consent received</i> once you hold the signed form for that pseudonym. "
-                            "<i>Delete raw footage</i> follows the storage consent by default; deletion is done after "
-                            "a successful run and export, and is always possible later."))
+        bl.addWidget(para("<i>Generate ...</i> makes the participant's consent form. Tick <i>Signed consent "
+                            "received</i> once you hold the signed form for that pseudonym. <i>Delete raw footage</i> "
+                            "follows the storage consent by default; deletion is done after a successful run and "
+                            "export, and is always possible later."))
         self.people = QTableWidget(0, 6)
-        self.people.setHorizontalHeaderLabels(["Pseudonym", "Height (m)", "Signed consent received",
+        self.people.setHorizontalHeaderLabels(["Participant", "Height (m)", "Signed consent received",
                                                "Consented to storing raw footage", "Delete raw footage",
                                                "Consent form"])
         self.people.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self.people.horizontalHeader().setStretchLastSection(True)
+        self.people.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         bl.addWidget(self.people)
-        data_row = QHBoxLayout()
-        self.data_button = QPushButton("Participant data and deletion ...")
-        self.data_button.setToolTip("Delete raw footage or all data of a participant, at any time.")
-        self.data_button.clicked.connect(self.win.show_participant_data)
-        data_row.addWidget(self.data_button)
-        data_row.addStretch()
-        bl.addLayout(data_row)
+        people_row = QHBoxLayout()
+        self.add_person_button = QPushButton("Add participant")
+        self.add_person_button.clicked.connect(self.add_person)
+        self.remove_person_button = QPushButton("Remove participant")
+        self.remove_person_button.setToolTip("Removes the selected participant (or the last one) if they have no "
+                                             "videos or results yet.")
+        self.remove_person_button.clicked.connect(self.remove_person)
+        people_row.addWidget(self.add_person_button)
+        people_row.addWidget(self.remove_person_button)
+        people_row.addStretch()
+        bl.addLayout(people_row)
         layout.addWidget(box)
         self.existing_issues = IssueView()
         self.existing_issues.setMaximumHeight(160)
@@ -274,13 +292,15 @@ class SetupPage(Page):
         sample = " <b>(sample data)</b>" if self.session.calibration_source == "imported" else ""
         self.info.setText(f"<b>Session folder:</b> {self.root}{sample}<br><b>Cameras:</b>{cams}")
         clear_table(self.people)
-        self.people.setRowCount(len(self.session.trials))
-        self.people.setVerticalHeaderLabels([f"Trial {t.label}" for t in self.session.trials])
-        for r, t in enumerate(self.session.trials):
+        people = self.session.participants
+        self.people.setRowCount(len(people))
+        self.people.setVerticalHeaderLabels([f"Participant {p.label}" for p in people])
+        for r, t in enumerate(people):
             self.people.setItem(r, 0, readonly(t.code))
-            if not t.raw_present:  # nothing left to set up for this participant
+            trials = self.session.trials_of(t.label)
+            if t.withdrawn_at or (trials and not any(x.raw_present for x in trials)):
                 gone = (f"all data deleted {t.withdrawn_at[:10]}" if t.withdrawn_at
-                        else f"raw footage deleted {t.raw_deleted_at[:10]}")
+                        else f"raw footage deleted {min(x.raw_deleted_at for x in trials)[:10]}")
                 self.people.setItem(r, 1, readonly(gone))
                 continue
             h = QLineEdit(height_text(t.height_m))
@@ -302,7 +322,30 @@ class SetupPage(Page):
             form.clicked.connect(lambda _=False, c=t.code: self.win.save_consent_pdf(c))
             self.people.setCellWidget(r, 5, form)
         fit_rows(self.people)
+        frozen = self.session.frozen
+        self.add_person_button.setEnabled(not frozen)
+        self.add_person_button.setToolTip("Raw footage was deleted in this session: start a new session for new "
+                                          "participants." if frozen else "Adds a participant with a new pseudonym.")
+        self.remove_person_button.setEnabled(len(people) > 1)
         self._check_existing()
+
+    def add_person(self) -> None:
+        try:
+            add_participant(self.session, self.root)
+        except SetupError as exc:
+            error_box(self, "Participant not added", str(exc))
+            return
+        self.win.set_session(self.root, self.session)
+
+    def remove_person(self) -> None:
+        rows = self.people.selectionModel().selectedRows()
+        r = rows[0].row() if rows else self.people.rowCount() - 1
+        try:
+            remove_participant(self.session, self.root, self.session.participants[r].label)
+        except SetupError as exc:
+            error_box(self, "Participant not removed", str(exc))
+            return
+        self.win.set_session(self.root, self.session)
 
     def _set_height(self, trial, edit: QLineEdit) -> None:
         try:
@@ -332,10 +375,11 @@ class SetupPage(Page):
 
     def _check_existing(self) -> None:
         issues = []
-        for t in self.session.trials:
-            if not t.raw_present:
+        for t in self.session.active_participants:
+            trials = self.session.trials_of(t.label)
+            if trials and not any(x.raw_present for x in trials):
                 continue
-            where = f"trial {t.label} ({t.code})"
+            where = f"participant {t.label} ({t.code})"
             if not t.consent.attested:
                 issues.append(Issue("action", where, "Signed consent not yet confirmed (needed before Run).", ""))
             if not t.consent.raw_footage_storage and not t.delete_raw:

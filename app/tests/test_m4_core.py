@@ -43,13 +43,19 @@ def test_board_pdf(tmp_path):
 
 
 def test_consent_pdf_fields_and_placeholders(tmp_path):
-    out = pdfs.consent_pdf(tmp_path / "c.pdf", "PA26-K7M2QX4")
+    from mocapapp.core.session import StudyInfo
+
+    info = StudyInfo(study_name="Gait 2026", researchers=[("A. Researcher", "a@uni.example"), ("B. Second", "")],
+                     risks="Mild effort.")
+    out = pdfs.consent_pdf(tmp_path / "c.pdf", "PA26-K7M2QX4", info=info)
     reader = pypdf.PdfReader(out)
     fields = reader.get_fields()
-    assert fields["pseudonym"]["/V"] == "PA26-K7M2QX4"
-    assert {"title", "purpose", "data_controller", "researcher_s", "contact", "benefits_or_compensation",
-            "consent", "raw_storage", "name", "date"} <= set(fields)
-    assert not {"height_m", "trial_code"} & set(fields)
+    assert fields["pseudonym"]["/V"] == "PA26-K7M2QX4" and fields["study_name"]["/V"] == "Gait 2026"
+    assert fields["researcher_s"]["/V"] == "A. Researcher (a@uni.example)\nB. Second"
+    assert fields["risks"]["/V"] == "Mild effort." and fields["purpose"].get("/V", "") == ""
+    assert {"study_name", "purpose", "researcher_s", "place_of_storage", "access", "usage", "retention", "risks",
+            "compensation", "consent", "raw_storage", "name", "date"} <= set(fields)
+    assert not {"height_m", "trial_code", "data_controller", "contact", "benefits_or_compensation"} & set(fields)
     assert "mass" not in " ".join(fields).lower()
     text = " ".join(" ".join(p.extract_text().split()) for p in reader.pages)
     assert text.startswith("Participation consent form") and "pseudonym" in text and "withdraw" in text
@@ -85,16 +91,16 @@ def _cams(tmp_path, n=2):
 
 
 def test_new_session_checks(tmp_path):
-    spec = NewSession(out_root=tmp_path / "s", n_trials=2, camera_dirs=[tmp_path / "nope"], heights=["1.8", "x"])
+    spec = NewSession(out_root=tmp_path / "s", n_participants=2, camera_dirs=[tmp_path / "nope"], heights=["1.8", "x"])
     levels = {(i.where, i.level) for i in check_new_session(spec)}
-    assert ("cameras", "error") in levels and ("cam01", "error") in levels and ("trial 2", "error") in levels
+    assert ("cameras", "error") in levels and ("cam01", "error") in levels and ("participant 2", "error") in levels
     with pytest.raises(SetupError):
         create_session(spec)
 
 
 def test_changed_sources_are_prepared_again(tmp_path):
     dirs = _cams(tmp_path)
-    root, session = create_session(NewSession(out_root=tmp_path / "s", n_trials=1, camera_dirs=dirs,
+    root, session = create_session(NewSession(out_root=tmp_path / "s", n_participants=1, camera_dirs=dirs,
                                               heights=["1.7"]))
     report, plan = prepare_session(session, root, progress=lambda m: None)
     assert report.ok and plan is not None and inputs_ready(session, root)

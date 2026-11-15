@@ -2,13 +2,14 @@ from pathlib import Path
 
 import pytest
 
-from mocapapp.core.session import CalibVideo, Camera, Session, Trial, VideoRef
+from mocapapp.core.session import CalibVideo, Camera, Session, VideoRef
 from mocapapp.core.validate import check_output_root, map_by_digit, validate
 
 
 def make_session(dirs, n_trials=2):
-    return Session(n_trials=n_trials, trials=[Trial(label=str(i + 1), code=f"C{i}") for i in range(n_trials)],
-                   cameras=[Camera(name=f"cam{i + 1:02d}", source_dir=str(d)) for i, d in enumerate(dirs)])
+    return Session.model_validate({
+        "n_trials": n_trials, "trials": [{"label": str(i + 1), "code": f"C{i}"} for i in range(n_trials)],
+        "cameras": [Camera(name=f"cam{i + 1:02d}", source_dir=str(d)) for i, d in enumerate(dirs)]})
 
 
 def levels(report, level):

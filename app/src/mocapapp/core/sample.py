@@ -15,7 +15,7 @@ import rtoml
 
 from mocapapp.core.assemble import assemble_trials
 from mocapapp.core.runner import stage_env
-from mocapapp.core.session import Camera, Layout, Session, Trial, save_session, session_dir_name
+from mocapapp.core.session import Camera, Layout, Participant, Session, Trial, save_session, session_dir_name
 from mocapapp.core.workflow import fill_versions
 
 DEMO_HEIGHT_M = 1.72
@@ -61,7 +61,8 @@ def make_sample_session(out_root: Path, progress: Callable[[str], None] = print)
     cams = [Camera(name=f"cam{i:02d}", source_dir=str(demo / "videos"), trial_files={"1": str(v)})
             for i, v in enumerate(videos, 1)]
     session = Session(study_code="SAMPLE", n_trials=1, cameras=cams, calibration_source="imported",
-                      trials=[Trial(label="1", code="SAMPLE-DEMO", height_m=DEMO_HEIGHT_M, mapping_method="manual")])
+                      participants=[Participant(label="1", code="SAMPLE-DEMO", height_m=DEMO_HEIGHT_M)],
+                      trials=[Trial(label="1", participant="1", mapping_method="manual")])
     fill_versions(session)
     progress("Copying the sample videos ...")
     for cam, video in zip(cams, videos, strict=True):

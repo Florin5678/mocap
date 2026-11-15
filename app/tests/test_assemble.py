@@ -5,11 +5,12 @@ import rtoml
 
 from mocapapp.cli.main import main
 from mocapapp.core.config_gen import build_config, gui_flags_set, overrides
-from mocapapp.core.session import Layout, Session, Trial, load_session
+from mocapapp.core.session import Layout, Session, load_session
 
 
 def test_config_has_no_gui_flags_and_trial_height():
-    s = Session(n_trials=1, trials=[Trial(label="3", code="PA26-ABCDEFG", height_m=1.78)], cameras=[])
+    s = Session.model_validate({"n_trials": 1, "trials": [{"label": "3", "code": "PA26-ABCDEFG", "height_m": 1.78}],
+                                "cameras": []})
     text = build_config(s, s.trials[0], scene_points=[[0, 0, 0], [1, 0, 0]])
     assert gui_flags_set(text) == []
     cfg = rtoml.loads(text)
@@ -22,7 +23,7 @@ def test_config_has_no_gui_flags_and_trial_height():
 
 
 def test_auto_height_when_missing():
-    s = Session(n_trials=1, trials=[Trial(label="1", code="X")], cameras=[])
+    s = Session.model_validate({"n_trials": 1, "trials": [{"label": "1", "code": "X"}], "cameras": []})
     assert overrides(s, s.trials[0])["project.participant_height"] == "auto"
 
 

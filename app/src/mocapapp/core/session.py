@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, PrivateAttr, field_validator, model_validator
 
 from mocapapp import __version__
 
@@ -43,26 +43,53 @@ class Consent(BaseModel):
     template_version: str = "1"
 
 
-class Trial(BaseModel):
-    label: str
-    mapping_method: Literal["digit", "chronological", "manual"] | None = None
-    code: str
+class Participant(BaseModel):
+    """One person: pseudonym, height and consent. A participant has one or more trials."""
+    label: str  # "1", "2", ... (stable: not renumbered when a participant is removed)
+    code: str  # the pseudonym
     height_m: float | None = None  # None = 'auto'
     consent: Consent = Field(default_factory=Consent)
     delete_raw: bool = True  # follows consent: no storage consent -> delete (PROJECT.md §6.2)
-    # PROJECT.md §8.4: set by save_session when raw footage is kept with consent ("study finished")
-    retention_until: str | None = None
-    raw_deleted_at: str | None = None  # working copies + overlays + 2D keypoints deleted (§8.4)
-    withdrawn_at: str | None = None  # "Delete all participant data": every file of this trial is gone
-
-    @property
-    def raw_present(self) -> bool:
-        return self.raw_deleted_at is None and self.withdrawn_at is None
+    withdrawn_at: str | None = None  # "Delete all participant data": every file of every trial is gone
 
     @field_validator("height_m", mode="before")
     @classmethod
     def _height(cls, v):
         return parse_height(v)
+
+
+PARTICIPANT_FIELDS = ("code", "height_m", "consent", "delete_raw", "withdrawn_at")
+
+
+def _delegate(name: str) -> property:
+    """A trial reads and writes its participant's pseudonym, height and consent."""
+    return property(lambda self: getattr(self.person, name), lambda self, v: setattr(self.person, name, v))
+
+
+class Trial(BaseModel):
+    label: str
+    participant: str = ""  # Participant.label
+    mapping_method: Literal["digit", "chronological", "manual"] | None = None
+    # PROJECT.md §8.4: set by save_session when raw footage is kept with consent ("study finished")
+    retention_until: str | None = None
+    raw_deleted_at: str | None = None  # working copies + overlays + 2D keypoints deleted (§8.4)
+    _person: Participant | None = PrivateAttr(default=None)
+
+    @property
+    def person(self) -> Participant:
+        if self._person is None:
+            raise RuntimeError(f"Trial {self.label} is not linked to a participant (Session.link).")
+        return self._person
+
+    code = _delegate("code")
+    height_m = _delegate("height_m")
+    consent = _delegate("consent")
+    delete_raw = _delegate("delete_raw")
+    withdrawn_at = _delegate("withdrawn_at")
+
+    @property
+    def raw_present(self) -> bool:
+        return self.raw_deleted_at is None and self.withdrawn_at is None
 
 
 class VideoRef(BaseModel):
@@ -112,6 +139,19 @@ class RunState(BaseModel):
     last_error: str | None = None
 
 
+class StudyInfo(BaseModel):
+    """What the researcher entered for the consent forms; the same for every participant of the session."""
+    study_name: str = ""
+    purpose: str = ""
+    researchers: list[tuple[str, str]] = Field(default_factory=list)  # (name, contact)
+    storage_place: str = ""
+    access: str = ""
+    usage: str = ""
+    retention: str = ""
+    risks: str = ""
+    compensation: str = ""
+
+
 class Session(BaseModel):
     schema_: int = Field(SCHEMA, alias="schema")
     app_version: str = __version__
@@ -120,7 +160,10 @@ class Session(BaseModel):
     created_at: str = Field(default_factory=lambda: datetime.now().isoformat(timespec="seconds"))
     study_code: str = ""
     n_trials: int
+    trials_per_participant: int = 1
+    participants: list[Participant] = Field(default_factory=list)
     trials: list[Trial]
+    study_info: StudyInfo = Field(default_factory=StudyInfo)
     cameras: list[Camera]
     extrinsics: list[dict] = Field(default_factory=list)
     settings: Settings = Field(default_factory=Settings)
@@ -131,6 +174,52 @@ class Session(BaseModel):
 
     model_config = {"populate_by_name": True}
 
+    @model_validator(mode="before")
+    @classmethod
+    def _one_participant_per_trial(cls, data):
+        """Sessions before 0.1.0rc9 kept pseudonym, height and consent on each trial (one participant per trial)."""
+        if not isinstance(data, dict) or data.get("participants"):
+            return data
+        data = dict(data)
+        people, trials = [], []
+        for t in data.get("trials", []):
+            if not isinstance(t, dict) or "code" not in t:
+                trials.append(t)
+                continue
+            t = dict(t)
+            people.append({"label": t["label"], **{k: t.pop(k) for k in PARTICIPANT_FIELDS if k in t}})
+            t["participant"] = t["label"]
+            trials.append(t)
+        data["participants"], data["trials"] = people, trials
+        return data
+
+    @model_validator(mode="after")
+    def _linked(self):
+        self.link()
+        return self
+
+    def link(self) -> None:
+        """Connect every trial to its participant; call after changing trials or participants."""
+        by_label = {p.label: p for p in self.participants}
+        for t in self.trials:
+            if t.participant not in by_label:
+                raise ValueError(f"Trial {t.label} belongs to participant {t.participant!r}, which does not exist.")
+            t._person = by_label[t.participant]
+        self.n_trials = len(self.trials)
+
+    def participant(self, label: str) -> Participant:
+        for p in self.participants:
+            if p.label == label:
+                return p
+        raise KeyError(f"No participant {label} in this session.")
+
+    def trials_of(self, participant: str) -> list[Trial]:
+        return [t for t in self.trials if t.participant == participant]
+
+    @property
+    def active_participants(self) -> list[Participant]:
+        return [p for p in self.participants if p.withdrawn_at is None]
+
     def camera(self, name: str) -> Camera:
         for cam in self.cameras:
             if cam.name == name:
@@ -139,7 +228,7 @@ class Session(BaseModel):
 
     @property
     def active_trials(self) -> list[Trial]:
-        """Trials whose participant has not withdrawn (withdrawn trials keep only their code and the log)."""
+        """Trials whose participant has not withdrawn (withdrawn participants keep only their pseudonym and the log)."""
         return [t for t in self.trials if t.withdrawn_at is None]
 
     @property
@@ -257,7 +346,8 @@ def existing_codes(output_root: Path) -> set[str]:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
-        codes.update(t.get("code", "") for t in data.get("trials", []))
+        codes.update(p.get("code", "") for p in data.get("participants", []))
+        codes.update(t["code"] for t in data.get("trials", []) if "code" in t)  # sessions before 0.1.0rc9
     return codes
 
 

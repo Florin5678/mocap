@@ -61,15 +61,17 @@ class DeleteDialog(QDialog):
         self.result_: deletion.DeletionResult | None = None
         trial = session.trial(label) if label else None
         titles = {"raw": f"Delete raw footage of trial {label} ({trial.code if trial else ''})",
-                  "participant": f"Delete all data of trial {label} ({trial.code if trial else ''})",
+                  "participant": f"Delete all data of participant {trial.participant if trial else ''} "
+                                 f"({trial.code if trial else ''})",
                   "session": f"Delete the whole session {root.name}"}
         self.setWindowTitle(titles[scope])
         self.resize(900, 620)
         layout = QVBoxLayout(self)
         intro = {"raw": "The working copies of the videos and everything derived from them that shows or traces "
                         "the person are deleted. The 3D results are kept.",
-                 "participant": "Use this when a participant withdraws consent: their raw footage and every "
-                                "result computed from it are deleted. The other trials are not affected.",
+                 "participant": "Use this when a participant withdraws consent: the raw footage of every trial of "
+                                "theirs and every result computed from it are deleted. Other participants are not "
+                                "affected.",
                  "session": "Everything in the session folder is deleted, for every participant."}[scope]
         layout.addWidget(para(f"<b>{html.escape(intro)}</b>"))
         self.originals = QCheckBox("Also delete the original recordings in the camera folders"
@@ -162,7 +164,7 @@ class ParticipantDataDialog(QDialog):
         self.reminder.setWordWrap(True)
         layout.addWidget(self.reminder)
         self.table = QTableWidget(0, 6)
-        self.table.setHorizontalHeaderLabels(["Pseudonym", "Storage consent", "Planned", "Raw footage", "", ""])
+        self.table.setHorizontalHeaderLabels(["Participant", "Storage consent", "Planned", "Raw footage", "", ""])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setStretchLastSection(True)
         layout.addWidget(self.table)

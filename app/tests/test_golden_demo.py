@@ -14,7 +14,7 @@ import rtoml
 from mocapapp.core import qa, runner
 from mocapapp.core.assemble import assemble_trials
 from mocapapp.core.export import default_selection, export
-from mocapapp.core.session import Camera, Consent, Layout, Session, Trial, save_session
+from mocapapp.core.session import Camera, Consent, Layout, Participant, Session, Trial, save_session
 
 DEMO = Path(__import__("Pose2Sim").__file__).parent / "Demo_SinglePerson"
 
@@ -38,8 +38,9 @@ def test_demo_end_to_end(tmp_path):
     calib = convert_demo_calibration(tmp_path / "convert")
     root = tmp_path / "golden session"
     cams = [Camera(name=f"cam{i:02d}", source_dir=str(DEMO / "videos")) for i in range(1, 5)]
-    trial = Trial(label="1", code="DEMO-2345672", height_m=1.72, consent=Consent(attested=True))
-    session = Session(n_trials=1, trials=[trial], cameras=cams, sync_cue_confirmed=True, study_code="DEMO")
+    person = Participant(label="1", code="DEMO-2345672", height_m=1.72, consent=Consent(attested=True))
+    session = Session(n_trials=1, participants=[person], trials=[Trial(label="1", participant="1")], cameras=cams,
+                      sync_cue_confirmed=True, study_code="DEMO")
     layout = Layout(root)
     for cam in cams:
         layout.inputs(cam.name).mkdir(parents=True)
