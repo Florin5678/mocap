@@ -379,6 +379,21 @@ class MainWindow(QMainWindow):
             self.save()
         save_pdf(self, "consent", code=code, info=info)
 
+    def save_all_consent_pdfs(self) -> None:
+        """Every participant's form in one PDF (one form per participant, each on new pages), for printing."""
+        from mocapapp.gui.consent_dialog import ConsentInfoDialog
+        from mocapapp.gui.greeting import save_pdf
+
+        if self.session is None:
+            return
+        codes = [p.code for p in self.session.active_participants]
+        dlg = ConsentInfoDialog(self, self.session.study_info, f"each participant's own ({len(codes)} forms)")
+        if dlg.exec() != ConsentInfoDialog.DialogCode.Accepted:
+            return
+        self.session.study_info = dlg.info()
+        self.save()
+        save_pdf(self, "consent", info=self.session.study_info, codes=codes)
+
     def show_doctor(self) -> None:
         from mocapapp.core.env import run_checks
 

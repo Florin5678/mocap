@@ -29,15 +29,15 @@ def _text_box(value: str, placeholder: str, height: int = 54) -> QPlainTextEdit:
 
 
 class ConsentInfoDialog(QDialog):
-    """Fill in or leave blank; blank fields stay empty boxes on the form, to fill in by hand."""
+    """Fill in or leave blank; blank details get lines on the printed form, to fill in by hand."""
 
     def __init__(self, parent, info: StudyInfo, code: str):
         super().__init__(parent)
-        self.setWindowTitle(f"Participation consent form - {code}")
+        self.setWindowTitle("Participation consent forms" if " " in code else f"Participation consent form - {code}")
         self.resize(620, 640)
         layout = QVBoxLayout(self)
-        layout.addWidget(para("These details are printed on the form. Leave a field blank to fill it in by hand. "
-                              "They are kept for the next forms of this session; only the pseudonym changes."))
+        layout.addWidget(para("These details are printed on the form. Leave a field blank to get a line to write on "
+                              "instead. They are kept for the next forms of this session; only the pseudonym changes."))
 
         study = QFormLayout()
         self.study_name = QLineEdit(info.study_name)

@@ -46,7 +46,7 @@ The steps are listed on the left. A step becomes available when the previous one
 4. Set **Trials per participant** (usually 1). A session holds at most 10 trials in total.
 5. Add a row per participant with **Add participant** and enter each **height**, in metres or centimetres. Without it, the height is estimated, which is less accurate.
 6. Press **Create session**. Every participant gets a **pseudonym**, such as `PA26-K7M2QX4`. You can still add a participant later, or remove one who has no videos yet (select the row, then **Remove participant**).
-7. Press **Generate ...** in a participant's row for their **participation consent form**. The first time, a window asks for the study details: study name, purpose, researchers, data handling, risks and compensation. Leave a field blank to fill it in by hand. The details are kept for the next forms of the session; only the pseudonym changes.
+7. Press **Generate ...** in a participant's row for their **participation consent form**. The first time, a window asks for the study details: study name, purpose, researchers, data handling, risks and compensation. They are printed on the form as normal text; a field left blank gets a line to write on. The form is meant to be printed; it has no fields to fill in on screen. The details are kept for the next forms of the session; only the pseudonym changes. **Generate all consent forms ...** makes one PDF with every participant's form, ready to print.
 8. When you hold a signed form, tick **Signed consent received** for that participant.
 9. Tick **Consented to storing raw footage** only if the participant agreed to it. **Delete raw footage** then follows automatically; you can change it.
 

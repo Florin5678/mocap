@@ -157,6 +157,8 @@ def test_consent_dialog_keeps_the_study_details(qtbot, tmp_path, monkeypatch, no
     win.save_consent_pdf("T1-ABCDEF1")
     win.save_consent_pdf("T1-ABCDEF2")
     assert seen == [("T1-ABCDEF1", "", 1), ("T1-ABCDEF2", "Gait 2026", 2)]
+    win.pages[0].all_forms_button.click()
+    assert seen[-1][1:] == ("Gait 2026", 2) and saved[-1]["codes"] == ["T1-ABCDEF1", "T1-ABCDEF2"]
     assert saved[1]["code"] == "T1-ABCDEF2" and saved[1]["info"].study_name == "Gait 2026"
     assert load_session(tmp_path).study_info.researchers == [("A. First", ""), ("B. Second", "b@x")]
 

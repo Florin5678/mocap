@@ -256,14 +256,17 @@ class SetupPage(Page):
                             "follows the storage consent by default; deletion is done after a successful run and "
                             "export, and is always possible later."))
         self.people = QTableWidget(0, 6)
-        self.people.setHorizontalHeaderLabels(["Participant", "Height (m)", "Signed consent received",
-                                               "Consented to storing raw footage", "Delete raw footage",
-                                               "Consent form"])
+        self.people.setHorizontalHeaderLabels(["Participant", "Height (m)", "Signed consent\nreceived",
+                                               "Consented to storing\nraw footage", "Delete raw\nfootage",
+                                               "Consent\nform"])
         self.people.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self.people.horizontalHeader().setStretchLastSection(True)
         self.people.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         bl.addWidget(self.people)
         people_row = QHBoxLayout()
+        self.all_forms_button = QPushButton("Generate all consent forms ...")
+        self.all_forms_button.setToolTip("One PDF with every participant's consent form, ready to print.")
+        self.all_forms_button.clicked.connect(self.win.save_all_consent_pdfs)
         self.add_person_button = QPushButton("Add participant")
         self.add_person_button.clicked.connect(self.add_person)
         self.remove_person_button = QPushButton("Remove participant")
@@ -273,6 +276,7 @@ class SetupPage(Page):
         people_row.addWidget(self.add_person_button)
         people_row.addWidget(self.remove_person_button)
         people_row.addStretch()
+        people_row.addWidget(self.all_forms_button)
         bl.addLayout(people_row)
         layout.addWidget(box)
         self.existing_issues = IssueView()

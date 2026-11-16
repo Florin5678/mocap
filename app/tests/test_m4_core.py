@@ -42,26 +42,43 @@ def test_board_pdf(tmp_path):
         pdfs.board_pdf(tmp_path / "big.pdf", BoardSpec("chess", (9, 14), 60.0))
 
 
-def test_consent_pdf_fields_and_placeholders(tmp_path):
+def test_consent_pdf_is_plain_printable_text(tmp_path):
     from mocapapp.core.session import StudyInfo
 
     info = StudyInfo(study_name="Gait 2026", researchers=[("A. Researcher", "a@uni.example"), ("B. Second", "")],
-                     risks="Mild effort.")
+                     risks="Mild effort.", purpose="word " * 80)
     out = pdfs.consent_pdf(tmp_path / "c.pdf", "PA26-K7M2QX4", info=info)
     reader = pypdf.PdfReader(out)
-    fields = reader.get_fields()
-    assert fields["pseudonym"]["/V"] == "PA26-K7M2QX4" and fields["study_name"]["/V"] == "Gait 2026"
-    assert fields["researcher_s"]["/V"] == "A. Researcher (a@uni.example)\nB. Second"
-    assert fields["risks"]["/V"] == "Mild effort." and fields["purpose"].get("/V", "") == ""
-    assert {"study_name", "purpose", "researcher_s", "place_of_storage", "access", "usage", "retention", "risks",
-            "compensation", "consent", "raw_storage", "name", "date"} <= set(fields)
-    assert not {"height_m", "trial_code", "data_controller", "contact", "benefits_or_compensation"} & set(fields)
-    assert "mass" not in " ".join(fields).lower()
+    assert not reader.get_fields()  # no form boxes: what is entered in the app is printed text
     text = " ".join(" ".join(p.extract_text().split()) for p in reader.pages)
-    assert text.startswith("Participation consent form") and "pseudonym" in text and "withdraw" in text
-    for gone in ("TEMPLATE", "Your rights", "[", "Template version", "(printed)", "Height"):
+    assert text.startswith("Participation consent form") and "withdraw" in text
+    assert "Pseudonym: PA26-K7M2QX4" in text and "Study name: Gait 2026" in text
+    assert "A. Researcher (a@uni.example)" in text and "B. Second" in text and "Risks: Mild effort." in text
+    assert text.count("word") == 80  # long text wraps, nothing is cut off
+    assert "Compensation: ___" in text  # left blank in the app: a line to write on
+    for gone in ("TEMPLATE", "Your rights", "[", "Template version", "(printed)", "Height", "mass",
+                 "Data controller", "Benefits"):
         assert gone not in text, gone
     assert "(Optional) I consent" in text and "Data already published can no longer be removed." in text
+
+
+def test_all_consent_forms_in_one_pdf(tmp_path, capsys):
+    from mocapapp.core.session import StudyInfo, save_session
+    from tests.m3_fakes import make_session
+
+    out = pdfs.consent_pdf(tmp_path / "all.pdf", info=StudyInfo(study_name="Gait"), codes=["A-2345672", "B-2345672"])
+    pages = [" ".join(p.extract_text().split()) for p in pypdf.PdfReader(out).pages]
+    starts = [i for i, t in enumerate(pages) if t.startswith("Participation consent form")]
+    assert len(starts) == 2 and "Pseudonym: A-2345672" in " ".join(pages[:starts[1]])
+    assert "Pseudonym: B-2345672" in " ".join(pages[starts[1]:])
+    session = make_session(tmp_path / "s", n_trials=3)
+    save_session(session, tmp_path / "s")
+    assert main(["pdf", "consent", "--out", str(tmp_path / "cli.pdf"), "--session", str(tmp_path / "s"),
+                 "--all"]) == 0
+    text = " ".join(p.extract_text() for p in pypdf.PdfReader(tmp_path / "cli.pdf").pages)
+    assert all(f"T1-ABCDEF{i}" in text for i in (1, 2, 3))
+    with pytest.raises(SystemExit):
+        main(["pdf", "consent", "--out", str(tmp_path / "x.pdf"), "--all"])
 
 
 def test_cli_pdf(tmp_path, capsys):

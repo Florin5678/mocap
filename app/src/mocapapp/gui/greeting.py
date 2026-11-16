@@ -53,11 +53,13 @@ class GreetingDialog(QDialog):
         self.accept()
 
 
-def save_pdf(parent: QWidget, kind: str, code: str = "", board_spec=None, info=None) -> Path | None:
+def save_pdf(parent: QWidget, kind: str, code: str = "", board_spec=None, info=None,
+             codes: list[str] | None = None) -> Path | None:
     """Ask where to save the board or consent PDF, write it, and open it."""
     from mocapapp.core import pdfs
 
-    consent = f"participation_consent_{code}.pdf" if code else "participation_consent_form.pdf"
+    consent = ("participation_consent_forms.pdf" if codes else
+               f"participation_consent_{code}.pdf" if code else "participation_consent_form.pdf")
     default = "calibration_board.pdf" if kind == "board" else consent
     name, _ = QFileDialog.getSaveFileName(parent, "Save PDF", str(Path.home() / default), "PDF (*.pdf)")
     if not name:
@@ -69,7 +71,7 @@ def save_pdf(parent: QWidget, kind: str, code: str = "", board_spec=None, info=N
 
             out = pdfs.board_pdf(Path(name), board_spec or BoardSpec.from_settings(Settings()))
         else:
-            out = pdfs.consent_pdf(Path(name), code, info=info)
+            out = pdfs.consent_pdf(Path(name), code, info=info, codes=codes)
     except (OSError, pdfs.PdfError) as exc:
         error_box(parent, "PDF not saved", f"The PDF could not be written: {exc}")
         return None

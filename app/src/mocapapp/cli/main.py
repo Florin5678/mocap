@@ -423,8 +423,12 @@ def _cmd_pdf(args: argparse.Namespace) -> int:
     else:
         from mocapapp.core.session import load_session
 
-        info = load_session(Path(args.session)).study_info if args.session else None
-        print(pdfs.consent_pdf(Path(args.out), args.code or "", info=info))
+        session = load_session(Path(args.session)) if args.session else None
+        if args.all and session is None:
+            raise SystemExit("--all needs --session: the forms are made for that session's participants.")
+        codes = [p.code for p in session.active_participants] if args.all else None
+        print(pdfs.consent_pdf(Path(args.out), args.code or "", info=session.study_info if session else None,
+                               codes=codes))
     return 0
 
 
@@ -576,6 +580,7 @@ def build_parser() -> argparse.ArgumentParser:
     pc.add_argument("--out", required=True)
     pc.add_argument("--pseudonym", "--code", dest="code", help="pre-fill this pseudonym")
     pc.add_argument("--session", help="fill in the study details saved in this session folder")
+    pc.add_argument("--all", action="store_true", help="one PDF with a form for every participant of --session")
     for p in (pb, pc):
         p.set_defaults(func=_cmd_pdf)
 

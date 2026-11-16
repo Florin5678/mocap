@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import io
 import re
 from importlib import resources
@@ -9,13 +10,12 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-from reportlab.lib import colors
 from reportlab.lib.pagesizes import A3, A4, landscape
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.units import mm
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
-from reportlab.platypus import Flowable, Paragraph, SimpleDocTemplate, Spacer
+from reportlab.platypus import Flowable, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 from mocapapp.core.calibration.intrinsics import BoardSpec, charuco_board
 
@@ -97,30 +97,20 @@ def board_pdf(out: Path, spec: BoardSpec) -> Path:
 
 # ---------- consent form ----------
 
-class _Field(Flowable):
-    """An AcroForm field with a label, laid out by platypus."""
+class _Tickbox(Flowable):
+    """A printed square to tick by hand, with its sentence."""
 
-    def __init__(self, kind: str, name: str, label: str, value: str = "", width_mm: float = 80, lines: int = 1):
+    def __init__(self, label: str):
         super().__init__()
-        self.kind, self.name, self.label, self.value, self.lines = kind, name, label, value, lines
-        self.width = 170 * mm
-        self.box_h = (7 + 5 * (lines - 1)) * mm
-        self.height = self.box_h + 2 * mm if kind == "text" else 8 * mm
-        self.field_w = width_mm * mm
+        self.label = label
+        self.width, self.height = 170 * mm, 8 * mm
 
     def draw(self):
         c = self.canv
-        form = c.acroForm
+        c.setLineWidth(0.8)
+        c.rect(0, 1.5 * mm, 4.5 * mm, 4.5 * mm)
         c.setFont("Helvetica", 10)
-        if self.kind == "checkbox":
-            form.checkbox(name=self.name, x=0, y=1 * mm, size=5 * mm, buttonStyle="check", borderColor=colors.black,
-                          fillColor=colors.white, forceBorder=True, relative=True)
-            c.drawString(8 * mm, 2 * mm, self.label)
-        else:
-            c.drawString(0, self.box_h - 4 * mm, self.label)
-            form.textfield(name=self.name, value=self.value, x=55 * mm, y=0, width=self.field_w, height=self.box_h,
-                           borderColor=colors.black, fillColor=colors.white, fontSize=10, forceBorder=True,
-                           relative=True, fieldFlags="multiline" if self.lines > 1 else "")
+        c.drawString(8 * mm, 2.5 * mm, self.label)
 
 
 def _template_blocks(text: str):
@@ -146,12 +136,12 @@ def consent_text() -> str:
 
 
 BLANK = "____"  # in the template: something the researcher fills in
-MULTILINE = {"Purpose", "Researcher(s)", "Risks"}  # labelled blanks that get a taller box
-CHARS_PER_LINE = 60  # in a 115 mm box at 10 pt
+MULTILINE = {"Purpose", "Researcher(s)", "Risks"}  # blanks that get more lines to write on
+WRITE_LINE = "_" * 62  # a line to write on by hand, across the text column
 
 
 def study_values(info) -> dict[str, str]:
-    """The consent dialog's answers (StudyInfo) by template label; empty answers stay boxes to fill by hand."""
+    """The consent dialog's answers (StudyInfo) by template label; empty answers become lines to write on."""
     if info is None:
         return {}
     people = [f"{name} ({contact})" if contact.strip() else name for name, contact in info.researchers
@@ -161,25 +151,49 @@ def study_values(info) -> dict[str, str]:
             "Retention": info.retention, "Risks": info.risks, "Compensation": info.compensation}
 
 
-def _box_lines(label: str, value: str) -> int:
-    needed = sum(max(1, -(-len(line) // CHARS_PER_LINE)) for line in value.splitlines()) if value.strip() else 1
-    return max(3 if label in MULTILINE else 1, needed)
+def _detail(label: str, value: str, style) -> Table:
+    """'Label:' and its text, wrapped over as many lines as needed; a blank gets lines to write on."""
+    if value:
+        text = html.escape(value).replace("\n", "<br/>")
+    else:
+        text = "<br/><br/>".join([WRITE_LINE] * (3 if label in MULTILINE else 1))
+    table = Table([[Paragraph(f"<b>{html.escape(label)}:</b>", style), Paragraph(text, style)]],
+                  colWidths=[40 * mm, 130 * mm])
+    table.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"), ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                               ("TOPPADDING", (0, 0), (-1, -1), 2), ("BOTTOMPADDING", (0, 0), (-1, -1), 2)]))
+    table.hAlign = "LEFT"
+    return table
 
 
-def consent_pdf(out: Path, code: str = "", text: str | None = None, info=None) -> Path:
-    """The participation consent form. A paragraph 'Label: ____' becomes a fillable box (also fine on paper),
-    pre-filled from `info` (the session's StudyInfo); a blank inside a sentence becomes a line to write on."""
+def consent_pdf(out: Path, code: str = "", text: str | None = None, info=None,
+                codes: list[str] | None = None) -> Path:
+    """The participation consent form, a plain printable document (no form fields). A paragraph 'Label: ____'
+    shows the detail entered in the app (`info`, the session's StudyInfo) or, when blank, lines to write on.
+    With `codes`: one form per pseudonym in a single PDF, each starting on a new page."""
     styles = getSampleStyleSheet()
+    story = []
+    for i, c in enumerate(codes if codes else [code]):
+        if i:
+            story.append(PageBreak())
+        story += _consent_story(c, text, info, styles)
+    out = Path(out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    title = "Participation consent forms" if codes else "Participation consent form" + (f" {code}" if code else "")
+    doc = SimpleDocTemplate(str(out), pagesize=A4, leftMargin=20 * mm, rightMargin=20 * mm, topMargin=18 * mm,
+                            bottomMargin=18 * mm, title=title)
+    doc.build(story)
+    return out
+
+
+def _consent_story(code: str, text: str | None, info, styles) -> list:
+    normal = styles["Normal"]
     values = study_values(info)
     story = []
     for kind, body in _template_blocks(text or consent_text()):
         field = re.fullmatch(r"([^:]{1,40}):\s*" + re.escape(BLANK), body) if kind == "p" else None
         if field:
-            label = field.group(1)
-            value = values.get(label, "").strip()
-            story.append(_Field("text", re.sub(r"\W+", "_", label.lower()).strip("_"), label + ":", value, 115,
-                                lines=_box_lines(label, value)))
-            story.append(Spacer(1, 1 * mm))
+            story.append(_detail(field.group(1), values.get(field.group(1), "").strip(), normal))
+            story.append(Spacer(1, 1.5 * mm))
             continue
         body = body.replace(BLANK, "_" * 30)
         if kind == "h1":
@@ -187,23 +201,16 @@ def consent_pdf(out: Path, code: str = "", text: str | None = None, info=None) -
         elif kind == "h2":
             story.append(Paragraph(body, styles["Heading3"]))
         elif kind == "li":
-            story.append(Paragraph(body, styles["Normal"], bulletText="•"))
+            story.append(Paragraph(body, normal, bulletText="•"))
         else:
-            story.append(Paragraph(body, styles["Normal"]))
+            story.append(Paragraph(body, normal))
             story.append(Spacer(1, 2 * mm))
     story += [Spacer(1, 6 * mm), Paragraph("Consent", styles["Heading3"]),
-              _Field("text", "pseudonym", "Pseudonym", code, 50),
-              _Field("checkbox", "consent", "I have read this information and consent to taking part."),
-              _Field("checkbox", "raw_storage", "(Optional) I consent to my raw video footage being stored until "
-                                                "the study is finished."),
-              Spacer(1, 3 * mm),
-              _Field("text", "name", "Name", "", 100),
-              _Field("text", "date", "Date", "", 50),
-              Spacer(1, 10 * mm),
-              Paragraph("Signature: ______________________________________", styles["Normal"])]
-    out = Path(out)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    doc = SimpleDocTemplate(str(out), pagesize=A4, leftMargin=20 * mm, rightMargin=20 * mm, topMargin=18 * mm,
-                            bottomMargin=18 * mm, title="Participation consent form" + (f" {code}" if code else ""))
-    doc.build(story)
-    return out
+              _detail("Pseudonym", code, normal), Spacer(1, 3 * mm),
+              _Tickbox("I have read this information and consent to taking part."),
+              _Tickbox("(Optional) I consent to my raw video footage being stored until the study is finished."),
+              Spacer(1, 6 * mm),
+              Paragraph("Name: ______________________________________________", normal), Spacer(1, 6 * mm),
+              Paragraph("Date: ______________________", normal), Spacer(1, 10 * mm),
+              Paragraph("Signature: ______________________________________", normal)]
+    return story
