@@ -63,6 +63,23 @@ def _cmd_session_new(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_session_pseudonym(args: argparse.Namespace) -> int:
+    from mocapapp.core.session import load_session
+    from mocapapp.core.workflow import SetupError, new_pseudonym, rename_participant
+
+    root = Path(args.session)
+    session = load_session(root)
+    try:
+        session.participant(args.participant)
+        person = (new_pseudonym(session, root, args.participant) if args.random
+                  else rename_participant(session, root, args.participant, args.set))
+    except (SetupError, KeyError) as exc:
+        print(exc if isinstance(exc, SetupError) else f"There is no participant {args.participant} in this session.")
+        return 1
+    print(f"Participant {person.label}: pseudonym {person.code}")
+    return 0
+
+
 def _print_mapping(session, report) -> None:
     print(f"\nTrial mapping ({report.mapping_method}):")
     width = max([len(Path(f).name) for c in session.cameras for f in c.trial_files.values()] + [8])
@@ -602,6 +619,13 @@ def build_parser() -> argparse.ArgumentParser:
     new.add_argument("--extrinsic", action="append", metavar="camNN=FILE", help="extrinsic video outside the folder")
     new.add_argument("--out", required=True, help="output root; the session folder is created inside it")
     new.set_defaults(func=_cmd_session_new)
+    pn = ssub.add_parser("pseudonym", help="change a participant's pseudonym (before consent and results)")
+    pn.add_argument("--session", required=True)
+    pn.add_argument("--participant", required=True, help="participant number, e.g. 2")
+    group = pn.add_mutually_exclusive_group(required=True)
+    group.add_argument("--set", metavar="PSEUDONYM", help="the new pseudonym (letters, digits, - or _)")
+    group.add_argument("--random", action="store_true", help="a new random pseudonym")
+    pn.set_defaults(func=_cmd_session_pseudonym)
 
     val = sub.add_parser("validate", help="check inputs and show the trial mapping")
     val.add_argument("--session", required=True)

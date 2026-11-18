@@ -12,7 +12,7 @@ How the app handles personal data (PROJECT.md §8). This is not legal advice. Th
 | Height, pseudonym, consent record | `session.json`, `trials/trial_<label>/consent.json` | pseudonymised |
 | 3D markers, joint angles, scaled model | `pose-3d/`, `kinematics/`, `export/` | pseudonymised (movement can still identify a person) |
 
-Each participant's **pseudonym** (for example `PA26-K7M2QX4`) is pseudonymisation, not anonymisation. The signed consent form, which links the pseudonym to a name, stays with the experimenter, stored separately from the data. The app never stores names, e-mail addresses or body mass.
+Each participant's **pseudonym** (for example `PA26-K7M2QX4`) is pseudonymisation, not anonymisation. The signed consent form, which links the pseudonym to a name, stays with the experimenter, stored separately from the data. The app never stores names, e-mail addresses or body mass. The researcher can replace the random pseudonym with one of their own (letters, digits, `-`, `_`; it must not be the person's name) until signed consent is ticked or the participant has results; after that it is fixed, because the signed form and the exported file names carry it.
 
 ## Consent
 

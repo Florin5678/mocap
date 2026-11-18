@@ -195,6 +195,49 @@ def remove_participant(session: Session, root: Path, label: str) -> None:
     save_session(session, root)
 
 
+PSEUDONYM_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,23}$")
+
+
+def check_renamable(session: Session, label: str) -> Participant:
+    person = session.participant(label)
+    if person.withdrawn_at:
+        raise SetupError(f"Participant {label} withdrew; their pseudonym stays as it was.")
+    if person.consent.attested:
+        raise SetupError(f"The signed consent form of participant {label} carries the pseudonym {person.code}. To "
+                         "change it anyway, untick 'Signed consent received' first and correct the paper form.")
+    done = session.run_state
+    if any(t.label in done.trial_status or done.stage_done.get(t.label) for t in session.trials_of(label)):
+        raise SetupError(f"Participant {label} ({person.code}) already has results under this pseudonym, so it can "
+                         "no longer be changed.")
+    return person
+
+
+def rename_participant(session: Session, root: Path, label: str, code: str) -> Participant:
+    """Give a participant another pseudonym (typed by the researcher), before consent and results refer to it."""
+    code = code.strip()
+    person = session.participant(label)
+    if code == person.code:
+        return person
+    check_renamable(session, label)
+    if not PSEUDONYM_RE.match(code):
+        raise SetupError("A pseudonym is 1-24 letters, digits, '-' or '_' with no spaces, starting with a letter or "
+                         "digit. Do not use the participant's real name.")
+    taken = {c.upper() for c in existing_codes(Path(root).parent)} - {person.code.upper()}
+    taken |= {p.code.upper() for p in session.participants if p is not person}
+    if code.upper() in taken:
+        raise SetupError(f"The pseudonym {code} is already used in this output folder; choose another one.")
+    person.code = code
+    save_session(session, root)
+    return person
+
+
+def new_pseudonym(session: Session, root: Path, label: str) -> Participant:
+    """A fresh random pseudonym for a participant (the dice button)."""
+    check_renamable(session, label)
+    taken = existing_codes(Path(root).parent) | {p.code for p in session.participants}
+    return rename_participant(session, root, label, make_code(session.study_code, taken))
+
+
 def set_trial_participants(session: Session, table: dict[str, str]) -> None:
     """Which participant each trial belongs to (trial label -> participant label), from the Videos step."""
     ensure_not_frozen(session)

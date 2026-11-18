@@ -2,7 +2,7 @@
 
 Desktop app around Pose2Sim: multi-camera videos of one person → validated 3D pose (`.trc`/`.c3d`) and OpenSim kinematics (`.osim`/`.mot`/`.bvh`). **Research use only.** Spec: [`../PROJECT.md`](../PROJECT.md).
 
-Status: **0.1.0rc10, Milestone 6 (release candidate)**: installers for Windows and macOS, pose-model pre-download, first-start checks, user guide (Help > User guide, [`src/mocapapp/resources/user-guide.md`](src/mocapapp/resources/user-guide.md)) and the usability-test protocol ([`docs/usability-test.md`](docs/usability-test.md)) on top of M0-M5: the headless core (session setup, validation, calibration, the Pose2Sim runner, QA, export), the app window, and the privacy features ([`docs/privacy.md`](docs/privacy.md)). Still open for the release: the usability test with three new users. Upstream findings: [`docs/upstream-notes.md`](docs/upstream-notes.md).
+Status: **0.1.0rc11, Milestone 6 (release candidate)**: installers for Windows and macOS, pose-model pre-download, first-start checks, user guide (Help > User guide, [`src/mocapapp/resources/user-guide.md`](src/mocapapp/resources/user-guide.md)) and the usability-test protocol ([`docs/usability-test.md`](docs/usability-test.md)) on top of M0-M5: the headless core (session setup, validation, calibration, the Pose2Sim runner, QA, export), the app window, and the privacy features ([`docs/privacy.md`](docs/privacy.md)). Still open for the release: the usability test with three new users. Upstream findings: [`docs/upstream-notes.md`](docs/upstream-notes.md).
 
 ## Install (users)
 

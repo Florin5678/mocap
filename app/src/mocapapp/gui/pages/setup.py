@@ -18,8 +18,10 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSpinBox,
     QStackedWidget,
+    QStyle,
     QTableWidget,
     QTableWidgetItem,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -34,8 +36,11 @@ from mocapapp.core.workflow import (
     add_participant,
     camera_number,
     check_new_session,
+    check_renamable,
     create_session,
+    new_pseudonym,
     remove_participant,
+    rename_participant,
     sibling_camera_dirs,
 )
 from mocapapp.gui.common import IssueView, clear_table, error_box, fit_rows, last_output_root, note, para, readonly
@@ -251,7 +256,9 @@ class SetupPage(Page):
         layout.addWidget(note(s("cameras_stay_put")))
         box = QGroupBox("Participants")
         bl = QVBoxLayout(box)
-        bl.addWidget(para("<i>Generate ...</i> makes the participant's consent form. Tick <i>Signed consent "
+        bl.addWidget(para("Each participant gets a random pseudonym. Type another one, or click the arrow for a new "
+                            "random one, until their signed consent is received (never use real names). "
+                            "<i>Generate ...</i> makes the participant's consent form. Tick <i>Signed consent "
                             "received</i> once you hold the signed form for that pseudonym. <i>Delete raw footage</i> "
                             "follows the storage consent by default; deletion is done after a successful run and "
                             "export, and is always possible later."))
@@ -299,14 +306,16 @@ class SetupPage(Page):
         people = self.session.participants
         self.people.setRowCount(len(people))
         self.people.setVerticalHeaderLabels([f"Participant {p.label}" for p in people])
+        self.name_cells = {}
         for r, t in enumerate(people):
-            self.people.setItem(r, 0, readonly(t.code))
             trials = self.session.trials_of(t.label)
             if t.withdrawn_at or (trials and not any(x.raw_present for x in trials)):
+                self.people.setItem(r, 0, readonly(t.code))
                 gone = (f"all data deleted {t.withdrawn_at[:10]}" if t.withdrawn_at
                         else f"raw footage deleted {min(x.raw_deleted_at for x in trials)[:10]}")
                 self.people.setItem(r, 1, readonly(gone))
                 continue
+            self.people.setCellWidget(r, 0, self._name_cell(t))
             h = QLineEdit(height_text(t.height_m))
             h.setPlaceholderText("estimate")
             h.editingFinished.connect(lambda t=t, h=h: self._set_height(t, h))
@@ -323,7 +332,7 @@ class SetupPage(Page):
             for col, cb in ((2, attest), (3, storage), (4, delete)):
                 self.people.setCellWidget(r, col, cb)
             form = QPushButton("Generate ...")
-            form.clicked.connect(lambda _=False, c=t.code: self.win.save_consent_pdf(c))
+            form.clicked.connect(lambda _=False, t=t: self.win.save_consent_pdf(t.code))
             self.people.setCellWidget(r, 5, form)
         fit_rows(self.people)
         frozen = self.session.frozen
@@ -331,6 +340,62 @@ class SetupPage(Page):
         self.add_person_button.setToolTip("Raw footage was deleted in this session: start a new session for new "
                                           "participants." if frozen else "Adds a participant with a new pseudonym.")
         self.remove_person_button.setEnabled(len(people) > 1)
+        self._check_existing()
+
+    def _name_cell(self, person) -> QWidget:
+        """The pseudonym, editable, with a button for a new random one. Locked once consent or results refer to it."""
+        cell = QWidget()
+        row = QHBoxLayout(cell)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(2)
+        edit = QLineEdit(person.code)
+        edit.setMaxLength(24)
+        edit.setMinimumWidth(edit.fontMetrics().horizontalAdvance("M" * 13))
+        edit.editingFinished.connect(lambda p=person, e=edit: self._rename(p, e))
+        dice = QToolButton()
+        dice.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload))
+        dice.setToolTip("New random pseudonym")
+        dice.clicked.connect(lambda _=False, p=person, e=edit: self._randomize(p, e))
+        row.addWidget(edit, 1)
+        row.addWidget(dice)
+        self.name_cells[person.label] = (edit, dice)
+        self._update_name_lock(person)
+        return cell
+
+    def _update_name_lock(self, person) -> None:
+        edit, dice = self.name_cells.get(person.label, (None, None))
+        if edit is None:
+            return
+        try:
+            check_renamable(self.session, person.label)
+            reason = ""
+        except SetupError as exc:
+            reason = str(exc)
+        edit.setReadOnly(bool(reason))
+        dice.setEnabled(not reason)
+        edit.setToolTip(reason or "Type another pseudonym if you need to (letters, digits, - or _). "
+                                  "Never use the participant's real name.")
+
+    def _rename(self, person, edit: QLineEdit) -> None:
+        if edit.isReadOnly() or edit.text().strip() == person.code:
+            edit.setText(person.code)
+            return
+        try:
+            rename_participant(self.session, self.root, person.label, edit.text())
+        except SetupError as exc:
+            edit.setText(person.code)
+            error_box(self, "Pseudonym not changed", str(exc))
+            return
+        edit.setText(person.code)
+        self._check_existing()
+
+    def _randomize(self, person, edit: QLineEdit) -> None:
+        try:
+            new_pseudonym(self.session, self.root, person.label)
+        except SetupError as exc:
+            error_box(self, "Pseudonym not changed", str(exc))
+            return
+        edit.setText(person.code)
         self._check_existing()
 
     def add_person(self) -> None:
@@ -364,6 +429,7 @@ class SetupPage(Page):
         trial.consent.attested = on
         trial.consent.attested_at = datetime.now().isoformat(timespec="seconds") if on else None
         self.win.save()
+        self._update_name_lock(trial)
         self._check_existing()
 
     def _storage(self, trial, on: bool, delete_box: QCheckBox) -> None:

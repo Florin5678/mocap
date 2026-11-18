@@ -11,7 +11,9 @@ from mocapapp.core.workflow import (
     SetupError,
     add_participant,
     create_session,
+    new_pseudonym,
     remove_participant,
+    rename_participant,
     set_trial_participants,
 )
 from tests.m3_fakes import make_session
@@ -75,6 +77,45 @@ def test_trials_share_their_participant(tmp_path):
         create_session(NewSession(out_root=root, n_participants=4, camera_dirs=cams, trials_per_participant=3))
 
 
+def test_pseudonyms_can_be_changed_until_consent_or_results(tmp_path, capsys):
+    from mocapapp.cli.main import main
+    from mocapapp.core.privacy import is_valid_code
+
+    root = tmp_path / "out" / "s1"
+    session = make_session(root, n_trials=2, ready=False)
+    save_session(session, root)
+    rename_participant(session, root, "1", " P01 ")
+    assert load_session(root).participant("1").code == "P01" and session.trials[0].code == "P01"
+    for bad, msg in (("Anna Berg", "no spaces"), ("-x", "starting with"), ("p01", "already used")):
+        with pytest.raises(SetupError, match=msg):
+            rename_participant(session, root, "2", bad)
+    other = tmp_path / "out" / "s0"
+    old = make_session(other, n_trials=1)
+    old.participants[0].code = "TAKEN"
+    save_session(old, other)
+    with pytest.raises(SetupError, match="already used"):
+        rename_participant(session, root, "2", "taken")
+    person = new_pseudonym(session, root, "1")
+    assert person.code != "P01" and is_valid_code(person.code)
+
+    session.participant("2").consent.attested = True
+    with pytest.raises(SetupError, match="untick 'Signed consent received'"):
+        new_pseudonym(session, root, "2")
+    session.participant("2").consent.attested = False
+    session.run_state.trial_status["2"] = "done"
+    with pytest.raises(SetupError, match="already has results"):
+        rename_participant(session, root, "2", "P02")
+    session.run_state.trial_status.clear()
+    save_session(session, root)
+
+    assert main(["session", "pseudonym", "--session", str(root), "--participant", "2", "--set", "P02"]) == 0
+    assert load_session(root).participant("2").code == "P02"
+    assert main(["session", "pseudonym", "--session", str(root), "--participant", "2", "--random"]) == 0
+    assert is_valid_code(load_session(root).participant("2").code)
+    assert main(["session", "pseudonym", "--session", str(root), "--participant", "7", "--random"]) == 1
+    assert "no participant 7" in capsys.readouterr().out
+
+
 def test_withdrawal_deletes_every_trial_of_the_participant(tmp_path):
     session = _two_trials_one_person(tmp_path)
     plan = deletion.plan_participant(session, tmp_path, "2")
@@ -119,7 +160,7 @@ def test_setup_page_participants(qtbot, tmp_path, monkeypatch, no_boxes):
     setup.trials_spin.setValue(2)
     assert setup.spec().n_participants == 2 and setup.spec().n_trials == 4
 
-    session = make_session(tmp_path, n_trials=1)
+    session = make_session(tmp_path, n_trials=1, ready=False)
     win.set_session(tmp_path, session)
     assert setup.people.horizontalHeaderItem(0).text() == "Participant"
     assert setup.people.verticalHeaderItem(0).text() == "Participant 1"
@@ -130,6 +171,17 @@ def test_setup_page_participants(qtbot, tmp_path, monkeypatch, no_boxes):
     setup.people.selectRow(1)
     setup.remove_person()
     assert setup.people.rowCount() == 1 and len(load_session(tmp_path).participants) == 1
+
+    edit, dice = setup.name_cells["1"]
+    edit.setText("P01")
+    edit.editingFinished.emit()
+    assert load_session(tmp_path).participant("1").code == "P01"
+    dice.click()
+    assert edit.text() == session.participant("1").code != "P01"
+    setup.people.cellWidget(0, 2).setChecked(True)  # signed consent received: the pseudonym is fixed
+    assert edit.isReadOnly() and not dice.isEnabled()
+    setup.people.cellWidget(0, 2).setChecked(False)
+    assert not edit.isReadOnly() and dice.isEnabled()
 
 
 def test_consent_dialog_keeps_the_study_details(qtbot, tmp_path, monkeypatch, no_boxes):
