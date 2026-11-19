@@ -43,7 +43,7 @@ def overrides(session: Session, trial: Trial, scene_points: list[list[float]] | 
         "pose.mode": s.pose_mode,
         "pose.device": s.device,
         "pose.display_detection": False,
-        "pose.save_video": "to_video",
+        "pose.save_video": "to_video" if s.save_overlay else "none",
         "pose.blur_faces": True,
         "synchronization.synchronization_gui": False,
         "synchronization.display_sync_plots": False,

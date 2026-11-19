@@ -8,8 +8,9 @@ How the app handles personal data (PROJECT.md §8). This is not legal advice. Th
 |---|---|---|
 | Original recordings | the camera folders you chose (the app never changes them) | yes: video of an identifiable person |
 | Working copies | `inputs/camNN/trial_<label>.mp4`, `trials/trial_<label>/videos/` | yes |
-| Overlay videos/images, 2D keypoints | `trials/trial_<label>/pose/`, `pose-sync/camNN_json/`, `pose-associated/camNN_json/` | yes (faces are blurred, but not reliably) |
+| Overlay videos/images, 2D keypoints | `trials/trial_<label>/pose/`, `pose-sync/camNN_json/`, `pose-associated/camNN_json/` | yes (faces are blurred, but not reliably). Since 0.1.0rc13 no overlay videos are made unless switched on, and the 2D keypoints are removed when a trial finishes unless *Keep the 2D keypoint files* is ticked. |
 | Height, pseudonym, consent record | `session.json`, `trials/trial_<label>/consent.json` | pseudonymised |
+| Participant details per trial (height, weight, handedness, age, sex, custom; 0.1.0rc13) | `session.json` (`trials[].details`), exported as `export/trials.csv` and `manifest.json` (`trials`) | pseudonymised; combined with movement data they can help identify a person, so ask only what the study needs. Removed with *Delete all data of this participant* and with a deleted trial. |
 | 3D markers, joint angles, scaled model | `pose-3d/`, `kinematics/`, `export/` | pseudonymised (movement can still identify a person) |
 
 Each participant's **pseudonym** (for example `PA26-K7M2QX4`) is pseudonymisation, not anonymisation. The signed consent form, which links the pseudonym to a name, stays with the experimenter, stored separately from the data. The app never stores names, e-mail addresses or body mass. The researcher can replace the random pseudonym with one of their own (letters, digits, `-`, `_`; it must not be the person's name) until signed consent is ticked or the participant has results; after that it is fixed, because the signed form and the exported file names carry it.
@@ -52,6 +53,7 @@ There are three kinds of deletion:
 |---|---|---|
 | **Delete raw footage** (`delete-raw`) | (a) + (b), optionally (c) | (c) needs the pseudonym typed |
 | **Delete all data of this participant**, for withdrawal (`delete-session --trial`) | (a) + (b) + every result of every trial of that participant: the trial folders, their QA files and their exports. Optionally (c). | always type the pseudonym |
+| **Delete one trial** (step 2 *Remove trial ...*, `delete-trial`; 0.1.0rc13) | (a) + (b) + that trial's folder, QA files and exported files, and its row of `trials.csv`; the trial leaves the session. Optionally (c). | always type the pseudonym |
 | **Delete the whole session** (`delete-session`) | the session folder, optionally every trial's originals | type the session folder name |
 
 On the command line, nothing is deleted without `--yes`; without it, the command only lists what would go.

@@ -51,6 +51,7 @@ The steps are listed on the left. A step becomes available when the previous one
 7. Press **Generate ...** in a participant's row for their **participation consent form**. The first time, a window asks for the study details: study name, purpose, researchers, data handling, risks and compensation. They are printed on the form as normal text; a field left blank gets a line to write on. The form is meant to be printed; it has no fields to fill in on screen. The details are kept for the next forms of the session; only the pseudonym changes. **Generate all consent forms ...** makes one PDF with every participant's form, ready to print.
 8. When you hold a signed form, tick **Signed consent received** for that participant.
 9. Tick **Consented to storing raw footage** only if the participant agreed to it. **Delete raw footage** then follows automatically; you can change it.
+10. Under **Participant details asked per trial**, tick what you want to record for every trial: height (ticked by default), weight, handedness, age, sex, or your own details with **Add detail ...** (a number with a unit, a choice such as *left / right*, or a short text). Never ask for names or other details that identify the person. The ticked details become columns of the trial table in step 2. A custom detail can be removed again; built-in ones are unticked instead (values already entered are kept).
 
 A typical day: create the session and print the forms before the recordings, have the participants sign them, record, then continue with step 2.
 
@@ -68,7 +69,9 @@ Problems are listed with what to do. In particular:
 
 - If a calibration video is missing or named differently, use **Choose intrinsic/extrinsic ...**; the file may be in any folder.
 - If the app matched trial videos by recording time instead of by name, check the **mapping table** and correct it if needed.
-- With more than one trial per participant, the mapping table also has a **Participant** column: choose whose trial each row is, then **Save this mapping**. The app fills it in recording order (the first participant's trials first).
+- With more than one trial per participant, the mapping table also has a **Participant** column: choose whose trial each row is. The app fills it in recording order (the first participant's trials first).
+- The table has a column for every **participant detail** ticked in step 1. Fill them in per trial; changes are saved straight away. When a participant has several trials, the values entered for one are copied into their other trials that are still empty, so normally you enter them once and change only what differs (for example the weight on a later day). An empty height uses the participant's height from step 1.
+- **Add trial ...** adds a trial for a participant, for example one recorded on a later day: choose its video for every camera, **Save this mapping**, check and copy again. Trials already processed keep their numbers and results. **Remove trial ...** removes the selected trial (click its row number first). A trial that already has copied videos or results is deleted with them, after the list of files is shown and you type the pseudonym; the participant's other trials stay.
 
 The page then shows how many videos will be copied and how much disk space this needs. Press **Copy videos into the session**: the app copies the videos, converting them if needed; your original files are never changed.
 
@@ -98,12 +101,15 @@ For each camera, open the picture from its `extrinsic` video and **click every r
 
 If the app says points are *behind the camera*, an axis is probably flipped. It suggests which one.
 
+**A camera was moved between trials** (an exception: avoid it if you can). If a camera was moved or knocked between trials, record a new `extrinsic` video with it in its new place, showing the reference points. Then use the small **A camera was moved between trials ...** button under the table: choose the camera, the new video and the trials recorded from the new place. The camera gets an extra row; click the points on the new video as usual. Trials recorded from the new place use that position; the others keep the first one. **Position ...** in that row changes its trials or removes it. Trials whose camera position changes after they were processed have their 3D results recomputed at the next run.
+
 ### Step 6 – Run
 
 The summary shows every trial, camera and setting. Tick **I recorded a sync cue at the start of every trial**, then press **Run**.
 
 - **Time:** the estimate is shown before you start. On a laptop without a graphics card, expect several minutes per camera and minute of video.
 - **Stop:** you can stop at any time and press **Run** again later to resume; finished stages are kept.
+- **One trial at a time:** **Run this trial** in a trial's row runs only that trial. You can save the project, close the app, record the next participant another day, open the project again, add the trial (step 2), and run just that one; finished trials are not touched.
 - **Failures:** if one trial fails, the others continue. The reason is shown in plain words, with the full log under `trials/trial_<label>/mocap_logs/`.
 - **Synchronisation:** if the app is unsure that the cameras are lined up for a trial, that trial stops. Choose **Check sync ...** to inspect it in a player, or **Accept as is**.
 
@@ -113,6 +119,10 @@ The summary shows every trial, camera and setting. Tick **I recorded a sync cue 
 - **Keypoints:** *Body with feet* (26 points) suits most studies. *Whole body* adds hands and face (133 points); it is slower and needs a further download of about 210 MB the first time. *Whole body with wrists* uses the same detection but keeps only two points per hand.
 - **OpenSim body model:** *Full* has muscles and joint constraints. *Simple* computes joint angles over 10 times faster, but without muscles and with a stiffer spine and shoulders.
 - A **BVH animation** is always made, next to the OpenSim results.
+- **Save overlay videos:** a copy of each video with the detected skeleton drawn on it, to check the detection by eye. Off by default: they are about 1.5 times the size of the videos.
+- **Keep the 2D keypoint files of finished trials:** off by default. Finding keypoints writes one file per video frame, twice; with videos of several minutes that is several GB per trial. Once a trial has finished, the app removes them; its 3D results and joint angles stay. Later changes to smoothing or the body model still re-run without them; a change of keypoints or pose detection starts again from the videos anyway. Trials that stop early (for example to check the sync) keep theirs until they finish.
+
+**Disk space.** Before a run, the app estimates the space the working files need. If the drive may fill up, it warns you: free some space, run a few trials at a time, or move the session to a larger drive (step 1, **Change output folder ...**). Short recordings of only the movement you study save the most space and time.
 
 - **Smoothing cut-off:** 6 Hz suits walking. Faster movements need more, but the cut-off must stay below half the video frame rate: below 15 Hz for 30 fps video, below 30 Hz for 60 fps. The app checks this before it runs.
 - **Changing settings after a run:** allowed. **Run** then repeats only the stages the change affects, for example smoothing and everything after it. A change of pose detection repeats everything.
@@ -160,6 +170,8 @@ When you are done, press **Finished!**. The app saves the session, reminds you o
 - **Delete raw footage**: removes the copies of their videos, the overlay videos and the 2D keypoint files. The 3D results stay. Optionally, it also deletes the original recordings in the camera folders; you must type the pseudonym to confirm.
 - **Delete all data of this participant** (for example, when they withdraw consent): removes their footage, results and exported files. You must type the pseudonym to confirm.
 
+A single trial (for example a failed take) is deleted with **Remove trial ...** in step 2: its copies, results and exported files go, and it leaves the session. The participant's other trials stay.
+
 You can also delete the **whole session**; you must type the session folder name to confirm.
 
 Every deletion first shows the exact list of files and sizes. Files are deleted permanently, not moved to the Recycle Bin. Afterwards, the app reminds you of copies it cannot reach:
@@ -184,6 +196,9 @@ Details: the project's `app/docs/privacy.md`.
 | "The smoothing cut-off is too high for this video's frame rate" | Lower **Advanced > Smoothing cut-off** below half the frame rate (for 30 fps video: 14 Hz or less), then press **Run**. Only smoothing and later stages are repeated. |
 | Head below the feet | Z points down in your reference points: Z must point up. |
 | "Raw footage was deleted in this session" | After a deletion, the session's videos can no longer be changed. Start a new session for new recordings. |
+| "No space left on device" in a log | The drive filled up during the run. Free some space (or move the session to a larger drive) and press **Run** again: finished stages are kept. |
+| "No video chosen for trial N" | A trial was added: choose its video for every camera in the mapping table (step 2) and press **Save this mapping**. |
+| "extrinsics missing" for a camera position | A camera was marked as moved: click the reference points on its new extrinsic video (step 5), or remove that position. |
 | Anything else | **Help > Copy diagnostics** copies version and setup information (without your name or any participant data); paste it into your bug report. |
 
 ## 6. Command line (optional)

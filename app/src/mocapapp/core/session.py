@@ -36,6 +36,28 @@ def parse_height(value: str | float | None) -> float | None:
     return round(h, 3)
 
 
+class DetailField(BaseModel):
+    """A participant detail asked for every trial (0.1.0rc13): height, weight, handedness, ... or a custom one."""
+    key: str  # stable key in Trial.details
+    label: str
+    kind: Literal["number", "text", "choice"] = "text"
+    unit: str = ""
+    choices: list[str] = Field(default_factory=list)
+    enabled: bool = False
+    builtin: bool = False
+
+
+def default_details() -> list[DetailField]:
+    return [
+        DetailField(key="height", label="Height", kind="number", unit="m", enabled=True, builtin=True),
+        DetailField(key="weight", label="Weight", kind="number", unit="kg", builtin=True),
+        DetailField(key="handedness", label="Handedness", kind="choice", choices=["right", "left", "both"],
+                    builtin=True),
+        DetailField(key="age", label="Age", kind="number", unit="years", builtin=True),
+        DetailField(key="sex", label="Sex", kind="choice", choices=["female", "male", "other"], builtin=True),
+    ]
+
+
 class Consent(BaseModel):
     attested: bool = False
     attested_at: str | None = None
@@ -73,7 +95,18 @@ class Trial(BaseModel):
     # PROJECT.md §8.4: set by save_session when raw footage is kept with consent ("study finished")
     retention_until: str | None = None
     raw_deleted_at: str | None = None  # working copies + overlays + 2D keypoints deleted (§8.4)
+    details: dict[str, str] = Field(default_factory=dict)  # DetailField.key -> value for this trial (0.1.0rc13)
     _person: Participant | None = PrivateAttr(default=None)
+
+    @property
+    def height_m(self) -> float | None:
+        """This trial's height if one was entered for it, else the participant's (the pipeline uses this)."""
+        own = self.details.get("height")
+        return parse_height(own) if own else self.person.height_m
+
+    @height_m.setter
+    def height_m(self, value) -> None:
+        self.person.height_m = value
 
     @property
     def person(self) -> Participant:
@@ -82,7 +115,6 @@ class Trial(BaseModel):
         return self._person
 
     code = _delegate("code")
-    height_m = _delegate("height_m")
     consent = _delegate("consent")
     delete_raw = _delegate("delete_raw")
     withdrawn_at = _delegate("withdrawn_at")
@@ -102,12 +134,31 @@ class CalibVideo(VideoRef):
     status: Literal["pending", "ok", "warn", "fail"] = "pending"
 
 
+class CameraPosition(BaseModel):
+    """Another camera-position (extrinsic) video, for trials recorded after the camera was moved (0.1.0rc13).
+    The camera's main extrinsic video is position 1 and applies to every trial not listed here."""
+    key: str  # "2", "3", ...
+    file: str
+    trials: list[str] = Field(default_factory=list)
+
+
 class Camera(BaseModel):
     name: str  # cam01, cam02, ... (order = calibration order, see upstream-notes §2)
     source_dir: str
     intrinsic: CalibVideo | None = None
     extrinsic: VideoRef | None = None
     trial_files: dict[str, str] = Field(default_factory=dict)  # trial label -> source file
+    positions: list[CameraPosition] = Field(default_factory=list)
+
+    def position_for(self, trial: str) -> str:
+        """The position key a trial uses with this camera ("" = the main extrinsic video)."""
+        return next((p.key for p in self.positions if trial in p.trials), "")
+
+    def position(self, key: str) -> CameraPosition:
+        for p in self.positions:
+            if p.key == key:
+                return p
+        raise KeyError(f"{self.name} has no camera position {key}.")
 
 
 class FilterSettings(BaseModel):
@@ -124,6 +175,8 @@ class Settings(BaseModel):
     use_augmentation: bool = True
     make_bvh: bool = True  # always made since 0.1.0rc7; kept so that older session files load
     simple_model: bool = False  # OpenSim: Model_Pose2Sim_simple (fast IK, no muscles) instead of the full model
+    save_overlay: bool = False  # videos with the detected skeleton drawn on them (0.1.0rc13: off by default, large)
+    keep_keypoints: bool = False  # keep the 2D keypoint files of finished trials (they are only needed to re-run)
     board_type: Literal["charuco", "chess"] = "charuco"
     corners_nb: tuple[int, int] = (5, 8)  # internal corners [rows-1, cols-1]
     square_size_mm: float = 25.0
@@ -136,6 +189,7 @@ class RunState(BaseModel):
     sync: dict[str, dict] = Field(default_factory=dict)  # label -> {"offsets", "issues", "accepted"}
     errors: dict[str, str] = Field(default_factory=dict)  # label -> plain-language failure cause
     stage_settings: dict[str, dict[str, str]] = Field(default_factory=dict)  # label -> stage -> settings it ran with
+    keypoints_removed: dict[str, str] = Field(default_factory=dict)  # label -> when its 2D keypoint files were removed
     last_error: str | None = None
 
 
@@ -164,6 +218,7 @@ class Session(BaseModel):
     participants: list[Participant] = Field(default_factory=list)
     trials: list[Trial]
     study_info: StudyInfo = Field(default_factory=StudyInfo)
+    details: list[DetailField] = Field(default_factory=default_details)  # asked per trial (0.1.0rc13)
     cameras: list[Camera]
     extrinsics: list[dict] = Field(default_factory=list)
     settings: Settings = Field(default_factory=Settings)
@@ -236,6 +291,16 @@ class Session(BaseModel):
         """Raw footage was deleted for some trial: the session's videos can no longer be prepared again."""
         return any(not t.raw_present for t in self.trials)
 
+    @property
+    def asked_details(self) -> list[DetailField]:
+        return [d for d in self.details if d.enabled]
+
+    def detail(self, key: str) -> DetailField:
+        for d in self.details:
+            if d.key == key:
+                return d
+        raise KeyError(f"No participant detail '{key}' in this session.")
+
     def trial(self, label: str) -> Trial:
         for t in self.trials:
             if t.label == label:
@@ -274,6 +339,10 @@ class Layout:
     @property
     def calib_file(self) -> Path:
         return self.calibration_work / "Calib_scene.toml"
+
+    def trial_calib(self, label: str) -> Path:
+        """Calibration for a trial that uses another camera position (0.1.0rc13)."""
+        return self.calibration_work / f"Calib_scene_trial_{label}.toml"
 
     @property
     def trials(self) -> Path:

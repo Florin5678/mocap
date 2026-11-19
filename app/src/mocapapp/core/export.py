@@ -114,8 +114,9 @@ def export(session: Session, root: Path, selection: list[str], labels: list[str]
         raise ValueError(f"Unknown export items: {', '.join(unknown)}. Choose from: {', '.join(table)}.")
     warnings: list[str] = []
     files: list[dict] = []
+    exported = {t.label for t in session.active_trials if not labels or t.label in labels}
     for trial in session.active_trials:
-        if labels and trial.label not in labels:
+        if trial.label not in exported:
             continue
         tdir = layout.trial(trial.label)
         for key in selection:
@@ -140,6 +141,13 @@ def export(session: Session, root: Path, selection: list[str], labels: list[str]
                     entry["bvh_check"] = problems or "ok"
                     warnings += [f"{dst.name}: {p}" for p in problems]
                 files.append(entry)
+    # trials exported earlier (for example run and exported one at a time) stay listed
+    active = {t.label for t in session.active_trials}
+    files = [f for f in _previous(out, "files") if f.get("trial") in active - exported
+             and (out / f.get("file", "")).is_file()] + files
+    files.sort(key=lambda f: (int(f["trial"]) if str(f["trial"]).isdigit() else 0, f["file"]))
+    trials = trial_details(session)
+    _write_trials_csv(out, session, trials)
     _write_readme(out, session, selection, table)
     manifest = {
         "created_at": datetime.now().isoformat(timespec="seconds"),
@@ -147,6 +155,7 @@ def export(session: Session, root: Path, selection: list[str], labels: list[str]
         "versions": {**_versions(), "pose2sim_commit": session.pose2sim_commit},
         "settings": session.settings.model_dump(),
         "files": files,
+        "trials": trials,
         "qa": qa_summary or {},
         "citation": CITATION,
         "deletions": _previous_deletions(out),
@@ -155,14 +164,45 @@ def export(session: Session, root: Path, selection: list[str], labels: list[str]
     return out, warnings
 
 
-def _previous_deletions(out: Path) -> list:
+def _previous(out: Path, key: str) -> list:
     path = out / "manifest.json"
     if path.is_file():
         try:
-            return json.loads(path.read_text(encoding="utf-8")).get("deletions", [])
+            return json.loads(path.read_text(encoding="utf-8")).get(key, [])
         except ValueError:
             return []
     return []
+
+
+def _previous_deletions(out: Path) -> list:
+    return _previous(out, "deletions")
+
+
+def trial_details(session: Session) -> list[dict]:
+    """Per active trial: label, pseudonym and the participant details asked in this session (0.1.0rc13)."""
+    rows = []
+    for t in session.active_trials:
+        row = {"trial": t.label, "code": t.code}
+        for d in session.asked_details:
+            value = t.details.get(d.key, "")
+            if d.key == "height" and not value and t.height_m:
+                value = f"{t.height_m:g}"
+            row[d.key] = value
+        rows.append(row)
+    return rows
+
+
+def _write_trials_csv(out: Path, session: Session, rows: list[dict]) -> None:
+    import csv
+    import io
+
+    fields = session.asked_details
+    buf = io.StringIO()
+    writer = csv.writer(buf, lineterminator="\n")
+    writer.writerow(["trial", "pseudonym"] + [f"{d.label} ({d.unit})" if d.unit else d.label for d in fields])
+    for row in rows:
+        writer.writerow([row["trial"], row["code"]] + [row.get(d.key, "") for d in fields])
+    atomic_write_text(out / "trials.csv", buf.getvalue())
 
 
 def _write_readme(out: Path, session: Session, selection: list[str], table: dict[str, Kind]) -> None:
@@ -180,6 +220,8 @@ def _write_readme(out: Path, session: Session, selection: list[str], table: dict
     for key in selection:
         k = table[key]
         lines.append(f"  *_{k.name}{'.toml' if key == 'config' else '.' + key.split('.')[0]}: {k.describe}")
-    lines += ["", "manifest.json lists every file with its SHA-256 hash, the software versions and settings.", "",
+    lines += ["", "trials.csv lists every trial with its pseudonym and the participant details asked in the session "
+              "(also in manifest.json, 'trials').",
+              "manifest.json lists every file with its SHA-256 hash, the software versions and settings.", "",
               "Please cite:", CITATION]
     atomic_write_text(out / "README.txt", "\n".join(lines) + "\n")

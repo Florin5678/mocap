@@ -266,15 +266,34 @@ def validate(session: Session, session_root: Path | None = None, do_probe: bool 
                 report.add("error", f.name, str(exc), "Replace or remove this file.")
 
     # Rule 4: trial mapping
-    manual = all(t.mapping_method == "manual" for t in session.trials) and all(
-        len(c.trial_files) == n_trials for c in session.cameras)
-    if manual:
+    if _keep_mapping(session):
+        # Trials already processed (or added later with their own videos) keep their labels and files: an automatic
+        # mapping could renumber them and mix up results. Missing videos are asked for in the mapping table.
         report.mapping_method = "manual"
-        mapping = {c.name: {lbl: Path(f) for lbl, f in c.trial_files.items()} for c in session.cameras}
-        for cam, files in mapping.items():
-            for lbl, f in files.items():
-                if not f.is_file():
-                    report.add("action", f"{cam} trial {lbl}", f"{f} no longer exists.", "Fix the mapping table.")
+        for trial in session.trials:
+            if not trial.raw_present:
+                continue
+            for cam in session.cameras:
+                f = cam.trial_files.get(trial.label)
+                if not f:
+                    report.add("action", f"{cam.name} trial {trial.label}",
+                               f"No video chosen for trial {trial.label} ({trial.participant}).",
+                               "Choose it in the mapping table of the Videos step.")
+                elif not Path(f).is_file() and session.run_state.trial_status.get(trial.label) == "done":
+                    report.add("info", f"{cam.name} trial {trial.label}", f"The original video {Path(f).name} is "
+                               "gone. The trial's results are kept, but it can only be run again from the copy in "
+                               "the session.")
+                elif not Path(f).is_file():
+                    report.add("action", f"{cam.name} trial {trial.label}", f"{f} no longer exists.",
+                               "Fix the mapping table.")
+                elif do_probe and str(Path(f)) not in report.probes:
+                    try:
+                        report.probes[str(Path(f))] = probe(Path(f))
+                    except MediaError as exc:
+                        report.add("error", Path(f).name, str(exc), "Replace or remove this file.")
+        if do_probe:
+            _check_media(session, report, [t.label for t in session.trials])
+        return report
     else:
         for cam, files in per_cam_trials.items():
             if len(files) != n_trials:
@@ -303,6 +322,21 @@ def validate(session: Session, session_root: Path | None = None, do_probe: bool 
     if do_probe:
         _check_media(session, report, labels)
     return report
+
+
+def _keep_mapping(session: Session) -> bool:
+    """Use the trial labels and files as they are (no automatic mapping)?
+
+    Yes when any trial was processed or its footage deleted, when every trial was mapped by hand, or when trials
+    were added by hand (0.1.0rc13) and the others already have all their videos."""
+    rs = session.run_state
+    if any(rs.stage_done.get(t.label) or t.label in rs.trial_status or not t.raw_present for t in session.trials):
+        return True
+    manual = [t.mapping_method == "manual" for t in session.trials]
+    if all(manual):
+        return any(c.trial_files for c in session.cameras)
+    return any(manual) and all(c.trial_files.get(t.label) for t, m in zip(session.trials, manual, strict=True)
+                               if not m for c in session.cameras)
 
 
 def _ref(role: str, file: str, origin: str):

@@ -103,6 +103,16 @@ class RunPage(Page):
         form.addRow(self.no_aug)
         form.addRow("OpenSim body model", self.body_model)
         form.addRow(para("Seated, crouching or lying movements: model scaling is less reliable (Pose2Sim)."))
+        self.overlay_box = QCheckBox("Save overlay videos (the video with the detected skeleton drawn on it)")
+        self.overlay_box.setToolTip("Useful to check the detection by eye, but about 1.5 times the size of the videos. "
+                                    "Applies to trials whose keypoints are found from now on.")
+        self.keep_box = QCheckBox("Keep the 2D keypoint files of finished trials")
+        self.keep_box.setToolTip("They are only needed to compute the 3D positions again without repeating the "
+                                 "keypoint search. Without them a later re-run starts from the videos.")
+        form.addRow(self.overlay_box)
+        form.addRow(self.keep_box)
+        form.addRow(para("Working files take a lot of space with long videos: by default the 2D keypoint files are "
+                         "removed once a trial has finished, and no overlay videos are made."))
         self.stale_note = para("")
         self.stale_note.setVisible(False)
         form.addRow(self.stale_note)
@@ -110,7 +120,8 @@ class RunPage(Page):
         adv.toggled.connect(self.adv_inner.setVisible)
         al = QVBoxLayout(adv)
         al.addWidget(self.adv_inner)
-        for w in (self.mode, self.keypoints, self.cutoff, self.no_aug, self.body_model):
+        for w in (self.mode, self.keypoints, self.cutoff, self.no_aug, self.body_model, self.overlay_box,
+                  self.keep_box):
             sig = (w.currentIndexChanged if isinstance(w, QComboBox) else
                    w.valueChanged if isinstance(w, QDoubleSpinBox) else w.toggled)
             sig.connect(self._settings_changed)
@@ -145,8 +156,8 @@ class RunPage(Page):
 
         res = QGroupBox("Trials")
         rl = QVBoxLayout(res)
-        self.trials = QTableWidget(0, 5)
-        self.trials.setHorizontalHeaderLabels(["Trial", "Pseudonym", "State", "", ""])
+        self.trials = QTableWidget(0, 6)
+        self.trials.setHorizontalHeaderLabels(["Trial", "Pseudonym", "State", "", "", ""])
         self.trials.horizontalHeader().setStretchLastSection(False)
         rl.addWidget(self.trials)
         rl.addWidget(note("If a trial's synchronisation looks unreliable it stops before 3D positions are computed. "
@@ -174,6 +185,8 @@ class RunPage(Page):
         self.no_aug.setChecked(not st.use_augmentation)
         self.keypoints.setCurrentIndex(max(0, self.keypoints.findData(st.keypoints)))
         self.body_model.setCurrentIndex(1 if st.simple_model else 0)
+        self.overlay_box.setChecked(st.save_overlay)
+        self.keep_box.setChecked(st.keep_keypoints)
         self.sync_box.setChecked(ses.sync_cue_confirmed)
         self._loading = False
         # settings stay editable after a run: Run repeats only the stages a change affects (runner.stale_stages).
@@ -199,10 +212,15 @@ class RunPage(Page):
                 cal = "imported (sample)"
             else:
                 i = intr.load_result(work, c.name)
-                e = next((x for x in ses.extrinsics if x.get("camera") == c.name), None)
+                e = next((x for x in ses.extrinsics if x.get("camera") == c.name and not x.get("position")), None)
                 cal = (f"lens {i.rms_px:.2f} px" if i else "lens ?") + (
                     f", position {e['error_cm']:.2f} cm" + (" (accepted above limit)" if e.get("overridden") else "")
                     if e else ", position ?")
+                for pos in c.positions:  # the camera was moved between trials
+                    pe = next((x for x in ses.extrinsics
+                               if x.get("camera") == c.name and x.get("position") == pos.key), None)
+                    cal += (f"; moved for trial(s) {', '.join(pos.trials)}: "
+                            + (f"{pe['error_cm']:.2f} cm" if pe else "position ?"))
             files = ", ".join(Path(f).name for f in c.trial_files.values())
             cams.append(f"<tr><td>{c.name}</td><td>{html.escape(c.source_dir)}</td><td>{cal}</td>"
                         f"<td>{html.escape(files)}</td></tr>")
@@ -250,6 +268,8 @@ class RunPage(Page):
         st.use_augmentation = not self.no_aug.isChecked()
         st.keypoints = self.keypoints.currentData()
         st.simple_model = bool(self.body_model.currentData())
+        st.save_overlay = self.overlay_box.isChecked()
+        st.keep_keypoints = self.keep_box.isChecked()
         rs = self.session.run_state
         for t in self.session.active_trials:  # results made with other settings are no longer final
             if rs.trial_status.get(t.label) == "done" and runner.stale_stages(self.session, t.label):
@@ -289,6 +309,12 @@ class RunPage(Page):
             for col, b in ((3, fix), (4, accept)):
                 b.setEnabled(status == "needs_sync_fix" and not self.win.busy)
                 self.trials.setCellWidget(r, col, b)
+            one = QPushButton("Run this trial")
+            one.setToolTip("Runs (or continues) only this trial, for example one recorded later. The other trials "
+                           "are not touched.")
+            one.clicked.connect(lambda _=False, lb=t.label: self.start([lb]))
+            one.setEnabled(t.raw_present and not t.withdrawn_at and not self.win.busy)
+            self.trials.setCellWidget(r, 5, one)
         self.trials.resizeColumnsToContents()
         fit_rows(self.trials)
         self.trials.horizontalHeader().setStretchLastSection(False)
@@ -308,7 +334,7 @@ class RunPage(Page):
         labels = labels or [t.label for t in ses.trials]
         resume = not self.restart_box.isChecked()
         try:
-            assemble_trials(ses, root, progress=lambda m: None)  # current settings, heights and points
+            assemble_trials(ses, root, progress=lambda m: None, labels=labels)  # current settings and points
             if not resume:
                 for lb in labels:
                     ses.run_state.stage_done.pop(lb, None)

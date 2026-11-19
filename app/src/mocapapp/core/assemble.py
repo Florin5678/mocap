@@ -57,11 +57,15 @@ def plan_inputs(session: Session, root: Path, report: Report) -> Plan:
     for cam in session.cameras:
         sources.append((Path(cam.intrinsic.file), layout.inputs(cam.name) / "intrinsic.mp4"))
         sources.append((Path(cam.extrinsic.file), layout.inputs(cam.name) / "extrinsic.mp4"))
+        for pos in cam.positions:  # the camera was moved between trials (0.1.0rc13)
+            sources.append((Path(pos.file), layout.inputs(cam.name) / f"extrinsic_{pos.key}.mp4"))
         for label, f in cam.trial_files.items():
             if not session.trial(label).raw_present:
                 continue
+            if not Path(f).is_file() and session.run_state.trial_status.get(label) == "done":
+                continue  # finished trial whose original was removed later: its copy (if any) stays as it is
             sources.append((Path(f), layout.inputs(cam.name) / f"trial_{label}.mp4"))
-    trial_files = [Path(f) for c in session.cameras for f in c.trial_files.values()]
+    trial_files = [Path(f) for c in session.cameras for f in c.trial_files.values() if Path(f).is_file()]
     plan = Plan(target_fps=_common_fps(report, trial_files))
     root.mkdir(parents=True, exist_ok=True)
     plan.bytes_free = shutil.disk_usage(root).free
@@ -119,8 +123,11 @@ def _scene_points(root: Path) -> list[list[float]] | None:
     return [[p["x"], p["y"], p["z"]] for p in data.get("points", [])] or None
 
 
-def assemble_trials(session: Session, root: Path, progress: Progress = print) -> list[Path]:
-    """Create trials/trial_<label>/ with Config.toml, videos/camNN.mp4 and (if computed) calibration."""
+def assemble_trials(session: Session, root: Path, progress: Progress = print,
+                    labels: list[str] | None = None) -> list[Path]:
+    """Create trials/trial_<label>/ with Config.toml, videos/camNN.mp4 and (if computed) calibration.
+
+    labels: only these trials (a single trial run); None = all."""
     layout = Layout(root)
     if (layout.trials / "Config.toml").exists():
         raise RuntimeError(f"{layout.trials / 'Config.toml'} must not exist: Pose2Sim would treat all trials as one "
@@ -128,9 +135,13 @@ def assemble_trials(session: Session, root: Path, progress: Progress = print) ->
     points = _scene_points(root)
     made = []
     for trial in session.trials:
-        if not trial.raw_present:
+        if not trial.raw_present or (labels is not None and trial.label not in labels):
             continue
         tdir = layout.trial(trial.label)
+        missing = [c.name for c in session.cameras
+                   if not (layout.inputs(c.name) / f"trial_{trial.label}.mp4").is_file()]
+        if missing and session.run_state.trial_status.get(trial.label) == "done":
+            continue  # finished, and its copies were removed later: leave the trial folder as it is
         (tdir / "videos").mkdir(parents=True, exist_ok=True)
         # Upstream picks the first folder with 'calib' in its name: never create another one here.
         for cam in session.cameras:  # cam01, cam02, ... same order as Calib_scene.toml (upstream-notes §2)
@@ -139,12 +150,14 @@ def assemble_trials(session: Session, root: Path, progress: Progress = print) ->
                 raise FileNotFoundError(f"{src} is missing. Prepare the videos first (mocapapp assemble).")
             _link_or_copy(src, tdir / "videos" / f"{cam.name}.mp4")
         atomic_write_text(tdir / "Config.toml", build_config(session, trial, points))
-        if layout.calib_file.is_file():
+        calib = layout.trial_calib(trial.label)  # a trial recorded after a camera moved has its own
+        calib = calib if calib.is_file() else layout.calib_file
+        if calib.is_file():
             calib_dir = tdir / "calibration"
             calib_dir.mkdir(exist_ok=True)
             for old in calib_dir.glob("*.toml"):  # upstream uses the newest .toml: keep exactly one
                 old.unlink()
-            shutil.copy2(layout.calib_file, calib_dir / "Calib_scene.toml")
+            shutil.copy2(calib, calib_dir / "Calib_scene.toml")
         progress(f"trial {trial.label} ({trial.code}) -> {tdir}")
         made.append(tdir)
     return made

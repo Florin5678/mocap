@@ -13,6 +13,7 @@ import math
 import os
 import queue
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -20,6 +21,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 from mocapapp.core.config_gen import gui_flags_set
@@ -38,9 +40,10 @@ STAGE_TITLES = {
     "kinematics": "Scaling the OpenSim model and computing joint angles",
 }
 LOG_DIR = "mocap_logs"
+KEYPOINT_STAGES = ("poseEstimation", "synchronization", "personAssociation")  # their output is 2D keypoint files
 
 
-def stage_inputs(session: Session, stage: str) -> str:
+def stage_inputs(session: Session, stage: str, label: str | None = None) -> str:
     """The settings a stage's result depends on. When they change, the stage (and every later one) runs again."""
     st = session.settings
     # settings added later only appear when not at their default, so older records still match
@@ -48,6 +51,13 @@ def stage_inputs(session: Session, stage: str) -> str:
             "filtering": [st.filter.type, st.filter.cutoff_hz, st.filter.order],
             "markerAugmentation": [st.use_augmentation],
             "kinematics": [st.use_augmentation, True] + (["simple model"] if st.simple_model else [])}.get(stage, [])
+    if stage == "triangulation" and label is not None:  # a camera moved before this trial: its later position
+        for cam in session.cameras:
+            key = cam.position_for(label)
+            if key:
+                entry = next((e for e in session.extrinsics
+                              if e.get("camera") == cam.name and e.get("position") == key), {})
+                deps.append(f"{cam.name}:{key}:{entry.get('error_px', '')}")
     return json.dumps(deps)
 
 
@@ -55,7 +65,7 @@ def stale_stages(session: Session, label: str) -> list[str]:
     """Finished stages whose settings were changed since they ran (sessions from before 0.1.0rc6 count as current)."""
     record = session.run_state.stage_settings.get(label, {})
     return [s for s in session.run_state.stage_done.get(label, [])
-            if s in record and record[s] != stage_inputs(session, s)]
+            if s in record and record[s] != stage_inputs(session, s, label)]
 
 
 KEYPOINT_TITLES = {"Body_with_feet": "Body with feet", "Whole_body_wrist": "Whole body with wrists",
@@ -287,7 +297,50 @@ def preflight(session: Session, root: Path, labels: list[str]) -> list[Issue]:
                                 f"at {fps:g} frames per second: it must be below half the frame rate ({fps / 2:g} Hz).",
                                 f"Set 'Smoothing cut-off' under Advanced to {max_cutoff_hz(fps)} Hz or less "
                                 "(6 Hz suits walking)."))
+    need = space_needed(session, root, labels)
+    if need:
+        free = shutil.disk_usage(root).free
+        if need > free:
+            kept = ("" if session.settings.keep_keypoints else
+                    " Finished trials give most of it back (their 2D keypoint files are removed).")
+            issues.append(Issue("warning", "disk space",
+                                f"The run may need about {need / 1e9:.0f} GB for working files, and "
+                                f"{free / 1e9:.0f} GB are free. A full drive stops the run half-way.{kept}",
+                                "Free some space, run a few trials at a time, or move the session to a larger drive "
+                                "(Session step > Change output folder)."))
     return issues
+
+
+# Size of one 2D keypoint file (one camera, one frame), measured on long videos where the tracker kept many lost
+# people as empty entries (P&A pilot, 0.1.0rc12): the worst case seen, not the usual one.
+KEYPOINT_BYTES_PER_FRAME = {"Body_with_feet": 25_000, "Whole_body_wrist": 110_000, "Whole_body": 110_000}
+OVERLAY_FACTOR = 1.5  # overlay video size relative to the trial video
+RESULTS_BYTES = 100_000_000  # 3D markers, OpenSim model and angles per trial, generous
+
+
+def space_needed(session: Session, root: Path, labels: list[str]) -> int:
+    """Rough bytes the run still writes for these trials (0 when no pose estimation is left to do).
+
+    Per trial: the keypoint files twice (pose and pose-sync stay until the trial finishes), overlay videos when
+    switched on and the results; plus one more keypoint copy (pose-associated) for the largest trial."""
+    per_frame = KEYPOINT_BYTES_PER_FRAME.get(session.settings.keypoints, 110_000)
+    total = biggest = 0
+    for label in labels:
+        trial = session.trial(label)
+        done = session.run_state.stage_done.get(label, [])
+        if not trial.raw_present or ("poseEstimation" in done and "poseEstimation" not in stale_stages(session, label)):
+            continue
+        frames = video_bytes = 0
+        for cam in session.cameras:
+            video = Layout(root).trial(label) / "videos" / f"{cam.name}.mp4"
+            if video.is_file():
+                frames += _probe_frames(str(video), video.stat().st_mtime_ns)
+                video_bytes += video.stat().st_size
+        keypoints = int(frames * per_frame)
+        biggest = max(biggest, keypoints)
+        total += 2 * keypoints + RESULTS_BYTES + (int(video_bytes * OVERLAY_FACTOR) if session.settings.save_overlay
+                                                  else 0)
+    return total + biggest if total else 0
 
 
 def estimate_seconds(session: Session, root: Path, labels: list[str]) -> float:
@@ -323,6 +376,17 @@ def _probe_fps(video: str, mtime_ns: int) -> float:  # cached: the Run page chec
     return probe(Path(video)).fps
 
 
+@functools.lru_cache(maxsize=256)
+def _probe_frames(video: str, mtime_ns: int) -> int:
+    from mocapapp.core.media import probe
+
+    try:
+        info = probe(Path(video))
+    except Exception:  # unreadable video: the stages report it
+        return 0
+    return int(info.duration_s * info.fps)
+
+
 def _sync_gate(session: Session, root: Path, label: str, accept: bool, listener: Listener) -> bool:
     """Stop before triangulation when the sync looks unreliable and nobody accepted it (also on resume)."""
     info = session.run_state.sync.setdefault(label, {"offsets": {}, "issues": [], "accepted": False})
@@ -352,16 +416,31 @@ def run_trial(session: Session, root: Path, label: str, listener: Listener = lam
     todo = stages or STAGES
     rs.trial_status[label] = "running"
     rs.errors.pop(label, None)
+    cleaned = label in rs.keypoints_removed
+    if cleaned and resume and "triangulation" in todo and not (
+            "triangulation" in done and "triangulation" not in stale
+            and check_outputs(tdir, "triangulation", cams, session) is None):
+        # 3D must be computed again but the 2D keypoints were removed after the last run: start from the videos
+        rs.stage_done[label] = done = []
+        cleaned = False
     save_session(session, root)
 
+    def finished(stage: str) -> bool:
+        if cleaned and stage in KEYPOINT_STAGES:  # their output was removed on purpose; the 3D results are kept
+            return True
+        return check_outputs(tdir, stage, cams, session) is None
+
     for i, stage in enumerate(todo):
-        if resume and stage in done and stage not in stale and check_outputs(tdir, stage, cams, session) is None:
+        if resume and stage in done and stage not in stale and finished(stage):
             listener(Event("stage_end", label, stage, "already done", ok=True))
             if stage == "synchronization" and not _sync_gate(session, root, label, accept_sync, listener):
                 return False
             continue
         # a re-run stage makes every later stage stale
         rs.stage_done[label] = done = [s for s in done if STAGES.index(s) < STAGES.index(stage)]
+        if stage == "poseEstimation":
+            rs.keypoints_removed.pop(label, None)
+            cleaned = False
         listener(Event("stage_start", label, stage, STAGE_TITLES[stage], fraction=i / len(todo)))
         t0 = time.perf_counter()
 
@@ -390,7 +469,7 @@ def run_trial(session: Session, root: Path, label: str, listener: Listener = lam
             listener(Event("trial_end", label, stage, rs.errors[label], ok=False))
             return False
         done.append(stage)
-        rs.stage_settings.setdefault(label, {})[stage] = stage_inputs(session, stage)
+        rs.stage_settings.setdefault(label, {})[stage] = stage_inputs(session, stage, label)
         save_session(session, root)
         listener(Event("stage_end", label, stage, f"{time.perf_counter() - t0:.0f} s", ok=True))
 
@@ -402,9 +481,31 @@ def run_trial(session: Session, root: Path, label: str, listener: Listener = lam
                 return False
 
     rs.trial_status[label] = "done" if all(s in done for s in STAGES) else "partial"
+    if rs.trial_status[label] == "done" and not session.settings.keep_keypoints:
+        freed = remove_keypoints(tdir)
+        if label not in rs.keypoints_removed or freed:
+            rs.keypoints_removed[label] = datetime.now().isoformat(timespec="seconds")
+        if freed:
+            listener(Event("line", label, "", f"2D keypoint files removed ({freed / 1e9:.1f} GB freed)."))
     save_session(session, root)
     listener(Event("trial_end", label, "", rs.trial_status[label], ok=True))
     return True
+
+
+def remove_keypoints(trial_dir: Path) -> int:
+    """Delete a finished trial's 2D keypoint folders (pose, pose-sync, pose-associated). Returns the bytes freed.
+
+    Only the 3D stages read them; they are 70-85 % of a trial folder for long videos."""
+    from mocapapp.core.deletion import KEYPOINT_FOLDERS, _remove, _size
+
+    freed = 0
+    for name in KEYPOINT_FOLDERS:
+        folder = trial_dir / name
+        if folder.is_dir():
+            size = _size(folder)
+            _remove(folder)
+            freed += size
+    return freed
 
 
 def run_session(session: Session, root: Path, labels: list[str] | None = None, listener: Listener = lambda e: None,

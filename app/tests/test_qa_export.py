@@ -132,5 +132,5 @@ def test_cli_run_qa_export(tmp_path, monkeypatch, capsys):
     assert main(["qa", "--session", s]) == 0
     assert "Model fit (IK marker RMS, mean): 22.5 mm -> GOOD" in capsys.readouterr().out
     assert main(["export", "--session", s, "--select", "trc.filt_lstm,bvh"]) == 0
-    assert sorted(p.suffix for p in (tmp_path / "export").iterdir()) == [".bvh", ".json", ".trc", ".txt"]
+    assert sorted(p.suffix for p in (tmp_path / "export").iterdir()) == [".bvh", ".csv", ".json", ".trc", ".txt"]
     assert main(["export", "--session", s, "--select", "nope"]) == 1

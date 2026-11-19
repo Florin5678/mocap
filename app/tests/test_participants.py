@@ -237,8 +237,8 @@ def test_videos_page_maps_trials_to_participants(qtbot, tmp_path, monkeypatch, n
     monkeypatch.setattr(videos, "check", lambda: None)
     videos.refresh()
     grid = videos.grid
-    assert [grid.horizontalHeaderItem(c).text() for c in range(grid.columnCount())] == ["Participant", "cam01",
-                                                                                      "cam02"]
+    assert [grid.horizontalHeaderItem(c).text() for c in range(grid.columnCount())] == [
+        "Participant", "Height (m)", "cam01", "cam02"]  # participant details are asked per trial (0.1.0rc13)
     assert grid.verticalHeaderItem(0).text() == "Trial 1"
     assert grid.cellWidget(1, 0).currentData() == "1"
     grid.cellWidget(1, 0).setCurrentIndex(grid.cellWidget(1, 0).findData("2"))

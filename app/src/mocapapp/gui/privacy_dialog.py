@@ -61,6 +61,7 @@ class DeleteDialog(QDialog):
         self.result_: deletion.DeletionResult | None = None
         trial = session.trial(label) if label else None
         titles = {"raw": f"Delete raw footage of trial {label} ({trial.code if trial else ''})",
+                  "trial": f"Delete trial {label} ({trial.code if trial else ''}) with its data",
                   "participant": f"Delete all data of participant {trial.participant if trial else ''} "
                                  f"({trial.code if trial else ''})",
                   "session": f"Delete the whole session {root.name}"}
@@ -69,6 +70,9 @@ class DeleteDialog(QDialog):
         layout = QVBoxLayout(self)
         intro = {"raw": "The working copies of the videos and everything derived from them that shows or traces "
                         "the person are deleted. The 3D results are kept.",
+                 "trial": "The trial is removed from the session with everything made from it: working copies of "
+                          "its videos, keypoints, 3D results, joint angles, QA and exported files. The "
+                          "participant's other trials are not affected.",
                  "participant": "Use this when a participant withdraws consent: the raw footage of every trial of "
                                 "theirs and every result computed from it are deleted. Other participants are not "
                                 "affected.",
@@ -103,6 +107,8 @@ class DeleteDialog(QDialog):
         try:
             if self.scope == "raw":
                 self.plan = deletion.plan_raw(self.session, self.root, self.label, orig, after_run=self.after_run)
+            elif self.scope == "trial":
+                self.plan = deletion.plan_trial(self.session, self.root, self.label, orig)
             elif self.scope == "participant":
                 self.plan = deletion.plan_participant(self.session, self.root, self.label, orig)
             else:
@@ -122,7 +128,7 @@ class DeleteDialog(QDialog):
 
     def _update_button(self) -> None:
         p = self.plan
-        ok = p is not None and not p.blockers and bool(p.items) and (
+        ok = p is not None and not p.blockers and (bool(p.items) or p.scope == "trial") and (
             p.confirm_text is None or self.confirm_edit.text().strip().casefold() == p.confirm_text.casefold())
         self.delete_button.setEnabled(ok)
 

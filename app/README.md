@@ -36,6 +36,8 @@ mocapapp scene check|show --session <dir>
 mocapapp calibrate frame --session <dir> --camera cam01          # PNG to read pixel positions from
 mocapapp calibrate extrinsics --session <dir> --camera cam01 --points clicks.csv   # label,u,v or hidden
 mocapapp calibrate status --session <dir>
+mocapapp calibrate position --session <dir> --camera cam01 --add <video> --trials 3,4   # only if a camera was moved between trials
+mocapapp calibrate extrinsics --session <dir> --camera cam01 --position 2 --points clicks.csv   # then click that position
 mocapapp assemble --session <dir>                       # build trials/trial_<label>/ with Config.toml + calibration
 mocapapp confirm --session <dir> --sync-cue                # a sync cue was recorded in every trial
 mocapapp consent --session <dir> --trial 1 --attest [--raw-storage yes|no]
@@ -47,9 +49,14 @@ mocapapp data --session <dir> --trial 1 [--columns elbow_flex_r,arm_flex_r] [--c
 mocapapp data --session <dir> --trial 1 --markers [raw|smoothed|'smoothed + LSTM'] [--columns 'RWrist Y']
 mocapapp session pseudonym --session <dir> --participant 2 --set P02|--random
 mocapapp session move --session <dir> --to <new output folder> [--dry-run]   # change the output folder later
+mocapapp session details --session <dir> [--enable weight] [--add "Leg length:number:cm"] [--add "Dominant leg:choice:left/right"]
+mocapapp session trial-details --session <dir> --trial 1 [--set weight=70 --set handedness=left]
+mocapapp session add-trial --session <dir> --participant 2       # e.g. recorded later; then map, prepare, run --trial
+mocapapp session remove-trial --session <dir> --trial 3          # only a trial without copied videos or results
 mocapapp project save --session <dir> --out study.mocapproj [--step viewer]; mocapapp project show <file>
 mocapapp delete-raw --session <dir> --trial 1 [--include-originals] [--after-run]     # lists only; add --yes [--confirm CODE]
 mocapapp delete-session --session <dir> [--trial 1] [--include-originals]           # withdrawal / whole session; --yes --confirm
+mocapapp delete-trial --session <dir> --trial 3 [--include-originals]               # one trial with its results; --yes --confirm
 mocapapp reminders --root <output root>                    # sessions whose raw footage is still stored
 mocapapp models [--download] [--mode balanced|all]       # pose models, needed once; then offline
 mocapapp diagnostics                                       # versions and checks for bug reports (no personal data)

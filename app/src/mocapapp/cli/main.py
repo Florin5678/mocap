@@ -23,7 +23,7 @@ def _pairs(values: list[str] | None, what: str) -> dict[str, str]:
     out = {}
     for v in values or []:
         key, sep, val = v.partition("=")
-        if not sep or not key or not val:
+        if not sep or not key or (not val and what != "set"):
             raise SystemExit(f"--{what} expects NAME=VALUE, got '{v}'.")
         out[key.strip()] = val.strip()
     return out
@@ -100,6 +100,110 @@ def _cmd_session_move(args: argparse.Namespace) -> int:
     print("A project file (.mocapproj) for this session must be saved again: "
           f"mocapapp project save --session \"{dest}\" --out <file>")
     return 1 if warnings else 0
+
+
+def _print_details(session) -> None:
+    for d in session.details:
+        kind = {"number": f"number{f' ({d.unit})' if d.unit else ''}", "choice": "choice: " + " / ".join(d.choices),
+                "text": "text"}[d.kind]
+        print(f"  [{'x' if d.enabled else ' '}] {d.key}: {d.label} - {kind}{'' if d.builtin else ' (custom)'}")
+
+
+def _cmd_session_details(args: argparse.Namespace) -> int:
+    """Which participant details are asked per trial (0.1.0rc13)."""
+    from mocapapp.core.session import load_session
+    from mocapapp.core.workflow import SetupError, add_detail, remove_detail, set_detail_enabled
+
+    root = Path(args.session)
+    session = load_session(root)
+    try:
+        for spec in args.add or []:
+            label, _, rest = spec.partition(":")
+            kind, _, extra = rest.partition(":")
+            kind = kind.strip().lower() or "text"
+            if kind == "choice":
+                add_detail(session, root, label, "choice", choices=extra.replace(",", "/").split("/"))
+            else:
+                add_detail(session, root, label, kind, unit=extra)
+        for key in args.enable or []:
+            set_detail_enabled(session, root, key, True)
+        for key in args.disable or []:
+            set_detail_enabled(session, root, key, False)
+        for key in args.remove or []:
+            try:
+                remove_detail(session, root, key)
+            except KeyError:
+                raise SetupError(f"No participant detail '{key}' in this session.") from None
+    except SetupError as exc:
+        print(exc)
+        return 1
+    print("Participant details ([x] = asked for every trial):")
+    _print_details(session)
+    return 0
+
+
+def _cmd_session_trial_details(args: argparse.Namespace) -> int:
+    from mocapapp.core.session import load_session
+    from mocapapp.core.workflow import SetupError, set_trial_detail
+
+    root = Path(args.session)
+    session = load_session(root)
+    try:
+        trial = session.trial(args.trial)
+        for key, value in _pairs(args.set, "set").items():
+            try:
+                set_trial_detail(session, root, args.trial, key, value)
+            except KeyError:
+                raise SetupError(f"No participant detail '{key}' in this session (see: mocapapp session "
+                                 "details).") from None
+    except (SetupError, KeyError) as exc:
+        print(exc if isinstance(exc, SetupError) else f"There is no trial {args.trial} in this session.")
+        return 1
+    print(f"Trial {trial.label} ({trial.code}):")
+    for d in session.asked_details:
+        value = trial.details.get(d.key, "")
+        if d.key == "height" and not value:
+            value = f"{trial.height_m:g} (participant's height)" if trial.height_m else "not given (estimated)"
+        print(f"  {d.label}: {value or '-'}{f' {d.unit}' if value and d.unit and d.key != 'height' else ''}")
+    return 0
+
+
+def _cmd_session_add_trial(args: argparse.Namespace) -> int:
+    from mocapapp.core.session import load_session
+    from mocapapp.core.workflow import SetupError, add_trial
+
+    root = Path(args.session)
+    session = load_session(root)
+    try:
+        trial = add_trial(session, root, args.participant)
+    except (SetupError, KeyError) as exc:
+        print(exc if isinstance(exc, SetupError) else f"There is no participant {args.participant} in this session.")
+        return 1
+    print(f"Trial {trial.label} added for participant {trial.participant} ({trial.code}); details copied from "
+          "their earlier trial.")
+    print(f"Next: choose its videos with mocapapp map --session \"{root}\" --set camNN:{trial.label}=FILE "
+          "(one per camera), then mocapapp prepare.")
+    return 0
+
+
+def _cmd_session_remove_trial(args: argparse.Namespace) -> int:
+    from mocapapp.core.session import load_session
+    from mocapapp.core.workflow import SetupError, remove_empty_trial
+
+    root = Path(args.session)
+    session = load_session(root)
+    try:
+        remove_empty_trial(session, root, args.trial)
+    except SetupError as exc:
+        print(str(exc).replace("Delete it with its data instead (you will be asked to type the pseudonym).",
+                               f"Delete it with its data: mocapapp delete-trial --session \"{root}\" "
+                               f"--trial {args.trial}"))
+        return 1
+    except KeyError:
+        print(f"There is no trial {args.trial} in this session.")
+        return 1
+    print(f"Trial {args.trial} removed.")
+    return 0
 
 
 def _print_mapping(session, report) -> None:
@@ -282,12 +386,13 @@ def _cmd_calibrate(args: argparse.Namespace) -> int:
                 for a in r.advice:
                     print(f"    -> {a}")
         elif args.calib_command == "frame":
-            print(service.export_frame(root, args.camera, args.frame))
+            print(service.export_frame(root, args.camera, args.frame, args.position))
             print("Measure the pixel position (u = from left, v = from top) of each visible reference point and "
                   "write label,u,v lines to a CSV ('hidden' for points this camera cannot see).")
         elif args.calib_command == "extrinsics":
             clicks = ex.read_clicks_csv(Path(args.points).read_text(encoding="utf-8-sig"))
-            r = service.run_extrinsics(session, root, args.camera, clicks, args.frame, args.override)
+            r = service.run_extrinsics(session, root, args.camera, clicks, args.frame, args.override,
+                                       position=args.position)
             pos = ", ".join(f"{v:.2f}" for v in r.camera_position)
             print(f"{r.camera}: {r.rms_px:.2f} px = {r.rms_cm:.2f} cm from {r.n_points} points; camera at ({pos}) m "
                   f"-> {r.status.upper()}{' (overridden)' if r.overridden else ''}")
@@ -299,7 +404,12 @@ def _cmd_calibrate(args: argparse.Namespace) -> int:
         elif args.calib_command == "status":
             for cam, state in service.calibration_state(session, root).items():
                 print(f"{cam}: {state}")
+            for cam in session.cameras:
+                for p in cam.positions:
+                    print(f"{cam.name} position {p.key} (camera moved) is used by trial(s) {', '.join(p.trials)}")
             return 0
+        elif args.calib_command == "position":
+            return _calibrate_position(args, session, root)
         if args.calib_command in ("intrinsics", "extrinsics"):
             state = service.calibration_state(session, root)
             if all(s == "ready" for s in state.values()):
@@ -307,8 +417,44 @@ def _cmd_calibrate(args: argparse.Namespace) -> int:
     except (service.CalibrationStepError, ex.ExtrinsicsError, ValueError) as exc:
         print(exc)
         return 1
+    except KeyError as exc:
+        print(str(exc).strip("'\""))
+        return 1
     finally:
         save_session(session, root)
+    return 0
+
+
+def _calibrate_position(args: argparse.Namespace, session, root: Path) -> int:
+    """A camera moved between trials (0.1.0rc13): another extrinsic video for some trials."""
+    from mocapapp.core.workflow import (
+        SetupError,
+        add_camera_position,
+        prepare_position,
+        remove_camera_position,
+        set_position_trials,
+    )
+
+    trials = [t.strip() for t in (args.position_trials or "").split(",") if t.strip()]
+    try:
+        if args.add:
+            pos = add_camera_position(session, root, args.camera, Path(args.add), trials)
+            prepare_position(session, root, args.camera, pos.key)
+            print(f"{args.camera} position {pos.key} added for trial(s) {', '.join(pos.trials)}.")
+            print(f"Next: mocapapp calibrate frame --session \"{root}\" --camera {args.camera} --position {pos.key}, "
+                  f"then calibrate extrinsics with --position {pos.key}.")
+        elif not args.position:
+            print("Give --add FILE for a new position, or --position KEY with --trials or --remove.")
+            return 1
+        elif args.remove:
+            remove_camera_position(session, root, args.camera, args.position)
+            print(f"{args.camera} position {args.position} removed; its trials use the main position again.")
+        else:
+            set_position_trials(session, root, args.camera, args.position, trials)
+            print(f"{args.camera} position {args.position} is used by trial(s) {', '.join(trials)}.")
+    except (SetupError, OSError) as exc:
+        print(exc)
+        return 1
     return 0
 
 
@@ -494,6 +640,8 @@ def _delete(args: argparse.Namespace, scope: str) -> int:
     try:
         if scope == "raw":
             plan = deletion.plan_raw(session, root, args.trial, args.include_originals, after_run=args.after_run)
+        elif scope == "trial":
+            plan = deletion.plan_trial(session, root, args.trial, args.include_originals)
         elif args.trial:
             plan = deletion.plan_participant(session, root, args.trial, args.include_originals)
         else:
@@ -526,6 +674,10 @@ def _cmd_delete_raw(args: argparse.Namespace) -> int:
 
 def _cmd_delete_session(args: argparse.Namespace) -> int:
     return _delete(args, "participant")
+
+
+def _cmd_delete_trial(args: argparse.Namespace) -> int:
+    return _delete(args, "trial")
 
 
 def _cmd_reminders(args: argparse.Namespace) -> int:
@@ -741,6 +893,28 @@ def build_parser() -> argparse.ArgumentParser:
     mv.add_argument("--to", required=True, help="the new output folder; the session folder moves into it")
     mv.add_argument("--dry-run", action="store_true", help="only check and show what would happen")
     mv.set_defaults(func=_cmd_session_move)
+    sd = ssub.add_parser("details", help="which participant details are asked for every trial")
+    sd.add_argument("--session", required=True)
+    sd.add_argument("--enable", action="append", metavar="KEY", help="ask this detail (e.g. weight)")
+    sd.add_argument("--disable", action="append", metavar="KEY", help="stop asking this detail")
+    sd.add_argument("--add", action="append", metavar="SPEC",
+                    help="a custom detail: 'Leg length:number:cm', 'Dominant leg:choice:left/right' or 'Notes:text'")
+    sd.add_argument("--remove", action="append", metavar="KEY", help="remove a custom detail and its values")
+    sd.set_defaults(func=_cmd_session_details)
+    st = ssub.add_parser("trial-details", help="show or set a trial's participant details")
+    st.add_argument("--session", required=True)
+    st.add_argument("--trial", required=True)
+    st.add_argument("--set", action="append", metavar="KEY=VALUE", help="e.g. height=1.78, weight=70, "
+                    "handedness=left; empty value clears it")
+    st.set_defaults(func=_cmd_session_trial_details)
+    sa = ssub.add_parser("add-trial", help="another trial for a participant (details copied from their first)")
+    sa.add_argument("--session", required=True)
+    sa.add_argument("--participant", required=True, help="participant number, e.g. 2")
+    sa.set_defaults(func=_cmd_session_add_trial)
+    sr = ssub.add_parser("remove-trial", help="remove a trial that has no copied videos or results yet")
+    sr.add_argument("--session", required=True)
+    sr.add_argument("--trial", required=True)
+    sr.set_defaults(func=_cmd_session_remove_trial)
 
     val = sub.add_parser("validate", help="check inputs and show the trial mapping")
     val.add_argument("--session", required=True)
@@ -782,8 +956,19 @@ def build_parser() -> argparse.ArgumentParser:
     ce.add_argument("--points", required=True)
     ce.add_argument("--frame", type=int, default=0)
     ce.add_argument("--override", action="store_true", help="accept an error above 2.5 cm (recorded in the session)")
+    for p in (cf, ce):
+        p.add_argument("--position", default="", help="a later position of a camera that was moved (see "
+                                                       "calibrate position)")
+    cp = csub.add_parser("position", help="only if a camera was moved between trials: another extrinsic video "
+                                          "for the trials recorded after the move")
+    cp.add_argument("--camera", required=True)
+    cp.add_argument("--add", metavar="FILE", help="the extrinsic video recorded in the new position")
+    cp.add_argument("--position", help="an existing position (2, 3, ...)")
+    cp.add_argument("--trials", dest="position_trials",
+                    help="comma list of the trials recorded in this position, e.g. 3,4")
+    cp.add_argument("--remove", action="store_true", help="remove --position (its trials use the main one again)")
     cs = csub.add_parser("status", help="what is calibrated and what is missing")
-    for p in (ci, cf, ce, cs):
+    for p in (ci, cf, ce, cp, cs):
         p.add_argument("--session", required=True)
         p.set_defaults(func=_cmd_calibrate)
 
@@ -830,7 +1015,11 @@ def build_parser() -> argparse.ArgumentParser:
                                                "session (dry run unless --yes)")
     ds.add_argument("--trial", help="only this participant (withdrawal); omit to delete the whole session")
     ds.set_defaults(func=_cmd_delete_session)
-    for p in (dr, ds):
+    dt = sub.add_parser("delete-trial", help="remove one trial with its videos, results and exports; the "
+                                             "participant's other trials stay (dry run unless --yes)")
+    dt.add_argument("--trial", required=True)
+    dt.set_defaults(func=_cmd_delete_trial)
+    for p in (dr, ds, dt):
         p.add_argument("--session", required=True)
         p.add_argument("--include-originals", action="store_true",
                        help="also delete the original recordings in the camera folders")

@@ -7,6 +7,9 @@ from pathlib import Path
 
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
     QFileDialog,
     QFormLayout,
     QGroupBox,
@@ -33,17 +36,30 @@ from mocapapp.core.workflow import (
     MAX_TRIALS,
     NewSession,
     SetupError,
+    add_detail,
     add_participant,
     camera_number,
     check_new_session,
     check_renamable,
     create_session,
     new_pseudonym,
+    remove_detail,
     remove_participant,
     rename_participant,
+    set_detail_enabled,
     sibling_camera_dirs,
 )
-from mocapapp.gui.common import IssueView, clear_table, error_box, fit_rows, last_output_root, note, para, readonly
+from mocapapp.gui.common import (
+    IssueView,
+    clear_table,
+    confirm,
+    error_box,
+    fit_rows,
+    last_output_root,
+    note,
+    para,
+    readonly,
+)
 from mocapapp.gui.main_window import Page
 
 
@@ -56,6 +72,52 @@ def _scroll(widget: QWidget) -> QScrollArea:
 
 def height_text(value: float | None) -> str:
     return "" if value is None else f"{value:.2f}"
+
+
+def detail_title(d) -> str:
+    return f"{d.label} ({d.unit})" if d.unit else d.label
+
+
+class DetailDialog(QDialog):
+    """A new participant detail: a name, and whether it is a number (with a unit), a choice or free text."""
+
+    KINDS = (("number", "Number"), ("choice", "Choice"), ("text", "Text"))
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Add participant detail")
+        form = QFormLayout(self)
+        self.name = QLineEdit()
+        self.name.setMaxLength(40)
+        self.name.setPlaceholderText("for example Leg length")
+        self.kind = QComboBox()
+        for key, title in self.KINDS:
+            self.kind.addItem(title, key)
+        self.unit = QLineEdit()
+        self.unit.setMaxLength(12)
+        self.unit.setPlaceholderText("for example cm")
+        self.options = QLineEdit()
+        self.options.setPlaceholderText("for example left, right")
+        form.addRow("Name", self.name)
+        form.addRow("Kind", self.kind)
+        form.addRow("Unit", self.unit)
+        form.addRow("Options", self.options)
+        form.addRow(para("<i>Never ask for names or other details that identify the person.</i>"))
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        form.addRow(buttons)
+        self.kind.currentIndexChanged.connect(self._kind_changed)
+        self._kind_changed()
+
+    def _kind_changed(self) -> None:
+        kind = self.kind.currentData()
+        self.unit.setEnabled(kind == "number")
+        self.options.setEnabled(kind == "choice")
+
+    def values(self) -> tuple[str, str, str, list[str]]:
+        return (self.name.text(), self.kind.currentData(), self.unit.text(),
+                [o.strip() for o in self.options.text().split(",") if o.strip()])
 
 
 class SetupPage(Page):
@@ -294,6 +356,23 @@ class SetupPage(Page):
         people_row.addWidget(self.all_forms_button)
         bl.addLayout(people_row)
         layout.addWidget(box)
+        details = QGroupBox("Participant details asked per trial")
+        dl = QVBoxLayout(details)
+        dl.addWidget(para("Ticked details get a column in the trial table of step 2 (Videos), filled in for every "
+                          "trial. A participant's next trials start with the values of their first one. The height "
+                          "above is the default for their trials; it scales the body model."))
+        self.details_list = QWidget()
+        self.details_layout = QVBoxLayout(self.details_list)
+        self.details_layout.setContentsMargins(0, 0, 0, 0)
+        dl.addWidget(self.details_list)
+        add_row = QHBoxLayout()
+        self.add_detail_button = QPushButton("Add detail ...")
+        self.add_detail_button.setToolTip("A custom detail, for example leg length or dominant leg.")
+        self.add_detail_button.clicked.connect(self.add_detail_dialog)
+        add_row.addWidget(self.add_detail_button)
+        add_row.addStretch()
+        dl.addLayout(add_row)
+        layout.addWidget(details)
         self.existing_issues = IssueView()
         self.existing_issues.setMaximumHeight(160)
         layout.addWidget(self.existing_issues)
@@ -348,7 +427,57 @@ class SetupPage(Page):
         self.add_person_button.setToolTip("Raw footage was deleted in this session: start a new session for new "
                                           "participants." if frozen else "Adds a participant with a new pseudonym.")
         self.remove_person_button.setEnabled(len(people) > 1)
+        self._fill_details()
         self._check_existing()
+
+    def _fill_details(self) -> None:
+        while self.details_layout.count():
+            item = self.details_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self.detail_boxes = {}
+        for d in self.session.details:
+            row = QWidget()
+            rl = QHBoxLayout(row)
+            rl.setContentsMargins(0, 0, 0, 0)
+            box = QCheckBox(detail_title(d))
+            box.setChecked(d.enabled)
+            kind = {"number": "number", "choice": " / ".join(d.choices), "text": "text"}[d.kind]
+            box.setToolTip(f"{kind}{'' if d.builtin else ' (added for this session)'}")
+            box.toggled.connect(lambda on, key=d.key: self._detail_toggled(key, on))
+            rl.addWidget(box)
+            if not d.builtin:
+                remove = QToolButton()
+                remove.setText("Remove")
+                remove.setToolTip("Removes this detail and the values entered for it.")
+                remove.clicked.connect(lambda _=False, key=d.key: self.remove_detail(key))
+                rl.addWidget(remove)
+            rl.addStretch()
+            self.details_layout.addWidget(row)
+            self.detail_boxes[d.key] = box
+
+    def _detail_toggled(self, key: str, on: bool) -> None:
+        set_detail_enabled(self.session, self.root, key, on)
+
+    def add_detail_dialog(self) -> None:
+        dialog = DetailDialog(self)
+        while dialog.exec() == QDialog.DialogCode.Accepted:
+            try:
+                add_detail(self.session, self.root, *dialog.values())
+            except SetupError as exc:
+                error_box(self, "Detail not added", str(exc))
+                continue
+            self._fill_details()
+            return
+
+    def remove_detail(self, key: str) -> None:
+        d = self.session.detail(key)
+        filled = sum(1 for t in self.session.trials if t.details.get(key))
+        if filled and not confirm(self, "Remove detail", f"Remove '{d.label}' and the values entered for {filled} "
+                                  "trial(s)?", "Remove"):
+            return
+        remove_detail(self.session, self.root, key)
+        self._fill_details()
 
     def _name_cell(self, person) -> QWidget:
         """The pseudonym, editable, with a button for a new random one. Locked once consent or results refer to it."""

@@ -8,11 +8,14 @@ from pathlib import Path
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QComboBox,
+    QDialog,
     QFileDialog,
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
+    QInputDialog,
     QLabel,
+    QLineEdit,
     QPushButton,
     QScrollArea,
     QTableWidget,
@@ -25,14 +28,19 @@ from mocapapp.core.session import save_session
 from mocapapp.core.validate import scan_dir, validate
 from mocapapp.core.workflow import (
     SetupError,
+    add_trial,
     inputs_ready,
     pick_video,
     prepare_session,
+    remove_empty_trial,
     set_mapping,
+    set_trial_detail,
     set_trial_participants,
+    trial_has_data,
 )
-from mocapapp.gui.common import Background, IssueView, clear_table, error_box, fit_rows, note, readonly
+from mocapapp.gui.common import Background, IssueView, clear_table, confirm, error_box, fit_rows, note, readonly
 from mocapapp.gui.main_window import Page
+from mocapapp.gui.pages.setup import detail_title
 
 LOW = QColor("#fff3cd")
 
@@ -76,7 +84,21 @@ class VideosPage(Page):
         ml.addWidget(self.grid)
         self.save_mapping_button = QPushButton("Save this mapping")
         self.save_mapping_button.clicked.connect(self.save_mapping)
-        ml.addWidget(self.save_mapping_button)
+        self.add_trial_button = QPushButton("Add trial ...")
+        self.add_trial_button.clicked.connect(self.add_trial)
+        self.remove_trial_button = QPushButton("Remove trial ...")
+        self.remove_trial_button.setToolTip("Removes the selected trial (click its row number first; otherwise the "
+                                            "last one). A trial with copied videos or results is deleted with them, "
+                                            "after you type the pseudonym.")
+        self.remove_trial_button.clicked.connect(self.remove_trial)
+        mrow = QHBoxLayout()
+        mrow.addWidget(self.save_mapping_button)
+        mrow.addStretch()
+        mrow.addWidget(self.add_trial_button)
+        mrow.addWidget(self.remove_trial_button)
+        ml.addLayout(mrow)
+        ml.addWidget(note("Participant details (height, weight, ...) are entered per trial in this table. Which "
+                          "details are asked is set in step 1 (Session). Changes are saved straight away."))
         layout.addWidget(mapping)
 
         prep = QGroupBox("Copy into the session")
@@ -184,31 +206,50 @@ class VideosPage(Page):
         return s.trials_per_participant > 1 or len(s.trials) != len(s.participants)
 
     def _fill_grid(self) -> None:
-        trials, cams = self.session.trials, self.session.cameras
+        ses = self.session
+        trials, cams, details = ses.trials, ses.cameras, ses.asked_details
         first = 1 if self.with_participants() else 0
+        cam0 = first + len(details)
         self.grid.clear()
         self.grid.setRowCount(len(trials))
-        self.grid.setColumnCount(first + len(cams))
-        self.grid.setHorizontalHeaderLabels((["Participant"] if first else []) + [c.name for c in cams])
+        self.grid.setColumnCount(cam0 + len(cams))
+        self.grid.setHorizontalHeaderLabels((["Participant"] if first else []) + [detail_title(d) for d in details]
+                                            + [c.name for c in cams])
         self.grid.setVerticalHeaderLabels([f"Trial {t.label}" if first else f"Trial {t.label} ({t.code})"
                                            for t in trials])
-        self.grid.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        header = self.grid.horizontalHeader()
+        for col in range(self.grid.columnCount()):
+            if first <= col < cam0:  # details: just wide enough for their title and a value
+                header.setSectionResizeMode(col, QHeaderView.ResizeMode.Interactive)
+                title = self.grid.horizontalHeaderItem(col).text()
+                self.grid.setColumnWidth(col, max(80, header.fontMetrics().horizontalAdvance(title) + 24))
+            else:
+                header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents if col < first
+                                            else QHeaderView.ResizeMode.Stretch)
         low = self.report.low_confidence if self.report else set()
+        frozen = ses.frozen
         if first:
-            people = self.session.active_participants
+            people = ses.active_participants
             for r, t in enumerate(trials):
                 box = QComboBox()
-                for p in people:
-                    box.addItem(f"Participant {p.label} ({p.code})", p.label)
+                for person in people:
+                    box.addItem(f"Participant {person.label} ({person.code})", person.label)
                 if t.withdrawn_at:
                     box.addItem(f"Participant {t.participant} (withdrawn)", t.participant)
                 box.setCurrentIndex(max(0, box.findData(t.participant)))
-                if self.session.run_state.stage_done.get(t.label):
+                if ses.run_state.stage_done.get(t.label) or frozen or t.withdrawn_at:
                     box.setEnabled(False)
-                    box.setToolTip("Already processed for this participant.")
+                    box.setToolTip("Already processed for this participant." if ses.run_state.stage_done.get(t.label)
+                                   else "This session can no longer be changed.")
+                box.currentIndexChanged.connect(lambda _i, t=t, b=box: self._owner_changed(t, b))
                 self.grid.setCellWidget(r, 0, box)
                 self.grid.setItem(r, 0, readonly(""))
-        for c, cam in enumerate(cams, first):
+        self.detail_cells = {}
+        for j, d in enumerate(details, first):
+            for r, t in enumerate(trials):
+                self.grid.setCellWidget(r, j, self._detail_cell(t, d))
+                self.grid.setItem(r, j, readonly(""))
+        for c, cam in enumerate(cams, cam0):
             try:
                 candidates = scan_dir(Path(cam.source_dir)).trials
             except OSError:
@@ -238,27 +279,139 @@ class VideosPage(Page):
         self.mapping_note.setText("<b>Please check every row and correct it if needed, then save.</b> Highlighted "
                                   "cells are uncertain." if review else "")
         self.mapping_note.setVisible(review)
+        self.add_trial_button.setEnabled(not frozen)
+        self.add_trial_button.setToolTip("Raw footage was deleted in this session: start a new session for new "
+                                         "trials." if frozen else "Another trial for a participant, for example "
+                                         "recorded later. Its details start as those of their first trial.")
+        self.remove_trial_button.setEnabled(len(trials) > 1)
+
+    # ---------- participant details per trial (0.1.0rc13) ----------
+
+    def _detail_cell(self, trial, d) -> QWidget:
+        if d.kind == "choice":
+            w = QComboBox()
+            w.addItem("", "")
+            for option in d.choices:
+                w.addItem(option, option)
+            w.setCurrentIndex(max(0, w.findData(trial.details.get(d.key, ""))))
+            w.currentIndexChanged.connect(lambda _i, t=trial, d=d, w=w: self._detail_edited(t, d, w.currentData()))
+        else:
+            w = QLineEdit(trial.details.get(d.key, ""))
+            if d.key == "height":
+                own = self.session.participant(trial.participant).height_m
+                w.setPlaceholderText(f"{own:.2f}" if own else "estimate")
+                w.setToolTip("Height in metres for this trial; empty = the participant's height from step 1.")
+            elif d.unit:
+                w.setPlaceholderText(d.unit)
+            w.editingFinished.connect(lambda t=trial, d=d, w=w: self._detail_edited(t, d, w.text()))
+        w.setEnabled(not trial.withdrawn_at)
+        self.detail_cells[(trial.label, d.key)] = w
+        return w
+
+    def _detail_edited(self, trial, d, value) -> None:
+        if " ".join(str(value or "").split()) == trial.details.get(d.key, ""):
+            return
+        try:
+            set_trial_detail(self.session, self.root, trial.label, d.key, value)
+        except SetupError as exc:
+            error_box(self, "Not changed", str(exc))
+        self._show_details()
+
+    def _show_details(self) -> None:
+        """Put the stored values back in the cells (normalised, and copied to the participant's other trials)."""
+        for (label, key), w in self.detail_cells.items():
+            value = self.session.trial(label).details.get(key, "")
+            w.blockSignals(True)
+            if isinstance(w, QComboBox):
+                w.setCurrentIndex(max(0, w.findData(value)))
+            elif w.text() != value:
+                w.setText(value)
+            w.blockSignals(False)
+
+    def _owner_changed(self, trial, box: QComboBox) -> None:
+        person = box.currentData()
+        if person == trial.participant:
+            return
+        try:
+            set_trial_participants(self.session, {trial.label: person})
+        except SetupError as exc:
+            error_box(self, "Not changed", str(exc))
+            box.blockSignals(True)
+            box.setCurrentIndex(max(0, box.findData(trial.participant)))
+            box.blockSignals(False)
+            return
+        self.win.save()
+        self._show_details()
+
+    # ---------- adding and removing trials (0.1.0rc13) ----------
+
+    def add_trial(self) -> None:
+        people = self.session.active_participants
+        if not people:
+            return
+        r = self.grid.currentRow()
+        current = self.session.trials[r].participant if 0 <= r < len(self.session.trials) else people[0].label
+        names = [f"Participant {person.label} ({person.code})" for person in people]
+        start = next((i for i, person in enumerate(people) if person.label == current), 0)
+        name, ok = QInputDialog.getItem(self, "Add trial", "Whose trial is it?", names, start, False)
+        if not ok:
+            return
+        try:
+            trial = add_trial(self.session, self.root, people[names.index(name)].label)
+        except SetupError as exc:
+            error_box(self, "Trial not added", str(exc))
+            return
+        self.report = None  # the new trial's videos still have to be chosen and checked
+        self.win.set_session(self.root, self.session)
+        self.status.setText(f"Trial {trial.label} added. Choose its video for every camera, then <b>Save this "
+                            "mapping</b>.")
+
+    def remove_trial(self) -> None:
+        from mocapapp.gui.privacy_dialog import DeleteDialog
+
+        trials = self.session.trials
+        r = self.grid.currentRow()
+        trial = trials[r] if 0 <= r < len(trials) else trials[-1]
+        if trial_has_data(self.session, self.root, trial.label):
+            dlg = DeleteDialog(self, self.session, self.root, "trial", trial.label)
+            if dlg.exec() != QDialog.DialogCode.Accepted or dlg.result_ is None:
+                return
+        else:
+            if not confirm(self, "Remove trial", f"Remove trial {trial.label} ({trial.code})? It has no copied "
+                           "videos or results yet; the recordings in the camera folders are not touched.", "Remove"):
+                return
+            try:
+                remove_empty_trial(self.session, self.root, trial.label)
+            except SetupError as exc:
+                error_box(self, "Trial not removed", str(exc))
+                return
+        self.report = None
+        self.win.set_session(self.root, self.session)
 
     def save_mapping(self) -> None:
         table = {}
         first = 1 if self.with_participants() else 0
+        cam0 = first + len(self.session.asked_details)
         owners = {t.label: self.grid.cellWidget(r, 0).currentData()
                   for r, t in enumerate(self.session.trials)} if first else {}
-        for c, cam in enumerate(self.session.cameras, first):
+        for c, cam in enumerate(self.session.cameras, cam0):
             for r, t in enumerate(self.session.trials):
+                if t.withdrawn_at:
+                    continue
                 data = self.grid.cellWidget(r, c).currentData()
                 if not data:
                     error_box(self, "Mapping incomplete", f"Choose a file for {cam.name}, trial {t.label}.")
                     return
                 table[(cam.name, t.label)] = Path(data)
         for cam in self.session.cameras:
-            files = [table[(cam.name, t.label)] for t in self.session.trials]
+            files = [f for (c, _), f in table.items() if c == cam.name]
             if len(set(files)) != len(files):
                 error_box(self, "Mapping not saved", f"{cam.name}: the same file is used for two trials.")
                 return
         try:
             if owners:
-                set_trial_participants(self.session, owners)
+                set_trial_participants(self.session, {lbl: who for lbl, who in owners.items()
+                                                      if not self.session.trial(lbl).withdrawn_at})
             set_mapping(self.session, table, self.root)
         except SetupError as exc:
             error_box(self, "Mapping not saved", str(exc))

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import errno
+import json
 import os
 import re
 import shutil
@@ -14,6 +15,8 @@ from mocapapp.core.privacy import make_code, normalise_study
 from mocapapp.core.session import (
     CalibVideo,
     Camera,
+    CameraPosition,
+    DetailField,
     Layout,
     Participant,
     Session,
@@ -241,6 +244,259 @@ def new_pseudonym(session: Session, root: Path, label: str) -> Participant:
     return rename_participant(session, root, label, make_code(session.study_code, taken))
 
 
+# ---------- participant details, asked per trial (0.1.0rc13) ----------
+
+DETAIL_KEY_RE = re.compile(r"[^a-z0-9]+")
+MAX_TEXT = 80
+
+
+def add_detail(session: Session, root: Path, label: str, kind: str = "text", unit: str = "",
+               choices: list[str] | None = None) -> DetailField:
+    """A custom detail (asked for every trial from now on)."""
+    label = " ".join(label.split())
+    if not 1 <= len(label) <= 40:
+        raise SetupError("Give the detail a name of 1-40 characters, for example 'Leg length'.")
+    if kind not in ("number", "text", "choice"):
+        raise SetupError("A detail is a number, a text or a choice.")
+    key = DETAIL_KEY_RE.sub("_", label.lower()).strip("_") or "detail"
+    if any(d.label.casefold() == label.casefold() for d in session.details):
+        raise SetupError(f"There is already a detail called '{label}'.")
+    base, n = key, 2
+    while any(d.key == key for d in session.details):
+        key, n = f"{base}_{n}", n + 1
+    options = [" ".join(c.split()) for c in (choices or []) if c.strip()]
+    if kind == "choice" and len(set(o.casefold() for o in options)) < 2:
+        raise SetupError("A choice needs at least two different options, for example 'left, right'.")
+    field_ = DetailField(key=key, label=label, kind=kind, unit=unit.strip() if kind == "number" else "",
+                         choices=options if kind == "choice" else [], enabled=True)
+    session.details.append(field_)
+    save_session(session, root)
+    return field_
+
+
+def set_detail_enabled(session: Session, root: Path, key: str, enabled: bool) -> None:
+    """Ask a detail for every trial, or stop asking it (values already entered are kept)."""
+    try:
+        session.detail(key).enabled = enabled
+    except KeyError as exc:
+        raise SetupError(str(exc).strip("'\"")) from None
+    save_session(session, root)
+
+
+def remove_detail(session: Session, root: Path, key: str) -> None:
+    """Remove a custom detail and its values (built-in details can only be switched off)."""
+    field_ = session.detail(key)
+    if field_.builtin:
+        raise SetupError(f"'{field_.label}' is built in: untick it to stop asking it.")
+    session.details = [d for d in session.details if d.key != key]
+    for t in session.trials:
+        t.details.pop(key, None)
+    save_session(session, root)
+
+
+def detail_value(field_: DetailField, value: str | float | None) -> str:
+    """The value as stored ('' = not given). Raises SetupError with what to enter instead."""
+    text = "" if value is None else " ".join(str(value).split())
+    if not text:
+        return ""
+    if field_.key == "height":
+        try:
+            return f"{parse_height(text):g}"
+        except ValueError as exc:
+            raise SetupError(str(exc)) from None
+    if field_.kind == "number":
+        try:
+            number = float(text.replace(",", ".").removesuffix(field_.unit).strip())
+        except ValueError:
+            raise SetupError(f"{field_.label}: '{text}' is not a number.") from None
+        if number < 0:
+            raise SetupError(f"{field_.label} cannot be negative.")
+        return f"{number:g}"
+    if field_.kind == "choice":
+        for option in field_.choices:
+            if option.casefold() == text.casefold():
+                return option
+        raise SetupError(f"{field_.label}: choose one of {', '.join(field_.choices)}.")
+    if len(text) > MAX_TEXT:
+        raise SetupError(f"{field_.label}: at most {MAX_TEXT} characters.")
+    return text
+
+
+def set_trial_detail(session: Session, root: Path, label: str, key: str, value: str | float | None) -> str:
+    trial = session.trial(label)
+    if trial.withdrawn_at:
+        raise SetupError(f"Trial {label}: the participant withdrew, so no details are kept.")
+    stored = detail_value(session.detail(key), value)
+    if stored:
+        trial.details[key] = stored
+        for other in session.trials_of(trial.participant):  # the same person's other trials, where still empty
+            if other is not trial and not other.withdrawn_at and not other.details.get(key):
+                other.details[key] = stored
+    else:
+        trial.details.pop(key, None)
+    save_session(session, root)
+    return stored
+
+
+def copy_details(session: Session, trial: Trial) -> None:
+    """Fill a trial's details from the same participant's earliest other trial that has any (none: empty)."""
+    others = [t for t in session.trials_of(trial.participant) if t is not trial and t.details]
+    others.sort(key=lambda t: int(t.label) if t.label.isdigit() else 0)
+    trial.details = dict(others[0].details) if others else {}
+
+
+# ---------- adding and removing trials (0.1.0rc13) ----------
+
+def add_trial(session: Session, root: Path, participant: str) -> Trial:
+    """Another trial for a participant, for example recorded later. Its details are copied from their earlier
+    trial; its videos are chosen in the mapping table of the Videos step."""
+    ensure_not_frozen(session)
+    person = session.participant(participant)
+    if person.withdrawn_at:
+        raise SetupError(f"Participant {participant} withdrew; no trials can be added for them.")
+    if len(session.trials) >= MAX_TRIALS:
+        raise SetupError(f"A session holds at most {MAX_TRIALS} trials. Start a second session for more.")
+    trial = Trial(label=_next_label(t.label for t in session.trials), participant=participant,
+                  mapping_method="manual")
+    session.trials.append(trial)
+    session.link()
+    copy_details(session, trial)
+    save_session(session, root)
+    return trial
+
+
+def trial_has_data(session: Session, root: Path, label: str) -> bool:
+    from mocapapp.core.session import Layout
+
+    layout = Layout(root)
+    return (layout.trial(label).exists() or label in session.run_state.trial_status
+            or any((layout.inputs(c.name) / f"trial_{label}.mp4").exists() for c in session.cameras))
+
+
+def drop_trial(session: Session, root: Path, label: str) -> None:
+    """Forget a trial in session.json (its files are handled by the caller)."""
+    from mocapapp.core.session import Layout
+
+    rs = session.run_state
+    for table in (rs.stage_done, rs.trial_status, rs.sync, rs.errors, rs.stage_settings, rs.keypoints_removed):
+        table.pop(label, None)
+    for cam in session.cameras:
+        cam.trial_files.pop(label, None)
+        for pos in cam.positions:
+            pos.trials = [t for t in pos.trials if t != label]
+        _drop_input(Layout(root).inputs(cam.name) / f"trial_{label}.mp4")
+    Layout(root).trial_calib(label).unlink(missing_ok=True)
+    session.trials = [t for t in session.trials if t.label != label]
+    session.link()
+    save_session(session, root)
+
+
+def remove_empty_trial(session: Session, root: Path, label: str) -> None:
+    """Remove a trial that has no videos or results yet (for example added by mistake)."""
+    session.trial(label)
+    if len(session.trials) == 1:
+        raise SetupError("A session needs at least one trial.")
+    if trial_has_data(session, root, label):
+        raise SetupError(f"Trial {label} already has videos or results. Delete it with its data instead "
+                         "(you will be asked to type the pseudonym).")
+    drop_trial(session, root, label)
+
+
+# ---------- another camera position for some trials (0.1.0rc13) ----------
+
+def _refresh_calibration(session: Session, root: Path) -> None:
+    """Rewrite the calibration files when every camera and position is ready; otherwise remove stale copies."""
+    from mocapapp.core.calibration import service
+
+    if session.calibration_source != "app":
+        return
+    try:
+        service.write_calibration(session, root)
+    except service.CalibrationStepError:
+        service._invalidate_calib(root)
+
+
+def _mark_stale(session: Session, labels) -> None:
+    from mocapapp.core.runner import stale_stages
+
+    rs = session.run_state
+    for label in labels:
+        if rs.trial_status.get(label) == "done" and stale_stages(session, label):
+            rs.trial_status[label] = "partial"
+
+
+def add_camera_position(session: Session, root: Path, camera: str, file: Path, trials: list[str]) -> CameraPosition:
+    """The camera was moved between trials: a further position video for it, used by `trials`."""
+    if session.calibration_source != "app":
+        raise SetupError("This session uses an imported calibration; camera positions cannot be added.")
+    cam = session.camera(camera)
+    path = Path(file).resolve()
+    if not path.is_file():
+        raise SetupError(f"{path} does not exist.")
+    used = [cam.intrinsic.file if cam.intrinsic else "", cam.extrinsic.file if cam.extrinsic else ""]
+    used += [p.file for p in cam.positions]
+    if any(u and Path(u).resolve() == path for u in used):
+        raise SetupError(f"{path.name} is already used as a calibration video of {camera}.")
+    position = CameraPosition(key=_next_label(["1"] + [p.key for p in cam.positions]), file=str(path))
+    cam.positions.append(position)
+    set_position_trials(session, root, camera, position.key, trials)
+    return position
+
+
+def set_position_trials(session: Session, root: Path, camera: str, key: str, trials: list[str]) -> None:
+    """Which trials use this camera position (the others use the main one)."""
+    cam = session.camera(camera)
+    position = cam.position(key)
+    for label in trials:
+        trial = session.trial(label)
+        if not trial.raw_present:
+            raise SetupError(f"Trial {label}: its raw footage was deleted, so it cannot be computed again with "
+                             "another camera position.")
+    if not trials:
+        raise SetupError("Choose at least one trial for this camera position.")
+    before = {t.label: cam.position_for(t.label) for t in session.trials}
+    for other in cam.positions:
+        other.trials = [t for t in other.trials if t not in trials]
+    position.trials = sorted(set(trials), key=lambda x: int(x) if x.isdigit() else 0)
+    changed = [t.label for t in session.trials if cam.position_for(t.label) != before[t.label]]
+    _mark_stale(session, changed)
+    _refresh_calibration(session, root)
+    save_session(session, root)
+
+
+def remove_camera_position(session: Session, root: Path, camera: str, key: str) -> None:
+    from mocapapp.core.calibration import extrinsics
+    from mocapapp.core.session import Layout
+
+    cam = session.camera(camera)
+    position = cam.position(key)
+    work = Layout(root).calibration_work
+    cam.positions = [p for p in cam.positions if p.key != key]
+    extrinsics.result_path(work, camera, key).unlink(missing_ok=True)
+    (work / f"extrinsic_{camera}_pos{key}_review.jpg").unlink(missing_ok=True)
+    _drop_input(Layout(root).inputs(camera) / f"extrinsic_{key}.mp4")
+    session.extrinsics = [e for e in session.extrinsics
+                          if not (e.get("camera") == camera and e.get("position") == key)]
+    _mark_stale(session, position.trials)
+    _refresh_calibration(session, root)
+    save_session(session, root)
+
+
+def prepare_position(session: Session, root: Path, camera: str, key: str) -> Path:
+    """Copy (or convert) a camera-position video into the session, like the other calibration videos."""
+    from mocapapp.core import media
+    from mocapapp.core.session import Layout
+
+    src = Path(session.camera(camera).position(key).file)
+    dst = Layout(root).inputs(camera) / f"extrinsic_{key}.mp4"
+    stamp = dst.with_name(dst.name + ".source")
+    mark = json.dumps({"source": str(src.resolve()), "size": src.stat().st_size, "mtime": int(src.stat().st_mtime)})
+    if not (dst.is_file() and stamp.is_file() and stamp.read_text(encoding="utf-8") == mark):
+        media.normalise(src, dst)
+        stamp.write_text(mark, encoding="utf-8")
+    return dst
+
+
 # ---------- moving a session to another output folder ----------
 
 COPY_MARGIN = 1.05  # free space needed when the session is copied to another drive
@@ -375,9 +631,12 @@ def set_trial_participants(session: Session, table: dict[str, str]) -> None:
         if trial.participant != person and session.run_state.stage_done.get(trial_label):
             raise SetupError(f"Trial {trial_label} was already processed for participant {trial.participant}; "
                              "it cannot be moved to another participant.")
+    moved = [lbl for lbl, person in table.items() if session.trial(lbl).participant != person]
     for trial_label, person in table.items():
         session.trial(trial_label).participant = person
     session.link()
+    for lbl in moved:  # another person: their details, copied from their earlier trial
+        copy_details(session, session.trial(lbl))
 
 
 def ensure_not_frozen(session: Session) -> None:
@@ -456,11 +715,12 @@ def inputs_ready(session: Session, root: Path) -> bool:
     from mocapapp.core.session import Layout
 
     layout = Layout(root)
-    trials = [t for t in session.trials if t.raw_present]  # deleted footage is gone on purpose
+    # deleted footage is gone on purpose; finished trials no longer need their copies
+    trials = [t for t in session.trials if t.raw_present and session.run_state.trial_status.get(t.label) != "done"]
     for cam in session.cameras:
         names = [f"trial_{t.label}.mp4" for t in trials]
         if session.calibration_source == "app":
-            names += ["intrinsic.mp4", "extrinsic.mp4"]
+            names += ["intrinsic.mp4", "extrinsic.mp4"] + [f"extrinsic_{p.key}.mp4" for p in cam.positions]
         if not all((layout.inputs(cam.name) / n).is_file() for n in names):
             return False
     return all((layout.trial(t.label) / "Config.toml").is_file() and

@@ -31,6 +31,7 @@ def _finished(root: Path, monkeypatch, exported: bool = True):
             (layout.inputs(cam.name) / f"trial_{t.label}.mp4.source").write_text("{}")
         (layout.inputs(cam.name) / "intrinsic.mp4").write_bytes(b"calibration")
         (layout.inputs(cam.name) / "extrinsic.mp4").write_bytes(b"calibration")
+    session.settings.keep_keypoints = True  # these tests delete the 2D keypoints themselves
     runner.run_session(session, root)
     for t in session.trials:
         pose = layout.trial(t.label) / "pose"

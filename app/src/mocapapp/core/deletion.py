@@ -20,7 +20,7 @@ from typing import Literal
 from mocapapp.core.session import Layout, Session, atomic_write_text, save_session
 from mocapapp.core.validate import in_cloud_folder
 
-Scope = Literal["raw", "participant", "session"]
+Scope = Literal["raw", "trial", "participant", "session"]
 Group = Literal["working", "derived", "originals", "results", "session"]
 
 GROUP_TITLES: dict[str, str] = {
@@ -28,7 +28,7 @@ GROUP_TITLES: dict[str, str] = {
     "derived": "(b) Material derived from the videos that shows or traces the person: overlay videos/images "
                "(faces are blurred, but not reliably) and 2D keypoint files",
     "originals": "(c) Original recordings in the camera folders",
-    "results": "Results of this participant: 3D markers, joint angles, model, QA and exported files",
+    "results": "Results: 3D markers, joint angles, model, QA and exported files",
     "session": "The whole session folder (every trial, results, calibration, logs)",
 }
 VIDEO_OR_IMAGE = {".mp4", ".mov", ".avi", ".mkv", ".png", ".jpg", ".jpeg"}
@@ -176,15 +176,26 @@ def _originals(session: Session, label: str) -> list[Item]:
     return items
 
 
-def _results(session: Session, root: Path, label: str) -> list[Item]:
+def _results(session: Session, root: Path, label: str, only_trial: bool = False) -> list[Item]:
+    """The trial folder, its QA files and the participant's exported files (only_trial: that trial's only)."""
     layout = Layout(root)
     code = session.trial(label).code
     paths = [layout.trial(label)]
     if layout.qa.is_dir():
         paths += sorted(layout.qa.glob(f"trial_{label}_*"))
     if layout.export.is_dir():
-        paths += sorted(layout.export.glob(f"{code}_*"))
+        paths += sorted(layout.export.glob(f"{code}_trial{label}_*" if only_trial else f"{code}_*"))
     return [i for p in paths if (i := _item("results", p))]
+
+
+def _without_double_count(raw: list[Item], results: list[Item]) -> list[Item]:
+    """The trial folder holds the raw items: list both, count their bytes once."""
+    raw_paths = {i.path for i in raw}
+    results = [r for r in results if r.path not in raw_paths]
+    for r in results:
+        if r.is_dir:
+            r.size -= sum(i.size for i in raw if r.path in i.path.parents)
+    return results
 
 
 # ---------- safeguard 1: results must be complete before a planned (setup checkbox) deletion ----------
@@ -282,26 +293,45 @@ def plan_participant(session: Session, root: Path, label: str, include_originals
     labels = [t.label for t in session.trials_of(trial.participant)]
     plan = DeletionPlan("participant", root, labels, [trial.code] * len(labels))
     raw = [i for lbl in labels for i in _working(session, root, lbl) + _derived(root, lbl)]
-    raw_paths = {i.path for i in raw}
     results, seen = [], set()
     for lbl in labels:
         for r in _results(session, root, lbl):
-            if r.path not in raw_paths and r.path not in seen:
+            if r.path not in seen:
                 seen.add(r.path)
                 results.append(r)
-    for r in results:  # the trial folder holds the raw items: list both, count their bytes once
-        if r.is_dir:
-            r.size -= sum(i.size for i in raw if r.path in i.path.parents)
-    plan.items = raw + results
+    plan.items = raw + _without_double_count(raw, results)
     if include_originals:
         plan.items += [i for lbl in labels for i in _originals(session, lbl)]
     plan.confirm_text = trial.code  # withdrawal removes results too: always type the pseudonym
     plan.warnings += _cloud_warning(session, root, include_originals)
     plan.notes.append("The pseudonym, the date and the list of deleted paths are kept in the deletion log "
-                      "(no personal data). The participant's height is removed from session.json.")
+                      "(no personal data). The participant's height and details are removed from session.json.")
     if not include_originals and any(Path(f).exists() for c in session.cameras for lbl in labels
                                      if (f := c.trial_files.get(lbl))):
         plan.notes.append("The original recordings in the camera folders are not included.")
+    return plan
+
+
+def plan_trial(session: Session, root: Path, label: str, include_originals: bool = False) -> DeletionPlan:
+    """Delete one trial and everything made from it (0.1.0rc13): its working copies, keypoints, results, QA
+    and exported files. The trial is then removed from the session; the participant's other trials stay."""
+    _check_trial(session, label)
+    trial = session.trial(label)
+    plan = DeletionPlan("trial", root, [label], [trial.code])
+    if len([t for t in session.trials if t.label != label]) == 0:
+        plan.blockers.append("This is the only trial of the session. Delete the whole session instead.")
+    raw = _working(session, root, label) + _derived(root, label)
+    plan.items = raw + _without_double_count(raw, _results(session, root, label, only_trial=True))
+    if include_originals:
+        plan.items += _originals(session, label)
+    plan.confirm_text = trial.code  # results are deleted too: always type the pseudonym
+    plan.warnings += _cloud_warning(session, root, include_originals)
+    if not include_originals and any(Path(f).exists() for c in session.cameras
+                                     if (f := c.trial_files.get(label))):
+        plan.notes.append("The original recordings in the camera folders are not included. Include them to delete "
+                          "them too.")
+    plan.notes.append(f"Trial {label} is removed from the session; the other trials keep their numbers. The "
+                      "calibration videos are kept.")
     return plan
 
 
@@ -354,10 +384,10 @@ def _confirmed(plan: DeletionPlan, typed: str | None) -> bool:
 
 
 def execute(plan: DeletionPlan, session: Session, typed: str | None = None) -> DeletionResult:
-    """Carry out a plan made by plan_raw/plan_participant/plan_session. Refuses unmet safeguards."""
+    """Carry out a plan made by plan_raw/plan_trial/plan_participant/plan_session. Refuses unmet safeguards."""
     if plan.blockers:
-        raise DeletionError("Not deleted yet: " + " ".join(plan.blockers) +
-                            " Finish and export the results first, or delete on request instead.")
+        raise DeletionError("Not deleted yet: " + " ".join(plan.blockers) + (
+            "" if plan.scope == "trial" else " Finish and export the results first, or delete on request instead."))
     if not _confirmed(plan, typed):
         what = "the session folder name" if plan.scope == "session" else "the pseudonym"
         raise DeletionError(f"Not deleted: type {what} exactly ({plan.confirm_text}) to confirm.")
@@ -382,6 +412,16 @@ def execute(plan: DeletionPlan, session: Session, typed: str | None = None) -> D
                 folder.rmdir()
 
     now = datetime.now().isoformat(timespec="seconds")
+    if plan.scope == "trial":
+        from mocapapp.core.workflow import drop_trial
+
+        label = plan.labels[0]
+        log_deletion(plan, deleted, result, now)
+        _forget_exports(plan.root, plan.codes[0], label)
+        if not result.failures:  # otherwise the trial stays, so the deletion can be repeated
+            drop_trial(session, plan.root, label)
+        _refresh_qa(session, plan.root)
+        return result
     trial = session.trial(plan.labels[0])
     if any(i.group in ("working", "derived") for i in deleted) or not plan.items:
         trial.raw_deleted_at = trial.raw_deleted_at or now
@@ -389,6 +429,7 @@ def execute(plan: DeletionPlan, session: Session, typed: str | None = None) -> D
         trial.withdrawn_at = now  # the participant's: every trial of theirs
         trial.height_m = None
         for label in plan.labels:
+            session.trial(label).details = {}
             session.trial(label).raw_deleted_at = session.trial(label).raw_deleted_at or now
             session.run_state.trial_status[label] = "withdrawn"
             session.run_state.stage_done.pop(label, None)
@@ -444,12 +485,21 @@ def deletion_log(root: Path) -> list[dict]:
         return []
 
 
-def _forget_exports(root: Path, code: str) -> None:
+def _forget_exports(root: Path, code: str, label: str | None = None) -> None:
     path = Layout(root).export / "manifest.json"
     if not path.is_file():
         return
     data = json.loads(path.read_text(encoding="utf-8"))
-    data["files"] = [f for f in data.get("files", []) if f.get("code") != code]
+    data["files"] = [f for f in data.get("files", [])
+                     if not (f.get("code") == code and (label is None or f.get("trial") == label))]
+    data["trials"] = [t for t in data.get("trials", [])
+                      if not (t.get("code") == code and (label is None or t.get("trial") == label))]
+    table = path.parent / "trials.csv"  # participant details: rows of the deleted trial(s) go too
+    if table.is_file():
+        lines = table.read_text(encoding="utf-8").splitlines(keepends=True)
+        keep = [ln for ln in lines[1:] if not (ln.split(",")[1:2] == [code]
+                                                and (label is None or ln.split(",")[0] == label))]
+        atomic_write_text(table, "".join(lines[:1] + keep))
     atomic_write_text(path, json.dumps(data, indent=2) + "\n")
 
 
