@@ -34,7 +34,17 @@ jobs:
           version: "0.13.4"
       - run: uv sync --frozen
       - run: uv run ruff check .
-      - run: uv run pytest -q -m "not slow"
+      - name: Tests (failures are also written as an annotation, which can be read without signing in)
+        shell: bash
+        run: |
+          set -o pipefail
+          if ! uv run pytest -q -m "not slow" -rf 2>&1 | tee "$RUNNER_TEMP/pytest.log"; then
+            text=$( { sed -n '/^=* FAILURES =*$/,$p' "$RUNNER_TEMP/pytest.log" | tail -150; } || true)
+            [ -n "$text" ] || text=$(tail -60 "$RUNNER_TEMP/pytest.log")
+            text=$(printf '%s\n' "$text" | tr -d '\r' | awk '{gsub(/%/, "%25"); printf "%s%%0A", $0}')
+            echo "::error title=pytest failed::$text"
+            exit 1
+          fi
 
   test-macos:
     # same steps as test; a separate job so a macOS problem never holds back the Windows installer
@@ -52,7 +62,17 @@ jobs:
           version: "0.13.4"
       - run: uv sync --frozen
       - run: uv run ruff check .
-      - run: uv run pytest -q -m "not slow"
+      - name: Tests (failures are also written as an annotation, which can be read without signing in)
+        shell: bash
+        run: |
+          set -o pipefail
+          if ! uv run pytest -q -m "not slow" -rf 2>&1 | tee "$RUNNER_TEMP/pytest.log"; then
+            text=$( { sed -n '/^=* FAILURES =*$/,$p' "$RUNNER_TEMP/pytest.log" | tail -150; } || true)
+            [ -n "$text" ] || text=$(tail -60 "$RUNNER_TEMP/pytest.log")
+            text=$(printf '%s\n' "$text" | tr -d '\r' | awk '{gsub(/%/, "%25"); printf "%s%%0A", $0}')
+            echo "::error title=pytest failed::$text"
+            exit 1
+          fi
 
   macos-zip:
     if: startsWith(github.ref, 'refs/tags/mocapapp-v')
