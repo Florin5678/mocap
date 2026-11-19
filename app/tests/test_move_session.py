@@ -1,5 +1,6 @@
 """Changing the output folder of a session later (0.1.0rc12): the session folder moves, nothing else changes."""
 
+import json
 import shutil
 from pathlib import Path
 
@@ -44,10 +45,13 @@ def test_move_on_the_same_drive_renames(tmp_path):
     dest, warnings = move_session(plan)
     assert dest == (tmp_path / "new" / "place" / "T1_session").resolve() and warnings == []
     assert not root.exists() and load_session(dest).trials[0].code == "T1-ABCDEF1"
-    old = str(root)
-    for f in dest.rglob("*"):  # nothing the app wrote refers to the old place
+    old = str(root.resolve())
+    for f in dest.rglob("*"):  # nothing the app wrote refers to the old place (also as escaped in JSON)
         if f.is_file() and f.suffix in (".json", ".toml"):
-            assert old not in f.read_text(encoding="utf-8"), f
+            text = f.read_text(encoding="utf-8")
+            assert old not in text and json.dumps(old)[1:-1] not in text, f
+    moved = load_session(dest)  # this fixture keeps the camera folders inside the session folder
+    assert {c.source_dir for c in moved.cameras} == {str(dest / "raw")}
 
 
 def test_move_to_another_drive_copies_checks_and_removes(tmp_path, monkeypatch):

@@ -23,6 +23,7 @@ from mocapapp.core.session import (
     Trial,
     VideoRef,
     existing_codes,
+    load_session,
     parse_height,
     save_session,
     session_dir_name,
@@ -575,7 +576,7 @@ def _in_use(exc: OSError, plan: MovePlan) -> SetupError:
 def move_session(plan: MovePlan, progress=print) -> tuple[Path, list[str]]:
     """Move the session folder as planned. Returns the new folder and warnings for the researcher.
 
-    Nothing inside the folder refers to where it is, so a rename or a checked copy is all it takes. A copy is only
+    Paths stored in session.json that point inside the folder (videos kept in it) are updated. A copy is only
     removed from the old place once every file arrived with its size; if that removal fails, the warning says so,
     because the old folder still holds participant data."""
     src, dest = plan.source, plan.dest
@@ -585,6 +586,7 @@ def move_session(plan: MovePlan, progress=print) -> tuple[Path, list[str]]:
     if not plan.copy:
         try:
             src.rename(dest)
+            _rebase_paths(src, dest)
             return dest, []
         except OSError as exc:
             if exc.errno != errno.EXDEV and getattr(exc, "winerror", None) != 17:  # 17: not the same device
@@ -610,6 +612,7 @@ def move_session(plan: MovePlan, progress=print) -> tuple[Path, list[str]]:
         shutil.rmtree(dest, ignore_errors=True)
         raise SetupError(f"Copying the session to {dest} failed ({exc}). Nothing was changed; the session is still "
                          f"at {src}.") from exc
+    _rebase_paths(src, dest)
     progress("Removing the old folder ...")
     try:
         _remove(src)
@@ -618,6 +621,26 @@ def move_session(plan: MovePlan, progress=print) -> tuple[Path, list[str]]:
                       f"({exc}). It still holds participant data: delete it yourself once you have checked the new "
                       "folder."]
     return dest, []
+
+
+def _rebase_paths(src: Path, dest: Path) -> None:
+    """Point paths inside the old session folder (camera folders or videos kept in it) to the new place."""
+    session = load_session(dest)
+    old = Path(src).resolve()
+
+    def moved(path: str) -> str:
+        try:
+            return str(dest / Path(path).resolve().relative_to(old)) if path else path
+        except ValueError:
+            return path  # outside the session folder: unchanged
+
+    for cam in session.cameras:
+        cam.source_dir = moved(cam.source_dir)
+        for ref in (cam.intrinsic, cam.extrinsic, *cam.positions):
+            if ref is not None:
+                ref.file = moved(ref.file)
+        cam.trial_files = {label: moved(f) for label, f in cam.trial_files.items()}
+    save_session(session, dest)
 
 
 def set_trial_participants(session: Session, table: dict[str, str]) -> None:
