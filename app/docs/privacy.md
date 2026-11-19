@@ -88,3 +88,7 @@ Footage that is still stored is never deleted automatically. The recent-sessions
 - footage was marked for deletion but has not been deleted yet.
 
 `mocapapp reminders --root <output folder>` lists the same sessions.
+
+## Moving a session
+
+Moving a session to another output folder (**Change output folder ...**, `mocapapp session move`) renames the folder on the same drive. To another drive it copies the folder, checks that every file arrived with its size, and only then removes the old folder; if that removal fails, the app says the old folder still holds participant data and must be deleted by hand. Pseudonyms must stay unique within an output folder, so a move into a folder whose sessions already use one of them is refused.

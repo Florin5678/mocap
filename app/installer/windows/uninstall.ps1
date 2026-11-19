@@ -11,6 +11,12 @@ $ErrorActionPreference = "Continue"
 foreach ($dir in @([Environment]::GetFolderPath("Programs"), [Environment]::GetFolderPath("Desktop"))) {
     Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $dir "mocapapp.lnk")
 }
+# the .mocapproj file type (project files themselves are kept); .mocapproj only if it still points to mocapapp
+$classes = "HKCU:\Software\Classes"
+Remove-Item -Recurse -Force -ErrorAction SilentlyContinue "$classes\mocapapp.project"
+if ((Get-ItemProperty -ErrorAction SilentlyContinue "$classes\.mocapproj").'(default)' -eq "mocapapp.project") {
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue "$classes\.mocapproj"
+}
 foreach ($name in @("venv", "python", "uv", "src", "src-new", "cache", "install.json", "install.log")) {
     $path = Join-Path $Prefix $name
     if (Test-Path $path) { Remove-Item -Recurse -Force $path }

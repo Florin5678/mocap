@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mocapapp"
-version = "0.1.0rc11"
+version = "0.1.0rc12"
 description = "Desktop app around Pose2Sim: multi-camera video to validated 3D pose and OpenSim kinematics, for research use only."
 requires-python = ">=3.11,<3.14"
 license = "BSD-3-Clause"
@@ -15,6 +15,7 @@ dependencies = [
     "tomlkit>=0.13",
     "imageio-ffmpeg>=0.5",
     "reportlab>=4.2,<5",
+    "matplotlib>=3.8,<4",  # Viewer step plots (already installed with Pose2Sim)
 ]
 
 [project.scripts]

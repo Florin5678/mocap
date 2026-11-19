@@ -2,7 +2,7 @@
 
 Desktop app around Pose2Sim: multi-camera videos of one person → validated 3D pose (`.trc`/`.c3d`) and OpenSim kinematics (`.osim`/`.mot`/`.bvh`). **Research use only.** Spec: [`../PROJECT.md`](../PROJECT.md).
 
-Status: **0.1.0rc11, Milestone 6 (release candidate)**: installers for Windows and macOS, pose-model pre-download, first-start checks, user guide (Help > User guide, [`src/mocapapp/resources/user-guide.md`](src/mocapapp/resources/user-guide.md)) and the usability-test protocol ([`docs/usability-test.md`](docs/usability-test.md)) on top of M0-M5: the headless core (session setup, validation, calibration, the Pose2Sim runner, QA, export), the app window, and the privacy features ([`docs/privacy.md`](docs/privacy.md)). Still open for the release: the usability test with three new users. Upstream findings: [`docs/upstream-notes.md`](docs/upstream-notes.md).
+Status: **0.1.0rc12, Milestone 6 (release candidate)**: installers for Windows and macOS, pose-model pre-download, first-start checks, user guide (Help > User guide, [`src/mocapapp/resources/user-guide.md`](src/mocapapp/resources/user-guide.md)) and the usability-test protocol ([`docs/usability-test.md`](docs/usability-test.md)) on top of M0-M5: the headless core (session setup, validation, calibration, the Pose2Sim runner, QA, export), the app window, and the privacy features ([`docs/privacy.md`](docs/privacy.md)). Still open for the release: the usability test with three new users. Upstream findings: [`docs/upstream-notes.md`](docs/upstream-notes.md).
 
 ## Install (users)
 
@@ -13,6 +13,7 @@ Windows: run `mocapapp-setup.exe`; macOS (15 or newer): unzip `mocapapp-macos.zi
 ```
 uv run mocapapp gui                       # greeting dialog -> tutorial or a new session
 uv run mocapapp gui --session <dir>       # reopen a session
+uv run mocapapp gui --project <file>      # reopen a project file (.mocapproj) at its saved step
 ```
 
 Steps: Session -> Videos -> Lens calibration -> Reference points -> Camera positions -> Run -> Results. **File > Try with sample data** builds a ready-to-run session from upstream's demo (its calibration is imported, so the calibration steps are skipped). **File > Participant data and deletion** (also on the Session and Results steps) deletes raw footage or all data of a participant at any time; every deletion lists the exact files first.
@@ -42,6 +43,11 @@ mocapapp run --session <dir> [--trial 1] [--restart] [--accept-sync] [--verbose]
 mocapapp run --session <dir> --trial 1 --fix-sync          # open upstream's sync player, then continue
 mocapapp qa --session <dir>                                # qa/qa_report.html, qa/qa.json, qa/trial_<label>_preview.html
 mocapapp export --session <dir> [--select config,trc.filt_lstm,c3d.filt_lstm,osim,mot,bvh]
+mocapapp data --session <dir> --trial 1 [--columns elbow_flex_r,arm_flex_r] [--csv out.csv]   # joint angles: min/max/peak speed or CSV
+mocapapp data --session <dir> --trial 1 --markers [raw|smoothed|'smoothed + LSTM'] [--columns 'RWrist Y']
+mocapapp session pseudonym --session <dir> --participant 2 --set P02|--random
+mocapapp session move --session <dir> --to <new output folder> [--dry-run]   # change the output folder later
+mocapapp project save --session <dir> --out study.mocapproj [--step viewer]; mocapapp project show <file>
 mocapapp delete-raw --session <dir> --trial 1 [--include-originals] [--after-run]     # lists only; add --yes [--confirm CODE]
 mocapapp delete-session --session <dir> [--trial 1] [--include-originals]           # withdrawal / whole session; --yes --confirm
 mocapapp reminders --root <output root>                    # sessions whose raw footage is still stored

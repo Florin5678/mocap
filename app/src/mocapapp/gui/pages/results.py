@@ -112,6 +112,9 @@ class ResultsPage(Page):
     def is_complete(self) -> bool:
         return self.session is not None and (Layout(self.root).export / "manifest.json").is_file()
 
+    def gates_next(self) -> bool:
+        return False  # the Viewer works on the trial folders: no export needed
+
     def refresh(self) -> None:
         if self.session is None or not self.win.reachable(self.win.pages.index(self)):
             return

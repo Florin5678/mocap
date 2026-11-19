@@ -16,7 +16,7 @@ Running the installer again repairs or updates the installation. Uninstalling ne
 
 | File | What it is |
 |---|---|
-| `windows/install.ps1`, `windows/uninstall.ps1` | The bootstrapper and its remover. Must stay ASCII: Windows PowerShell 5.1 reads BOM-less files as ANSI. |
+| `windows/install.ps1`, `windows/uninstall.ps1` | The bootstrapper and its remover. Must stay ASCII: Windows PowerShell 5.1 reads BOM-less files as ANSI. Besides the shortcuts, `install.ps1` registers the `.mocapproj` file type for the user (`HKCU\Software\Classes`, no admin rights), so double-clicking a project file opens it in the app; `-NoShortcuts` skips both. `uninstall.ps1` removes the file type, not the project files. |
 | `windows/mocapapp.iss` | Inno Setup 6 script. It builds `mocapapp-setup.exe`, a per-user setup that runs `install.ps1` in a visible progress window and registers the uninstaller. It sets `RedirectionGuard=no`: with Windows' RedirectionGuard on, uv's Python junction fails with "untrusted mount point". |
 | `windows/license.txt` | Shown by the setup: research use only, plus Pose2Sim's BSD-3 licence. |
 | `macos/Install mocapapp.command`, `macos/Uninstall mocapapp.command` | Double-clickable in Finder. They create `~/Applications/mocapapp.app`. They need macOS 15 or newer, because OpenSim's wheels require it. |

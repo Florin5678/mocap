@@ -1,16 +1,16 @@
 ; Inno Setup script: a small mocapapp-setup.exe that runs install.ps1 (the bootstrapper) with a visible
 ; progress window. Per-user install, no admin rights. Build: iscc mocapapp.iss  (Inno Setup 6)
-; The ref to install can be overridden at build time: iscc /DRef=mocapapp-v0.1.0rc11 mocapapp.iss
+; The ref to install can be overridden at build time: iscc /DRef=mocapapp-v0.1.0rc12 mocapapp.iss
 
 #ifndef Ref
-  #define Ref "mocapapp-v0.1.0rc11"
+  #define Ref "mocapapp-v0.1.0rc12"
 #endif
 ; CI also builds a test setup with /DPauseArg= so that nothing waits for Enter
 #ifndef PauseArg
   #define PauseArg " -Pause"
 #endif
 #ifndef AppVersion
-  #define AppVersion "0.1.0rc11"
+  #define AppVersion "0.1.0rc12"
 #endif
 
 [Setup]
@@ -31,6 +31,8 @@ WizardStyle=modern
 LicenseFile=license.txt
 UninstallDisplayName=mocapapp
 MinVersion=10.0
+; install.ps1 registers the .mocapproj file type (per user); this tells Explorer after setup and uninstall
+ChangesAssociations=yes
 #if VER >= EncodeVer(6, 7, 0)
 ; Inno Setup 6.7+ turns on Windows' RedirectionGuard by default and passes it to install.ps1, uv and
 ; Python. RedirectionGuard refuses junctions made by non-admin users, and uv links its Python with one

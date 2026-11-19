@@ -235,7 +235,8 @@ def test_full_wizard(qtbot, tmp_path, monkeypatch):
     res = win.pages[6]
     assert win.current_page() is res and len(res.results) == 1
     assert "Trial 1" in res.qa.toPlainText()
-    assert win.next_button.text() == "Finished!" and not win.next_button.isEnabled()  # export first
+    assert win.next_button.text() == "Next >" and win.next_button.isEnabled()  # the Viewer needs no export
+    assert win.reachable(7)
     assert not res.boxes["bvh"].isChecked() and res.boxes["mot"].isChecked()
     res.boxes["bvh"].setChecked(True)
     res.do_export()
@@ -245,6 +246,15 @@ def test_full_wizard(qtbot, tmp_path, monkeypatch):
     code = win.session.trials[0].code
     assert f"{code}_trial1_skeleton_animation.bvh" in names and "manifest.json" in names
     assert "Exported to" in res.export_state.text()
+    win.next_button.click()
+
+    # 8. viewer
+    viewer = win.pages[7]
+    assert win.current_page() is viewer and viewer.trial_box.count() == 1
+    assert viewer.source_box.currentText() == "smoothed + LSTM" and viewer.markers is not None
+    viewer.tabs.setCurrentIndex(1)
+    assert viewer.ticked() == ["arm_flex_r", "elbow_flex_r"] and "max 89.7" in viewer.summary.text()
+    shot(win, "80_viewer")
     assert win.next_button.text() == "Finished!" and win.next_button.isEnabled()
     shown = []
     from PySide6.QtWidgets import QMessageBox

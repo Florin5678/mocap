@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import errno
+import os
 import re
+import shutil
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -236,6 +239,129 @@ def new_pseudonym(session: Session, root: Path, label: str) -> Participant:
     check_renamable(session, label)
     taken = existing_codes(Path(root).parent) | {p.code for p in session.participants}
     return rename_participant(session, root, label, make_code(session.study_code, taken))
+
+
+# ---------- moving a session to another output folder ----------
+
+COPY_MARGIN = 1.05  # free space needed when the session is copied to another drive
+
+
+@dataclass
+class MovePlan:
+    source: Path
+    dest: Path
+    copy: bool  # another drive: copy, check the copy, then remove the old folder
+    size: int = 0  # bytes to copy (0 when the folder is only renamed)
+    free: int = 0
+    warnings: list[str] = field(default_factory=list)
+
+    def describe(self) -> str:
+        how = (f"The session is on another drive: its {self.size / 1e9:.1f} GB are copied, the copy is checked, "
+               "and then the old folder is removed." if self.copy
+               else "The folder is moved on the same drive, which takes a moment.")
+        return "\n\n".join([f"From: {self.source}\nTo: {self.dest}", how, *self.warnings])
+
+
+def _nearest_existing(path: Path) -> Path:
+    while not path.exists() and path.parent != path:
+        path = path.parent
+    return path
+
+
+def _tree(root: Path) -> dict[str, int]:
+    """Relative path -> size of every file below root."""
+    out = {}
+    for path in Path(root).rglob("*"):
+        if path.is_file():
+            out[path.relative_to(root).as_posix()] = path.stat().st_size
+    return out
+
+
+def plan_move(session: Session, root: Path, new_out: Path) -> MovePlan:
+    """Check that the session folder can move into another output folder. Raises SetupError with the reason."""
+    root, out = Path(root).resolve(), Path(new_out).expanduser().resolve()
+    issues = check_output_root(out)
+    errors = [i for i in issues if i.level == "error"]
+    if errors:
+        raise SetupError("\n".join(f"{i.what} {i.fix}" for i in errors))
+    if out == root.parent:
+        raise SetupError(f"The session is already in {out}.")
+    if out == root or root in out.parents:
+        raise SetupError("Choose a folder outside the session folder itself.")
+    dest = out / root.name
+    if dest.exists():
+        raise SetupError(f"{dest} already exists. Choose another output folder, or rename or remove that folder "
+                         "first.")
+    taken = {c.upper() for c in existing_codes(out)}
+    clash = sorted(p.code for p in session.participants if p.code.upper() in taken)
+    if clash:
+        raise SetupError(f"The pseudonym{'s' if len(clash) > 1 else ''} {', '.join(clash)} "
+                         f"{'are' if len(clash) > 1 else 'is'} already used by another session in {out}. Pseudonyms "
+                         "must be unique within an output folder; choose another one.")
+    existing = _nearest_existing(out)
+    copy = os.stat(existing).st_dev != os.stat(root).st_dev
+    plan = MovePlan(root, dest, copy, warnings=[f"{i.what} {i.fix}" for i in issues])
+    if copy:
+        plan.size = sum(_tree(root).values())
+        plan.free = shutil.disk_usage(existing).free
+        if plan.size * COPY_MARGIN > plan.free:
+            raise SetupError(f"Not enough space on that drive: the session needs about {plan.size / 1e9:.1f} GB, "
+                             f"{plan.free / 1e9:.1f} GB are free. Free some space or choose another folder.")
+    return plan
+
+
+def _in_use(exc: OSError, plan: MovePlan) -> SetupError:
+    return SetupError(f"The session could not be moved ({exc.strerror or exc}). A file in it is probably open in "
+                      "another program (a video player, Excel, File Explorer showing the folder): close it and try "
+                      f"again. Nothing was changed; the session is still at {plan.source}.")
+
+
+def move_session(plan: MovePlan, progress=print) -> tuple[Path, list[str]]:
+    """Move the session folder as planned. Returns the new folder and warnings for the researcher.
+
+    Nothing inside the folder refers to where it is, so a rename or a checked copy is all it takes. A copy is only
+    removed from the old place once every file arrived with its size; if that removal fails, the warning says so,
+    because the old folder still holds participant data."""
+    src, dest = plan.source, plan.dest
+    if dest.exists():
+        raise SetupError(f"{dest} already exists. Choose another output folder.")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if not plan.copy:
+        try:
+            src.rename(dest)
+            return dest, []
+        except OSError as exc:
+            if exc.errno != errno.EXDEV and getattr(exc, "winerror", None) != 17:  # 17: not the same device
+                raise _in_use(exc, plan) from exc
+    from mocapapp.core.deletion import _remove
+
+    files = _tree(src)
+    progress(f"Copying {len(files)} files ({sum(files.values()) / 1e9:.1f} GB) to {dest} ...")
+    copied = 0
+
+    def copy(a, b):
+        nonlocal copied
+        copied += 1
+        if copied % 20 == 0:
+            progress(f"Copying file {copied} of {len(files)} ...")
+        return shutil.copy2(a, b)
+
+    try:
+        shutil.copytree(src, dest, copy_function=copy)
+        if _tree(dest) != files:
+            raise OSError("the copy does not match the original")
+    except OSError as exc:
+        shutil.rmtree(dest, ignore_errors=True)
+        raise SetupError(f"Copying the session to {dest} failed ({exc}). Nothing was changed; the session is still "
+                         f"at {src}.") from exc
+    progress("Removing the old folder ...")
+    try:
+        _remove(src)
+    except OSError as exc:
+        return dest, [f"The session was copied to {dest}, but the old folder {src} could not be removed completely "
+                      f"({exc}). It still holds participant data: delete it yourself once you have checked the new "
+                      "folder."]
+    return dest, []
 
 
 def set_trial_participants(session: Session, table: dict[str, str]) -> None:

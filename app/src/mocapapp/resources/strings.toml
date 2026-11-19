@@ -27,3 +27,4 @@ scene = "Reference points: the measured points that define the floor and the dir
 extrinsics = "Camera positions (extrinsic): click the reference points in one picture per camera."
 run = "Run: check the summary, then let the computer do the rest."
 results = "Results: quality report, 3D preview and export."
+viewer = "Viewer: watch the 3D movement and look at the numbers - joint angles and marker positions over time, trial by trial."

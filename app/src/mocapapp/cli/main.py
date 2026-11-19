@@ -80,6 +80,28 @@ def _cmd_session_pseudonym(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_session_move(args: argparse.Namespace) -> int:
+    from mocapapp.core.session import load_session
+    from mocapapp.core.workflow import SetupError, move_session, plan_move
+
+    root = Path(args.session)
+    try:
+        plan = plan_move(load_session(root), root, Path(args.to))
+        print(plan.describe())
+        if args.dry_run:
+            return 0
+        dest, warnings = move_session(plan)
+    except SetupError as exc:
+        print(exc)
+        return 1
+    print(f"Session moved to {dest}")
+    for w in warnings:
+        print(w)
+    print("A project file (.mocapproj) for this session must be saved again: "
+          f"mocapapp project save --session \"{dest}\" --out <file>")
+    return 1 if warnings else 0
+
+
 def _print_mapping(session, report) -> None:
     print(f"\nTrial mapping ({report.mapping_method}):")
     width = max([len(Path(f).name) for c in session.cameras for f in c.trial_files.values()] + [8])
@@ -555,7 +577,72 @@ def _cmd_diagnostics(args: argparse.Namespace) -> int:
 def _cmd_gui(args: argparse.Namespace) -> int:
     from mocapapp.gui.app import run_gui
 
-    return run_gui(Path(args.session) if args.session else None)
+    target = args.project or args.session
+    return run_gui(Path(target) if target else None)
+
+
+def _cmd_data(args: argparse.Namespace) -> int:
+    from mocapapp.core import outputs
+    from mocapapp.core.session import Layout, load_session
+
+    root = Path(args.session)
+    session = load_session(root)
+    try:
+        session.trial(args.trial)
+    except KeyError:
+        print(f"There is no trial {args.trial} in this session.")
+        return 1
+    tdir = Layout(root).trial(args.trial)
+    try:
+        if args.markers:
+            files = outputs.marker_files(tdir)
+            source = args.markers if args.markers in files else next(iter(files), None)
+            if source is None:
+                print(f"Trial {args.trial} has no 3D marker results yet. Run it first.")
+                return 1
+            table = outputs.read_markers(files[source]).table()
+        else:
+            mot = outputs.angle_file(tdir)
+            if mot is None:
+                print(f"Trial {args.trial} has no joint angles yet. Run it first (or use --markers).")
+                return 1
+            table = outputs.read_angles(mot)
+        columns = [c.strip() for c in args.columns.split(",")] if args.columns else None
+        if args.csv:
+            print(f"Saved: {outputs.write_csv(table, Path(args.csv), columns)}")
+            return 0
+        rows = outputs.summary(table, columns)
+    except outputs.OutputError as exc:
+        print(exc)
+        return 1
+    print(f"{table.title} of trial {args.trial}: {table.path.name}, {len(table.time)} frames, "
+          f"{table.time[0]:.2f}-{table.time[-1]:.2f} s")
+    print(f"  {'column':<26}{'min':>10}{'max':>10}{'range':>10}{'peak speed':>14}")
+
+    def num(v):
+        return "n/a" if v is None else f"{v:.3g}"
+
+    for r in rows:
+        print(f"  {r['column']:<26}{num(r['min']):>10}{num(r['max']):>10}{num(r['range']):>10}"
+              f"{num(r['peak_speed']):>9} {outputs.rate_unit(r['unit'])}")
+    return 0
+
+
+def _cmd_project(args: argparse.Namespace) -> int:
+    from mocapapp.core.project import ProjectError, load_project, save_project
+
+    try:
+        if args.project_command == "save":
+            print(f"Project saved: {save_project(Path(args.out), Path(args.session), args.step)}")
+            return 0
+        p = load_project(Path(args.file))
+    except ProjectError as exc:
+        print(exc)
+        return 1
+    print(f"Session folder: {p.session}")
+    print(f"Step: {p.step}")
+    print(f"Saved: {p.saved_at} (mocapapp {p.app_version})")
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -582,7 +669,30 @@ def build_parser() -> argparse.ArgumentParser:
 
     gui = sub.add_parser("gui", help="open the app window")
     gui.add_argument("--session", help="open this session directly")
+    gui.add_argument("--project", help="open this project file (.mocapproj) at its saved step")
     gui.set_defaults(func=_cmd_gui)
+
+    data = sub.add_parser("data", help="a trial's joint angles or marker positions: summary or CSV")
+    data.add_argument("--session", required=True)
+    data.add_argument("--trial", required=True)
+    data.add_argument("--markers", nargs="?", const="best", metavar="SOURCE",
+                      help="marker positions instead of joint angles: 'smoothed + LSTM', 'smoothed' or 'raw' "
+                           "(default: the best available)")
+    data.add_argument("--columns", help="comma-separated columns, e.g. elbow_flex_r,arm_flex_r or 'RWrist Y'")
+    data.add_argument("--csv", metavar="FILE", help="write the values to a CSV file instead of the summary")
+    data.set_defaults(func=_cmd_data)
+
+    proj = sub.add_parser("project", help="project files (.mocapproj): reopen a session at the step you were on")
+    prsub = proj.add_subparsers(dest="project_command", required=True)
+    ps = prsub.add_parser("save", help="write a project file for a session folder")
+    ps.add_argument("--session", required=True)
+    ps.add_argument("--out", required=True, help="project file to write (.mocapproj is added if missing)")
+    from mocapapp.core.project import STEPS
+
+    ps.add_argument("--step", choices=STEPS, default="setup", help="step to open at (default setup)")
+    psh = prsub.add_parser("show", help="which session folder and step a project file points to")
+    psh.add_argument("file")
+    proj.set_defaults(func=_cmd_project)
 
     pdf = sub.add_parser("pdf", help="printable calibration board and consent form")
     psub = pdf.add_subparsers(dest="pdf_command", required=True)
@@ -605,7 +715,7 @@ def build_parser() -> argparse.ArgumentParser:
     sample.add_argument("--out", required=True)
     sample.set_defaults(func=_cmd_sample)
 
-    session = sub.add_parser("session", help="create sessions")
+    session = sub.add_parser("session", help="create, rename and move sessions")
     ssub = session.add_subparsers(dest="session_command", required=True)
     new = ssub.add_parser("new", help="create a new session folder")
     new.add_argument("--study", default="", help="optional study label, A-Z/0-9, up to 8 characters")
@@ -626,6 +736,11 @@ def build_parser() -> argparse.ArgumentParser:
     group.add_argument("--set", metavar="PSEUDONYM", help="the new pseudonym (letters, digits, - or _)")
     group.add_argument("--random", action="store_true", help="a new random pseudonym")
     pn.set_defaults(func=_cmd_session_pseudonym)
+    mv = ssub.add_parser("move", help="move a session folder into another output folder")
+    mv.add_argument("--session", required=True)
+    mv.add_argument("--to", required=True, help="the new output folder; the session folder moves into it")
+    mv.add_argument("--dry-run", action="store_true", help="only check and show what would happen")
+    mv.set_defaults(func=_cmd_session_move)
 
     val = sub.add_parser("validate", help="check inputs and show the trial mapping")
     val.add_argument("--session", required=True)

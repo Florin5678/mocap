@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 import numpy as np
@@ -61,6 +62,18 @@ def write_trc(path: Path, frames: int = 20, rate: float = 30.0, flip: bool = Fal
         lines.append(f"{f + 1}\t{f / rate:.4f}\t" + "\t".join(f"{v:.5f}" for v in vals))
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines) + "\n")
+
+
+def write_mot(path: Path, frames: int = 20, rate: float = 30.0, peak: float = 90.0) -> None:
+    """OpenSim-style joint angles: a smooth elbow flexion up to `peak` degrees, shoulder flexion, pelvis_tx."""
+    head = (f"Coordinates\nversion=1\nnRows={frames}\nnColumns=4\ninDegrees=yes\n\nUnits are S.I. units "
+            "(second, meters, Newtons, ...)\nendheader\n")
+    rows = ["time\tpelvis_tx\tarm_flex_r\telbow_flex_r"]
+    for f in range(frames):
+        t = f / rate
+        phase = math.sin(math.pi * f / max(frames - 1, 1))
+        rows.append(f"{t:.4f}\t{0.01 * f:.4f}\t{40 * phase:.4f}\t{peak * phase:.4f}")
+    path.write_text(head + "\n".join(rows) + "\n")
 
 
 def write_bvh(path: Path, frames: int = 20, rows: int | None = None) -> None:
@@ -134,7 +147,7 @@ class FakeStages:
             kin.mkdir(exist_ok=True)
             name = f"{stem}_filt_butterworth_LSTM"
             (kin / f"{name}.osim").write_text("<OpenSimDocument/>")
-            (kin / f"{name}.mot").write_text("Coordinates\nversion=1\nnRows=20\nnColumns=3\nendheader\n")
+            write_mot(kin / f"{name}.mot")
             write_bvh(kin / f"{name}.bvh")
             (kin / "_ik_marker_errors.sto").write_text(
                 "IK errors\nendheader\ntime\tmarker_error_total_squared\tmarker_error_RMS\tmarker_error_max\n"

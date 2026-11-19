@@ -38,9 +38,11 @@ A **session** is one recording day with fixed cameras. Each **trial** is a diffe
 
 The steps are listed on the left. A step becomes available when the previous ones are done; **Back** never loses work. Close the app at any time: **File > Recent sessions** reopens a session where you left off.
 
+**Project files.** Everything is saved automatically in the session folder. To keep a session as a file you can find and open again, use **File > Save project** (Ctrl+S) or **Save project as ...**. This writes a small `.mocapproj` file that points to the session folder and remembers the step you were on; closing the app updates that step. **File > Open project ...** (Ctrl+O) reopens it at that step; on Windows you can also double-click the project file. Keep the project file next to the session folder, or move both together: the project file does not contain the videos or results, only where they are. **File > Open session folder ...** still opens a session folder directly.
+
 ### Step 1 – Session
 
-1. Choose an **output folder** whose path contains only plain letters (no æ/ø/å or other accents); the 3D software cannot save elsewhere.
+1. Choose an **output folder** whose path contains only plain letters (no æ/ø/å or other accents); the 3D software cannot save elsewhere. You can change it later: **Change output folder ...** in this step (or **File > Move session to another output folder ...**) moves the session folder, with everything in it, into another folder. On the same drive this takes a moment; to another drive the files are copied, the copy is checked, and only then is the old folder removed. If the old folder cannot be removed (a file in it is open), the app says so: delete it yourself, as it still holds participant data. An open project file is updated to the new place.
 2. Optionally enter a **study code** (up to 8 letters or digits, e.g. `PA26`). It starts every pseudonym.
 3. Add one **folder per camera**. Each folder holds the camera's `intrinsic` and `extrinsic` videos and one video per trial; before the recordings, the folders may still be empty. If the folders are named after the cameras (`cam01`, `cam02`, ...) and sit side by side, choosing one with **Browse ...** fills in the others.
 4. Set **Trials per participant** (usually 1). A session holds at most 10 trials in total.
@@ -134,7 +136,22 @@ Under **Export**, tick what you need and press **Export**. Files go to the sessi
 - `README.txt`, which describes every file;
 - `manifest.json`, which records versions, settings and file checksums.
 
-When you are done, press **Finished!**. The app saves the session, reminds you of raw footage that is still stored, and returns to step 1 for the next session. You can reopen the session at any time from **File > Recent sessions**.
+Press **Next** for the **Viewer** (no export needed).
+
+### Step 8 – Viewer
+
+Choose a **trial** at the top. The **3D** tab plays the movement as a skeleton: **Play**, drag the slider to go to a moment, drag in the picture to rotate, use the mouse wheel to zoom, double-click to reset. Blue is left, red is right, grey dots are the LSTM markers; the grid is the floor in 0.5 m squares. **3D markers** chooses the marker file (smoothed + LSTM, smoothed, raw).
+
+The **Data** tab shows the numbers:
+
+- **Joint angles (.mot)**: one column per joint angle in degrees (for the arm: `arm_flex`, `arm_add`, `arm_rot`, `elbow_flex`, `pro_sup`, `wrist_flex`, `wrist_dev`; `_r` right, `_l` left).
+- **Marker positions (.trc)**: X, Y, Z of every marker in metres (Y is up).
+
+Tick columns to plot them; type in the filter box to find them (e.g. `elbow`). The table below the plot lists the values frame by frame, and the line under the plot gives each column's minimum, maximum, range and **peak speed** (deg/s or m/s). **Compare all trials** draws the same columns of every trial on top of each other; **Plot speed** draws the rate of change instead of the value. The toolbar above the plot zooms, pans and saves the plot as an image. **Save as CSV ...** writes the ticked columns (or all) for Excel, R, Python or MATLAB.
+
+With the default keypoints there are no points on the hand, so wrist and forearm rotation angles are not reliable; shoulder and elbow are.
+
+When you are done, press **Finished!**. The app saves the session, reminds you of raw footage that is still stored, and returns to step 1 for the next session. You can reopen the session at any time from **File > Recent sessions**, or from its project file.
 
 ## 4. Participant data and deletion
 
@@ -171,7 +188,7 @@ Details: the project's `app/docs/privacy.md`.
 
 ## 6. Command line (optional)
 
-Every step also works without the window, for scripting and lab servers. Run `mocapapp --help`, or see the project's `app/README.md`.
+Every step also works without the window, for scripting and lab servers. Run `mocapapp --help`, or see the project's `app/README.md`. For example, `mocapapp data --session <folder> --trial 1 --columns elbow_flex_r` prints the minimum, maximum and peak speed of a joint angle, and `--csv out.csv` saves the values.
 
 ## 7. Citing
 

@@ -41,6 +41,7 @@ def start_flow() -> bool:
 
 
 def run_gui(session: Path | None = None) -> int:
+    """`session`: a session folder, its session.json, or a project file (.mocapproj)."""
     from mocapapp.gui.firstrun import first_start
     from mocapapp.gui.main_window import MainWindow
 
@@ -50,7 +51,7 @@ def run_gui(session: Path | None = None) -> int:
         return 0
     win = MainWindow()
     if session is not None:
-        win.open_session(session)
+        win.open_path(session)
     win.show()
     return app.exec()
 

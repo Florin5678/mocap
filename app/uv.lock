@@ -718,10 +718,11 @@ wheels = [
 
 [[package]]
 name = "mocapapp"
-version = "0.1.0rc11"
+version = "0.1.0rc12"
 source = { editable = "." }
 dependencies = [
     { name = "imageio-ffmpeg" },
+    { name = "matplotlib" },
     { name = "pose2sim" },
     { name = "pydantic" },
     { name = "reportlab" },
@@ -740,6 +741,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "imageio-ffmpeg", specifier = ">=0.5" },
+    { name = "matplotlib", specifier = ">=3.8,<4" },
     { name = "pose2sim", editable = "../" },
     { name = "pydantic", specifier = ">=2.9,<3" },
     { name = "reportlab", specifier = ">=4.2,<5" },

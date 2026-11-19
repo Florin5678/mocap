@@ -6,11 +6,11 @@ Bootstraps a private, pinned environment - nothing is installed system-wide and 
   2. the app source (a tagged release from GitHub)    -> <Prefix>\src
   3. Python 3.12 + locked dependencies (uv.lock)      -> <Prefix>\python, <Prefix>\venv
   4. the pose-estimation models (once; then offline)  -> %USERPROFILE%\.cache\rtmlib
-  5. Start-menu and desktop shortcuts
+  5. Start-menu and desktop shortcuts, and double-click opening of project files (.mocapproj)
 Re-running it updates/repairs the installation. Session folders are never touched.
 #>
 param(
-    [string]$Ref = "mocapapp-v0.1.0rc11",           # git tag (or branch) of https://github.com/Florin5678/mocap
+    [string]$Ref = "mocapapp-v0.1.0rc12",           # git tag (or branch) of https://github.com/Florin5678/mocap
     [string]$Source = "",                          # use a local checkout instead of downloading (testing)
     [string]$Prefix = (Join-Path $env:LOCALAPPDATA "mocapapp"),
     [switch]$NoModels,
@@ -31,6 +31,7 @@ $Repo = "https://github.com/Florin5678/mocap"
 # given here: the upstream release this fork is based on, marked as the mocapapp fork.
 $Pose2SimVersion = "0.10.48+mocapapp"
 $Steps = 6
+$FileType = "mocapapp.project"                     # registry class of .mocapproj files (uninstall.ps1 removes it)
 $script:Step = 0
 
 # .NET instead of Expand-Archive and Get-FileHash: those come from script modules that fail to load when
@@ -127,7 +128,7 @@ try {
     $doctorOk = ($LASTEXITCODE -eq 0)
 
     # 6. shortcuts --------------------------------------------------------------------------------
-    Step "Creating shortcuts ..."
+    Step "Creating shortcuts and the project file type ..."
     if (-not $NoShortcuts) {
         $shell = New-Object -ComObject WScript.Shell
         $places = @([Environment]::GetFolderPath("Programs"), [Environment]::GetFolderPath("Desktop"))
@@ -138,6 +139,19 @@ try {
             $lnk.Description = "Markerless motion capture (research use only)"
             $lnk.Save()
         }
+        # Double-clicking a project file (.mocapproj) opens it in the app. Per user (HKCU), no admin rights.
+        $classes = "HKCU:\Software\Classes"
+        New-Item -Force -Path "$classes\.mocapproj" -Value $FileType | Out-Null
+        New-Item -Force -Path "$classes\$FileType" -Value "mocapapp project" | Out-Null
+        New-Item -Force -Path "$classes\$FileType\DefaultIcon" -Value "`"$gui`",0" | Out-Null
+        New-Item -Force -Path "$classes\$FileType\shell\open\command" -Value "`"$gui`" `"%1`"" | Out-Null
+        try {
+            Add-Type -Namespace Mocapapp -Name Shell -MemberDefinition @"
+[System.Runtime.InteropServices.DllImport("shell32.dll")]
+public static extern void SHChangeNotify(int eventId, int flags, System.IntPtr item1, System.IntPtr item2);
+"@
+            [Mocapapp.Shell]::SHChangeNotify(0x08000000, 0, [IntPtr]::Zero, [IntPtr]::Zero)  # file types changed
+        } catch {}
     }
     $version = (& $exe --version)
     @{ ref = $Ref; version = "$version"; installed = (Get-Date -Format s); prefix = $Prefix } |
