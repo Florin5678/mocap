@@ -350,7 +350,7 @@ def copy_details(session: Session, trial: Trial) -> None:
 
 def add_trial(session: Session, root: Path, participant: str) -> Trial:
     """Another trial for a participant, for example recorded later. Its details are copied from their earlier
-    trial; its videos are chosen in the mapping table of the Videos step."""
+    trial; its videos are chosen in the mapping table of the Trials step."""
     ensure_not_frozen(session)
     person = session.participant(participant)
     if person.withdrawn_at:
@@ -644,7 +644,7 @@ def _rebase_paths(src: Path, dest: Path) -> None:
 
 
 def set_trial_participants(session: Session, table: dict[str, str]) -> None:
-    """Which participant each trial belongs to (trial label -> participant label), from the Videos step."""
+    """Which participant each trial belongs to (trial label -> participant label), from the Trials step."""
     ensure_not_frozen(session)
     known = {p.label for p in session.active_participants}
     for trial_label, person in table.items():

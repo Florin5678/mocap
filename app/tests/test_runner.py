@@ -97,6 +97,36 @@ def test_unreliable_sync_stops_before_triangulation_even_on_resume(tmp_path, fak
     assert s.run_state.sync["1"]["offsets"]["cam02"]["offset_frames"] == -1
 
 
+def test_long_sync_offset_is_noted_not_stopped(tmp_path, fake, monkeypatch):
+    # cameras started by hand can be seconds apart: a long offset with a good correlation runs through
+    fake(sync_log="--> Camera cam01 and cam02: 404 frames offset, correlation 0.86.\n")
+    monkeypatch.setattr(runner, "_fps", lambda *a: 60.0)
+    session = make_session(tmp_path, n_trials=2)
+    assert runner.run_session(session, tmp_path, labels=["1"]) == {"1": "done"}
+    info = load_session(tmp_path).run_state.sync["1"]
+    assert info["issues"] == [] and "6.7 s" in info["warnings"][0]
+
+    # a record from an older version that stopped on the offset alone continues on resume
+    s = load_session(tmp_path)
+    s.run_state.sync["2"] = {"offsets": {"cam02": {"reference": "cam01", "offset_frames": 404, "correlation": 0.9}},
+                             "issues": ["cam02: offset 6.7 s looks implausible."], "accepted": False}
+    s.run_state.trial_status["2"] = "needs_sync_fix"
+    s.run_state.stage_done["2"] = ["poseEstimation", "synchronization"]
+    assert runner._sync_gate(s, tmp_path, "2", False, lambda e: None)
+    assert s.run_state.sync["2"]["issues"] == []
+
+
+def test_parallel_progress_bars_do_not_jump():
+    bars = {}
+    assert runner.stage_fraction("load model", bars) is None
+    seen = [runner.stage_fraction(line, bars) for line in (
+        "Processing cam01.mp4:  10%|##| 100/1000 [00:10<01:30]",
+        "Processing cam02.mp4:  30%|##| 300/1000 [00:10<01:30][A",
+        "Processing cam01.mp4:  20%|##| 200/1000 [00:20<01:20]",
+        "Processing cam02.mp4:  40%|##| 400/1000 [00:20<01:20][A")]
+    assert seen == pytest.approx([0.1, 0.2, 0.25, 0.3])  # the mean of both cameras: steady, not 10 -> 30 -> 20 -> 40
+
+
 def test_parse_sync_and_issues():
     log = ("--> Camera cam01 and cam02: 0 frames offset, correlation 0.86.\n"
            "--> Camera cam01 and cam03: -200 frames offset (some note), correlation 0.7.\n"
@@ -104,9 +134,9 @@ def test_parse_sync_and_issues():
     offsets = runner.parse_sync(log)
     assert offsets["cam03"]["offset_frames"] == -200 and offsets["cam02"]["correlation"] == 0.86
     issues = runner.sync_issues(offsets, fps=30)
-    assert len(issues) == 2
-    assert any("cam03" in i and "implausible" in i for i in issues)
-    assert any("cam04" in i and "low confidence" in i for i in issues)
+    assert len(issues) == 1 and "cam04" in issues[0] and "low confidence" in issues[0]
+    warnings = runner.sync_warnings(offsets, fps=30)  # a long offset is noted but does not stop the run
+    assert len(warnings) == 1 and "cam03" in warnings[0] and "-6.7 s" in warnings[0]
     assert runner.sync_issues({}, 30) == ["No synchronisation result was found in the log."]
 
 

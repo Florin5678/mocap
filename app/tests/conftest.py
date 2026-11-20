@@ -37,6 +37,16 @@ def video():
     return make_video
 
 
+@pytest.fixture(autouse=True)
+def isolated_qsettings(tmp_path):
+    """Every test gets its own app settings (INI files in its temp folder), so no test - GUI or not - ever writes
+    to the user's real settings (recent sessions, output folder)."""
+    from PySide6.QtCore import QSettings
+
+    QSettings.setDefaultFormat(QSettings.Format.IniFormat)
+    QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, str(tmp_path / "qsettings"))
+
+
 @pytest.fixture
 def camera_dirs(tmp_path):
     """Factory: camera folders with intrinsic, extrinsic and the given trial file names."""

@@ -253,25 +253,27 @@ def test_gui_details_and_trials(qtbot, tmp_path, monkeypatch):
     videos = win.pages[1]
     monkeypatch.setattr(videos, "check", lambda: None)
     videos.refresh()
-    headers = [videos.grid.horizontalHeaderItem(c).text() for c in range(videos.grid.columnCount())]
-    assert headers == ["Height (m)", "Weight (kg)", "cam01", "cam02"]
-    cell = videos.grid.cellWidget(0, 1)
+    table = videos.details_table
+    headers = [table.horizontalHeaderItem(c).text() for c in range(table.columnCount())]
+    assert headers == ["Participant", "Height (m)", "Weight (kg)"]
+    assert [videos.grid.horizontalHeaderItem(c).text() for c in range(videos.grid.columnCount())] == ["cam01", "cam02"]
+    cell = table.cellWidget(0, 2)
     assert isinstance(cell, QLineEdit)
     cell.setText("70,5")
     cell.editingFinished.emit()
     assert load_session(tmp_path).trial("1").details == {"weight": "70.5"} and cell.text() == "70.5"
-    assert videos.grid.cellWidget(0, 0).placeholderText() == "1.75"
+    assert table.cellWidget(0, 1).placeholderText() == "1.75"
 
     monkeypatch.setattr(QInputDialog, "getItem", lambda *a, **k: (a[3][0], True))
     videos.add_trial()
     assert [t.label for t in win.session.trials] == ["1", "2", "3"]
     assert win.session.trial("3").details == {"weight": "70.5"}
     videos = win.pages[1]
-    assert videos.grid.horizontalHeaderItem(0).text() == "Participant"  # two trials of participant 1 now
+    assert videos.details_table.rowCount() == videos.grid.rowCount() == 3
 
     win.go(5)
     run = win.pages[5]
-    assert run.trials.cellWidget(0, 5).text() == "Run this trial"
+    assert run.trials.cellWidget(0, 5).text() == "Run this trial" and run.run_button.text() == "Run all"
 
 
 def test_gui_camera_position_rows(qtbot, tmp_path):

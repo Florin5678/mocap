@@ -59,6 +59,7 @@ class RunPage(Page):
     def __init__(self, win):
         super().__init__(win)
         self.cancel = threading.Event()
+        self.activity: dict[str, str] = {}  # label -> what is happening to it now, shown as its state while busy
         self.bridge = _Bridge()
         self.bridge.event.connect(self._on_event)
         self.n_labels = 1
@@ -128,7 +129,7 @@ class RunPage(Page):
         layout.addWidget(adv)
 
         row = QHBoxLayout()
-        self.run_button = QPushButton("Run")
+        self.run_button = QPushButton("Run all")
         self.run_button.setMinimumHeight(40)
         self.cancel_button = QPushButton("Stop")
         self.restart_box = QCheckBox("Start over (ignore finished stages)")
@@ -189,7 +190,7 @@ class RunPage(Page):
         self.keep_box.setChecked(st.keep_keypoints)
         self.sync_box.setChecked(ses.sync_cue_confirmed)
         self._loading = False
-        # settings stay editable after a run: Run repeats only the stages a change affects (runner.stale_stages).
+        # settings stay editable after a run: a new run repeats only the stages a change affects (stale_stages).
         # After a deletion the footage is gone, so finished trials could not be redone.
         self.adv_inner.setEnabled(not ses.frozen)
         self.adv_inner.setToolTip("Settings cannot change after raw footage was deleted." if ses.frozen else "")
@@ -282,7 +283,7 @@ class RunPage(Page):
         first = min(stale, key=runner.STAGES.index) if stale else None
         if first:
             later = [runner.STAGE_TITLES[s].lower() for s in runner.STAGES[runner.STAGES.index(first):]]
-            self.stale_note.setText("<b>Changed after a run.</b> Run repeats " + ", ".join(later) +
+            self.stale_note.setText("<b>Changed after a run.</b> Running again repeats " + ", ".join(later) +
                                     " for the trials concerned; earlier stages are kept.")
         self.stale_note.setVisible(bool(first))
 
@@ -297,6 +298,8 @@ class RunPage(Page):
             elif not t.raw_present and status != "done":
                 status = "raw footage deleted"
             msg = rs.errors.get(t.label) or "; ".join(rs.sync.get(t.label, {}).get("issues", []))
+            if self.win.busy and t.label in self.activity:
+                status, msg = "running", self.activity[t.label]
             self.trials.setItem(r, 0, readonly(t.label))
             self.trials.setItem(r, 1, readonly(t.code))
             label = QLabel(status_badge(status) + (f" - {html.escape(msg)}" if msg and status != "done" else ""))
@@ -359,6 +362,7 @@ class RunPage(Page):
         self.labels = labels
         self.log.clear()
         self.bar.setValue(0)
+        self.activity = {lb: "waiting for its turn" for lb in labels}
         self.win.set_busy(True)
         self.run_button.setEnabled(False)
         self.cancel_button.setEnabled(True)
@@ -377,16 +381,20 @@ class RunPage(Page):
             return
         k = self.labels.index(e.trial) if e.trial in getattr(self, "labels", []) else 0
         if e.fraction is not None:
-            self.bar.setValue(int(1000 * (k + e.fraction) / max(1, self.n_labels)))
+            self.bar.setValue(max(self.bar.value(), int(1000 * (k + e.fraction) / max(1, self.n_labels))))
         code = self.session.trial(e.trial).code if e.trial else ""
         if e.kind == "stage_start":
             self.stage.setText(f"Trial {e.trial} ({code}), {k + 1} of {self.n_labels}: {e.message} ...")
+            self.activity[e.trial] = f"{e.message} ..."
+            self._fill_trials()
         elif e.kind == "stage_end" and not e.ok:
             self.log.appendPlainText(f"PROBLEM: {e.message}")
         elif e.kind in ("trial_end", "needs_sync_fix"):
+            self.activity.pop(e.trial, None)
             self._fill_trials()
 
     def _finished(self, _results) -> None:
+        self.activity = {}
         self.win.set_busy(False)
         self.cancel_button.setEnabled(False)
         self.bar.setValue(1000)
@@ -397,10 +405,11 @@ class RunPage(Page):
         self.completeChanged.emit()
 
     def _failed(self, msg: str, details: str) -> None:
+        self.activity = {}
         self.win.set_busy(False)
         self.cancel_button.setEnabled(False)
         if self.cancel.is_set():
-            self.stage.setText("Stopped. Press Run to continue where it stopped.")
+            self.stage.setText("Stopped. Press Run all (or Run this trial) to continue where it stopped.")
         else:
             error_box(self, "Run stopped", msg, details)
         self.win.save()
@@ -408,7 +417,11 @@ class RunPage(Page):
 
     def fix_sync(self, label: str) -> None:
         self.labels, self.n_labels = [label], 1
+        self.bar.setValue(0)
+        self.activity = {label: "sync player open in a separate window: close it when the offsets look right"}
         self.win.set_busy(True)
+        self.run_button.setEnabled(False)
+        self._fill_trials()  # greys out the other trials' buttons: one player or run at a time
         self.stage.setText(f"Trial {label}: the synchronisation player opens in a separate window. Close it when "
                            "the offsets look right; the run then continues.")
         Background(self, runner.fix_sync, self.session, self.root, label, self.bridge.event.emit,

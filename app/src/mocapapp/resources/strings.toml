@@ -21,7 +21,7 @@ cameras_stay_put = "Cameras must not move during the session. If one is moved, s
 
 [steps]
 setup = "Session: where the videos are and who took part."
-videos = "Check the videos and how they are matched to trials, then copy them into the session."
+videos = "Trials: who each trial belongs to, their details, and which video is which trial; then copy the videos into the session."
 intrinsics = "Lens calibration (intrinsic): computed from each camera's board video."
 scene = "Reference points: the measured points that define the floor and the directions X, Y, Z."
 extrinsics = "Camera positions (extrinsic): click the reference points in one picture per camera."

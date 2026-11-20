@@ -134,7 +134,8 @@ def trial_qa(session: Session, root: Path, label: str) -> TrialQA:
         qa.metrics.append(Metric("Sync confidence (lowest camera)", round(min_corr, 2), "correlation",
                                  light("sync_min_correlation", min_corr),
                                  ", ".join(f"{c}: {o['offset_frames']:+d} frames" for c, o in sync.items())))
-        for issue in session.run_state.sync.get(label, {}).get("issues", []):
+        info = session.run_state.sync.get(label, {})
+        for issue in info.get("issues", []) + info.get("warnings", []):
             qa.warnings.append(f"Synchronisation: {issue}")
 
     # triangulation

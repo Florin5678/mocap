@@ -12,6 +12,7 @@ import io
 import json
 import math
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 from pydantic import BaseModel, Field
@@ -29,6 +30,20 @@ BELOW_FLOOR_M = -0.02
 
 Y_AXIS_TEXT = ("Seen from above, +Y is 90 degrees counter-clockwise from +X (right-hand rule): standing at the "
                "origin facing +X with Z up, +Y is on your left.")
+# the unit the points are entered in; they are always stored (and given to Pose2Sim) in metres
+UNITS = {"m": 1.0, "cm": 0.01, "in": 0.0254, "ft": 0.3048}
+UNIT_NAMES = {"m": "metres (m)", "cm": "centimetres (cm)", "in": "inches (in)", "ft": "feet (ft)"}
+Unit = Literal["m", "cm", "in", "ft"]
+
+
+def to_metres(value: float, unit: str) -> float:
+    return value * UNITS[unit]
+
+
+def from_metres(value: float, unit: str) -> float:
+    return round(value / UNITS[unit], 9)  # no 71.50000000000001 for 0.715 m in cm
+
+
 OPENSIM_NOTE = "In exported .trc/OpenSim files the axes become X = this Y, Y = this Z (up), Z = this X."
 
 
@@ -47,6 +62,7 @@ class Scene(BaseModel):
     origin_text: str = ""  # "The origin is at ____"
     x_axis_text: str = ""  # "+X points from the origin toward ____ (horizontal)"
     y_axis_note: str = ""  # optional, the user's own description of +Y
+    unit: Unit = "m"  # the unit the points were entered in (0.1.0rc15); `points` are in metres regardless
     points: list[ScenePoint] = Field(default_factory=list)
 
     def array(self) -> np.ndarray:
@@ -62,8 +78,8 @@ class Scene(BaseModel):
 
 # ---------- import / export ----------
 
-def from_csv(text: str) -> list[ScenePoint]:
-    """CSV with columns label,x,y,z (header optional, metres)."""
+def from_csv(text: str, unit: str = "m") -> list[ScenePoint]:
+    """CSV with columns label,x,y,z (header optional) in `unit`; the points come back in metres."""
     rows = [r for r in csv.reader(io.StringIO(text)) if r and any(c.strip() for c in r)]
     if rows and not _is_number(rows[0][1] if len(rows[0]) > 1 else ""):
         rows = rows[1:]  # header
@@ -74,17 +90,18 @@ def from_csv(text: str) -> list[ScenePoint]:
         try:
             x, y, z = (float(v.strip().replace(",", ".")) for v in r[1:4])
         except ValueError:
-            raise ValueError(f"Row {n} ({r[0]}): x, y and z must be numbers in metres.") from None
-        points.append(ScenePoint(label=r[0].strip() or f"P{n}", x=x, y=y, z=z))
+            raise ValueError(f"Row {n} ({r[0]}): x, y and z must be numbers.") from None
+        points.append(ScenePoint(label=r[0].strip() or f"P{n}", x=to_metres(x, unit), y=to_metres(y, unit),
+                                 z=to_metres(z, unit)))
     return points
 
 
-def to_csv(points: list[ScenePoint]) -> str:
+def to_csv(points: list[ScenePoint], unit: str = "m") -> str:
     out = io.StringIO()
     w = csv.writer(out, lineterminator="\n")
-    w.writerow(["label", "x_m", "y_m", "z_m"])
+    w.writerow(["label", f"x_{unit}", f"y_{unit}", f"z_{unit}"])
     for p in points:
-        w.writerow([p.label, p.x, p.y, p.z])
+        w.writerow([p.label] + [from_metres(v, unit) for v in p.xyz])
     return out.getvalue()
 
 
@@ -160,7 +177,8 @@ def check_scene(scene: Scene) -> list[Issue]:
             continue
         if any(abs(v) > TYPO_LIMIT_M for v in p.xyz):
             add("warning", where, f"{p.xyz} is more than {TYPO_LIMIT_M:g} m from the origin.",
-                "Coordinates are in metres: 150 cm is 1.5, not 150.")
+                "Check the unit chosen for the points: numbers measured in centimetres need the unit "
+                "'centimetres', not 'metres'.")
         if p.z < BELOW_FLOOR_M:
             add("warning", where, f"Z = {p.z:g} m is below the floor (Z is up, the floor should be Z = 0).",
                 "Check the sign of Z.")

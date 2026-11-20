@@ -199,6 +199,9 @@ class ViewerPage(Page):
     key, title = "viewer", "Viewer"
     optional = True
 
+    def step_ticked(self) -> bool:
+        return False  # nothing to finish here: a tick before Run looked like the step was done
+
     def __init__(self, win):
         super().__init__(win)
         self._cache: dict[tuple[str, float], object] = {}

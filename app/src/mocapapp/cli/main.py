@@ -344,8 +344,10 @@ def _cmd_scene(args: argparse.Namespace) -> int:
             scene = get_scene(root)
         except Exception:
             scene = sp.Scene()
+        if args.unit:
+            scene.unit = args.unit
         if args.csv:
-            scene.points = sp.from_csv(Path(args.csv).read_text(encoding="utf-8-sig"))
+            scene.points = sp.from_csv(Path(args.csv).read_text(encoding="utf-8-sig"), scene.unit)
         if args.snippet:
             scene.points = sp.from_snippet(Path(args.snippet).read_text(encoding="utf-8"))
         if args.origin is not None:
@@ -354,16 +356,18 @@ def _cmd_scene(args: argparse.Namespace) -> int:
             scene.x_axis_text = args.x_axis
         if args.y_note is not None:
             scene.y_axis_note = args.y_note
-        removed = set_scene(root, scene)
-        if removed:
-            print("Reference points changed: removed " + ", ".join(removed)
-                  + ". Click the points again for each camera.")
+        from mocapapp.core.session import load_session, save_session
+
+        session = load_session(root)
+        for line in set_scene(root, scene, session):
+            print(line)
+        save_session(session, root)
         print(f"{len(scene.points)} reference points saved.")
     scene = get_scene(root)
     if args.scene_command == "show":
         print(sp.axes_description(scene))
         print()
-        print(sp.to_csv(scene.points) if args.format == "csv" else scene.as_config_snippet())
+        print(sp.to_csv(scene.points, scene.unit) if args.format == "csv" else scene.as_config_snippet())
         return 0
     ok = _print_issues(sp.check_scene(scene))
     print("\nReference points OK." if ok else "\nFix the reference points (see above).")
@@ -927,9 +931,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     scene = sub.add_parser("scene", help="reference points for camera-position calibration")
     scsub = scene.add_subparsers(dest="scene_command", required=True)
-    sset = scsub.add_parser("set", help="set points (CSV label,x,y,z in metres, or a Config.toml snippet) and axes")
+    sset = scsub.add_parser("set", help="set points (CSV label,x,y,z, or a Config.toml snippet in metres) and axes")
     sset.add_argument("--session", required=True)
     sset.add_argument("--csv")
+    sset.add_argument("--unit", choices=["m", "cm", "in", "ft"],
+                      help="unit of the CSV numbers (default: the unit set before, else metres)")
     sset.add_argument("--snippet", help="text file containing object_coords_3d = [[x,y,z], ...]")
     sset.add_argument("--origin", help="where the origin is, e.g. 'tape cross by the door'")
     sset.add_argument("--x-axis", help="what +X points toward, e.g. 'the window'")

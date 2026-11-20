@@ -56,20 +56,47 @@ def run_intrinsics(session: Session, root: Path, cameras: list[str] | None = Non
 
 # ---------- scene ----------
 
-def set_scene(root: Path, scene: Scene) -> list[str]:
-    """Save the reference points. Changing points invalidates computed extrinsics (returns what was removed)."""
+def set_scene(root: Path, scene: Scene, session: Session | None = None) -> list[str]:
+    """Save the reference points. Returns plain-language notes on what happened to the camera positions.
+
+    When the points changed, every camera position is recomputed from its saved clicks: the clicked spots did not
+    move, only their coordinates changed (a corrected measurement, another unit). Clicks of removed points are
+    dropped. A position that cannot be recomputed (no session given, too few clicks left, invalid points) is removed
+    and has to be clicked again. The session's extrinsics entries are updated; the caller saves the session."""
     layout = Layout(root)
-    removed = []
-    if layout.scene_json.is_file():
-        old = load_scene(layout.scene_json)
-        if [p.model_dump() for p in old.points] != [p.model_dump() for p in scene.points]:
-            for f in sorted(layout.calibration_work.glob("extrinsics_*.json")):
-                f.unlink()
-                removed.append(f.name)
-            if _invalidate_calib(root):
-                removed.append(layout.calib_file.name)
+    old = load_scene(layout.scene_json) if layout.scene_json.is_file() else None
     save_scene(scene, layout.scene_json)
-    return removed
+    if old is None or [p.model_dump() for p in old.points] == [p.model_dump() for p in scene.points]:
+        return []
+    _invalidate_calib(root)
+    notes = []
+    labels = set(scene.labels())
+    for f in sorted(layout.calibration_work.glob("extrinsics_*.json")):
+        result = extrinsics.ExtrinsicsResult.from_json(f.read_text(encoding="utf-8"))
+        position = f.stem.removeprefix(f"extrinsics_{result.camera}").removeprefix("_pos")
+        where = result.camera + (f" position {position}" if position else "")
+        if session is not None:
+            clicks = [extrinsics.Click(**c) for c in result.clicks if c.get("label") in labels]
+            try:
+                new = run_extrinsics(session, root, result.camera, clicks, result.frame_index,
+                                     override=result.overridden, position=position)
+                notes.append(f"{where}: camera position recomputed from your clicks (error {new.rms_cm:.1f} cm, "
+                             f"{new.status}).")
+                continue
+            except Exception as exc:  # any reason: fall back to clicking again, as before 0.1.0rc15
+                notes.append(f"{where}: could not be recomputed ({exc}). Click the points again.")
+        else:
+            notes.append(f"{where}: removed. Click the points again.")
+        f.unlink()
+        if session is not None:
+            session.extrinsics = [e for e in session.extrinsics
+                                  if (e.get("camera"), e.get("position", "")) != (result.camera, position)]
+    if session is not None and session.calibration_source == "app":
+        try:
+            write_calibration(session, root)
+        except CalibrationStepError:
+            pass  # not every camera is ready: written once step 5 is complete
+    return notes
 
 
 def get_scene(root: Path) -> Scene:

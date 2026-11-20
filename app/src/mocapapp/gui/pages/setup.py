@@ -23,13 +23,11 @@ from PySide6.QtWidgets import (
     QStackedWidget,
     QStyle,
     QTableWidget,
-    QTableWidgetItem,
     QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
-from mocapapp.core.session import parse_height
 from mocapapp.core.texts import s
 from mocapapp.core.validate import Issue
 from mocapapp.core.workflow import (
@@ -68,10 +66,6 @@ def _scroll(widget: QWidget) -> QScrollArea:
     area.setWidgetResizable(True)
     area.setWidget(widget)
     return area
-
-
-def height_text(value: float | None) -> str:
-    return "" if value is None else f"{value:.2f}"
 
 
 def detail_title(d) -> str:
@@ -141,6 +135,8 @@ class SetupPage(Page):
         out_row = QHBoxLayout()
         self.out_edit = QLineEdit(last_output_root())
         self.out_edit.setPlaceholderText("Folder where session folders are created (no letters like æ ø å)")
+        self.out_edit.setToolTip("Starts as the output folder chosen in Help > Settings; change it here for this "
+                                 "session only.")
         browse = QPushButton("Browse ...")
         browse.clicked.connect(lambda: self._browse_into(self.out_edit, "Output folder"))
         out_row.addWidget(self.out_edit, 1)
@@ -155,7 +151,14 @@ class SetupPage(Page):
         self.trials_spin.setValue(1)
         self.trials_spin.valueChanged.connect(lambda _: self._check_new())
         form.addRow("Trials per participant", self.trials_spin)
+        self.people_spin = QSpinBox()
+        self.people_spin.setRange(1, MAX_TRIALS)
+        self.people_spin.setValue(1)
+        self.people_spin.valueChanged.connect(lambda _: self._check_new())
+        form.addRow("Participants", self.people_spin)
         layout.addLayout(form)
+        layout.addWidget(note("Pseudonyms are generated when the session is created. Height and the other "
+                              "participant details are entered per trial in step 2 (Trials)."))
 
         cams = QGroupBox("Cameras: one folder per camera")
         cl = QVBoxLayout(cams)
@@ -178,25 +181,6 @@ class SetupPage(Page):
         cl.addLayout(row)
         layout.addWidget(cams)
 
-        people = QGroupBox("Participants")
-        pl = QVBoxLayout(people)
-        pl.addWidget(para("Height in metres (cm is converted). Leave blank to estimate it - not recommended. "
-                            "Pseudonyms are generated when the session is created."))
-        self.height_table = QTableWidget(0, 2)
-        self.height_table.setHorizontalHeaderLabels(["Height", "Used as"])
-        self.height_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.height_table.itemChanged.connect(self._height_edited)
-        pl.addWidget(self.height_table)
-        prow = QHBoxLayout()
-        add_p, remove_p = QPushButton("Add participant"), QPushButton("Remove last participant")
-        add_p.clicked.connect(lambda: self._resize_participants(self.height_table.rowCount() + 1))
-        remove_p.clicked.connect(lambda: self._resize_participants(self.height_table.rowCount() - 1))
-        prow.addWidget(add_p)
-        prow.addWidget(remove_p)
-        prow.addStretch()
-        pl.addLayout(prow)
-        layout.addWidget(people)
-
         self.new_issues = IssueView()
         layout.addWidget(self.new_issues)
         self.create_button = QPushButton("Create session")
@@ -204,7 +188,7 @@ class SetupPage(Page):
         layout.addWidget(self.create_button)
         for _ in range(3):
             self._add_camera("")
-        self._resize_participants(1)
+        self._check_new()
         return w
 
     def _browse_into(self, edit: QLineEdit, title: str) -> None:
@@ -250,37 +234,10 @@ class SetupPage(Page):
             fit_rows(self.cam_table)
             self._check_new()
 
-    def _resize_participants(self, n: int) -> None:
-        n = max(1, n)
-        self.height_table.blockSignals(True)
-        self.height_table.setRowCount(n)
-        self.height_table.setVerticalHeaderLabels([f"Participant {i + 1}" for i in range(n)])
-        for r in range(n):
-            if self.height_table.item(r, 0) is None:
-                self.height_table.setItem(r, 0, QTableWidgetItem(""))
-                self.height_table.setItem(r, 1, readonly("estimated (not recommended)"))
-        self.height_table.blockSignals(False)
-        fit_rows(self.height_table)
-        self._check_new()
-
-    def _height_edited(self, item: QTableWidgetItem) -> None:
-        if item.column() != 0:
-            return
-        try:
-            h = parse_height(item.text())
-            text = "estimated (not recommended)" if h is None else f"{h:.2f} m"
-        except ValueError:
-            text = "invalid: 1.00-2.30 m"
-        self.height_table.blockSignals(True)
-        self.height_table.item(item.row(), 1).setText(text)
-        self.height_table.blockSignals(False)
-        self._check_new()
-
     def spec(self) -> NewSession:
         dirs = [Path(self.cam_table.cellWidget(r, 1).text().strip()) for r in range(self.cam_table.rowCount())]
-        heights = [self.height_table.item(r, 0).text().strip() for r in range(self.height_table.rowCount())]
-        return NewSession(out_root=Path(self.out_edit.text().strip() or "."), n_participants=len(heights),
-                          camera_dirs=dirs, study=self.study_edit.text(), heights=heights,
+        return NewSession(out_root=Path(self.out_edit.text().strip() or "."), n_participants=self.people_spin.value(),
+                          camera_dirs=dirs, study=self.study_edit.text(),
                           trials_per_participant=self.trials_spin.value())
 
     def _check_new(self) -> list[Issue]:
@@ -332,8 +289,8 @@ class SetupPage(Page):
                             "received</i> once you hold the signed form for that pseudonym. <i>Delete raw footage</i> "
                             "follows the storage consent by default; deletion is done after a successful run and "
                             "export, and is always possible later."))
-        self.people = QTableWidget(0, 6)
-        self.people.setHorizontalHeaderLabels(["Participant", "Height (m)", "Signed consent\nreceived",
+        self.people = QTableWidget(0, 5)
+        self.people.setHorizontalHeaderLabels(["Participant", "Signed consent\nreceived",
                                                "Consented to storing\nraw footage", "Delete raw\nfootage",
                                                "Consent\nform"])
         self.people.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
@@ -358,9 +315,10 @@ class SetupPage(Page):
         layout.addWidget(box)
         details = QGroupBox("Participant details asked per trial")
         dl = QVBoxLayout(details)
-        dl.addWidget(para("Ticked details get a column in the trial table of step 2 (Videos), filled in for every "
-                          "trial. A participant's next trials start with the values of their first one. The height "
-                          "above is the default for their trials; it scales the body model."))
+        dl.addWidget(para("Ticked details get a column in the participant details table of step 2 (Trials), "
+                          "filled in for every trial. A participant's next trials start with the values of their "
+                          "first one. Height scales the body model: without it, it is estimated (not "
+                          "recommended)."))
         self.details_list = QWidget()
         self.details_layout = QVBoxLayout(self.details_list)
         self.details_layout.setContentsMargins(0, 0, 0, 0)
@@ -403,10 +361,6 @@ class SetupPage(Page):
                 self.people.setItem(r, 1, readonly(gone))
                 continue
             self.people.setCellWidget(r, 0, self._name_cell(t))
-            h = QLineEdit(height_text(t.height_m))
-            h.setPlaceholderText("estimate")
-            h.editingFinished.connect(lambda t=t, h=h: self._set_height(t, h))
-            self.people.setCellWidget(r, 1, h)
             attest = QCheckBox("received")
             attest.setChecked(t.consent.attested)
             attest.toggled.connect(lambda on, t=t: self._attest(t, on))
@@ -416,11 +370,11 @@ class SetupPage(Page):
             delete.setChecked(t.delete_raw)
             storage.toggled.connect(lambda on, t=t, d=delete: self._storage(t, on, d))
             delete.toggled.connect(lambda on, t=t: self._delete(t, on))
-            for col, cb in ((2, attest), (3, storage), (4, delete)):
+            for col, cb in ((1, attest), (2, storage), (3, delete)):
                 self.people.setCellWidget(r, col, cb)
             form = QPushButton("Generate ...")
             form.clicked.connect(lambda _=False, t=t: self.win.save_consent_pdf(t.code))
-            self.people.setCellWidget(r, 5, form)
+            self.people.setCellWidget(r, 4, form)
         fit_rows(self.people)
         frozen = self.session.frozen
         self.add_person_button.setEnabled(not frozen)
@@ -553,15 +507,6 @@ class SetupPage(Page):
             return
         self.win.set_session(self.root, self.session)
 
-    def _set_height(self, trial, edit: QLineEdit) -> None:
-        try:
-            trial.height_m = parse_height(edit.text())
-        except ValueError as exc:
-            error_box(self, "Height not changed", str(exc))
-        edit.setText(height_text(trial.height_m))
-        self.win.save()
-        self._check_existing()
-
     def _attest(self, trial, on: bool) -> None:
         trial.consent.attested = on
         trial.consent.attested_at = datetime.now().isoformat(timespec="seconds") if on else None
@@ -592,8 +537,6 @@ class SetupPage(Page):
             if not t.consent.raw_footage_storage and not t.delete_raw:
                 issues.append(Issue("warning", where, "No consent to store raw footage, but it will not be deleted: "
                                     "the consent form promises deletion.", "Tick 'Delete raw footage'."))
-            if t.height_m is None:
-                issues.append(Issue("warning", where, "No height: it will be estimated (not recommended).", ""))
         self.existing_issues.show_issues(issues, "All participants are complete.")
 
     def is_complete(self) -> bool:

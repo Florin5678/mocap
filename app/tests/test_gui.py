@@ -121,26 +121,29 @@ def test_full_wizard(qtbot, tmp_path, monkeypatch):
     setup.cam_table.cellWidget(1, 1).setText(str(raw / "cam02"))
     setup.fill_sibling_cameras(1, raw / "cam02")
     assert [setup.cam_table.cellWidget(r, 1).text() for r in range(3)] == [str(raw / cam) for cam in CAMS]
-    setup.height_table.item(0, 0).setText("178")
-    assert setup.height_table.item(0, 1).text() == "1.78 m"
     setup._check_new()
     shot(win, "10_setup_new")
     assert setup.create_button.isEnabled()
     setup.create_button.click()
-    assert win.session is not None and win.session.trials[0].height_m == 1.78
+    assert win.session is not None and win.session.trials[0].height_m is None  # entered per trial in step 2
     root = win.root
     people = setup.people
-    people.cellWidget(0, 2).setChecked(True)  # signed consent received
+    people.cellWidget(0, 1).setChecked(True)  # signed consent received
     assert load_session(root).trials[0].consent.attested
-    people.cellWidget(0, 3).setChecked(True)  # storage consent -> delete unticked by default
-    assert not people.cellWidget(0, 4).isChecked()
+    people.cellWidget(0, 2).setChecked(True)  # storage consent -> delete unticked by default
+    assert not people.cellWidget(0, 3).isChecked()
     shot(win, "11_setup_existing")
     assert win.next_button.isEnabled()
     win.next_button.click()
 
     # 2. videos
     videos = win.pages[1]
-    assert win.current_page() is videos and not win.next_button.isEnabled()
+    assert win.current_page() is videos and not win.next_button.isEnabled() and videos.title == "Trials"
+    height = videos.details_table.cellWidget(0, 1)  # trials and participant details: height by default
+    assert videos.details_table.horizontalHeaderItem(1).text() == "Height (m)"
+    height.setText("178")
+    height.editingFinished.emit()
+    assert height.text() == "1.78" and load_session(root).trials[0].height_m == 1.78
     videos.check()
     wait_idle(qtbot, win)
     assert videos.report is not None and videos.report.ok, videos.report.issues
@@ -276,10 +279,11 @@ def test_sync_gate_buttons(qtbot, tmp_path, monkeypatch):
     monkeypatch.setattr(runner, "run_stage", FakeStages(sync_log=SYNC_BAD))
     monkeypatch.setattr(runner, "_fps", lambda *a: 30.0)
     monkeypatch.setattr(runner, "estimate_seconds", lambda *a: 60)
-    session = make_session(tmp_path, n_trials=1)
+    session = make_session(tmp_path, n_trials=2)
     for cam in session.cameras:
         Layout(tmp_path).inputs(cam.name).mkdir(parents=True)
-        (Layout(tmp_path).inputs(cam.name) / "trial_1.mp4").write_bytes(b"fake")
+        for lb in ("1", "2"):
+            (Layout(tmp_path).inputs(cam.name) / f"trial_{lb}.mp4").write_bytes(b"fake")
     win = MainWindow()
     qtbot.addWidget(win)
     win.open_session(tmp_path)
@@ -288,6 +292,19 @@ def test_sync_gate_buttons(qtbot, tmp_path, monkeypatch):
     run.start()
     wait_idle(qtbot, win)
     assert win.session.run_state.trial_status["1"] == "needs_sync_fix"
+
+    # while the sync player is open, the trial says so and no other player or run can start
+    started, background = [], pages.run.Background
+    monkeypatch.setattr(pages.run, "Background", lambda *a, **k: started.append(a[1]))
+    run.trials.cellWidget(0, 3).click()
+    assert started == [runner.fix_sync]
+    state = run.trials.cellWidget(0, 2).text()
+    assert "running" in state and "sync player open" in state
+    assert not any(run.trials.cellWidget(1, c).isEnabled() for c in (3, 4, 5)) and not run.run_button.isEnabled()
+    run._finished(None)
+    assert "needs sync fix" in run.trials.cellWidget(0, 2).text() and run.trials.cellWidget(1, 3).isEnabled()
+    monkeypatch.setattr(pages.run, "Background", background)
+
     accept = run.trials.cellWidget(0, 4)
     assert accept.isEnabled() and run.trials.cellWidget(0, 3).isEnabled()
     accept.click()
@@ -367,7 +384,7 @@ def test_sample_data_in_gui(qtbot, tmp_path, monkeypatch):
     assert all(win.pages[i].skipped() for i in (1, 2, 3, 4))
     assert "consent" in run.issues.toPlainText().lower() and not run.run_button.isEnabled()
     win.go(0)
-    win.pages[0].people.cellWidget(0, 2).setChecked(True)  # signed consent received
+    win.pages[0].people.cellWidget(0, 1).setChecked(True)  # signed consent received
     win.next_button.click()
     assert win.current_page() is run
     run.sync_box.setChecked(True)
@@ -383,3 +400,32 @@ def test_sample_data_in_gui(qtbot, tmp_path, monkeypatch):
     wait_idle(qtbot, win)
     shot(win, "81_sample_results")
     assert (Layout(root).export / "manifest.json").is_file()
+
+
+def test_viewer_step_never_ticked(qtbot, tmp_path):
+    from mocapapp.gui.main_window import MainWindow
+    from tests.m3_fakes import make_session
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    win.set_session(tmp_path, make_session(tmp_path, n_trials=1))
+    win.update_nav()
+    texts = [win.steps.item(k).text() for k in range(win.steps.count())]
+    assert texts[-1].strip() == "8. Viewer" and not texts[5].startswith("✓")  # nothing run yet, nothing ticked there
+
+
+def test_scene_dialog_unit(qtbot):
+    from mocapapp.core.calibration.scene_points import Scene, ScenePoint
+    from mocapapp.gui.scene_dialog import SceneDialog
+
+    typed = Scene(points=[ScenePoint(label="table", x=40, y=-95, z=71.5)])  # centimetres, saved as metres
+    dlg = SceneDialog(None, typed)
+    qtbot.addWidget(dlg)
+    assert dlg.table.horizontalHeaderItem(1).text() == "X (m)"
+    dlg.unit_box.setCurrentIndex(dlg.unit_box.findData("cm"))  # the numbers stay; their meaning changes
+    assert dlg.table.horizontalHeaderItem(3).text() == "Z (cm) up" and dlg.table.item(0, 3).text() == "71.5"
+    fixed = dlg.scene()
+    assert fixed.unit == "cm" and fixed.points[0].xyz == pytest.approx([0.4, -0.95, 0.715])
+    again = SceneDialog(None, fixed)  # reopened: shown in centimetres as typed
+    qtbot.addWidget(again)
+    assert again.unit == "cm" and again.table.item(0, 3).text() == "71.5"

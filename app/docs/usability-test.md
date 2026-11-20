@@ -11,7 +11,7 @@ PROJECT.md §11 requires that **three people** who have never used OpenSim or Po
 ## Material prepared by the facilitator
 
 - A clean computer (or a fresh user account) with internet access, and the release-candidate installer.
-- One recorded session: 3 cameras, both calibration videos per camera, 2 trials, and a sheet with the measured reference points (≥ 10, in metres, with the origin and +X described). Record it once and reuse it for all participants. The person filmed must have consented to the footage being used for testing.
+- One recorded session: 3 cameras, both calibration videos per camera, 2 trials, and a sheet with the measured reference points (≥ 10, in metres or centimetres, with the origin and +X described). Record it once and reuse it for all participants. The person filmed must have consented to the footage being used for testing.
 - The printed calibration board is not needed: the videos already exist.
 - A stopwatch and this record sheet.
 
@@ -20,8 +20,8 @@ PROJECT.md §11 requires that **three people** who have never used OpenSim or Po
 | # | Task | Done when |
 |---|---|---|
 | T1 | "Install the app and open it." | The greeting window is visible. |
-| T2 | "Find out how the app works, then start a new session with these camera folders. The participants are 1.78 m and 1.65 m tall; both signed consent; neither agreed to storing raw footage." | The session exists; heights are entered; consent is ticked; *Delete raw footage* is ticked. |
-| T3 | "Get the videos ready." | The Videos step is complete. |
+| T2 | "Find out how the app works, then start a new session with these camera folders. The participants are 1.78 m and 1.65 m tall; both signed consent; neither agreed to storing raw footage." | The session exists; consent is ticked; *Delete raw footage* is ticked. |
+| T3 | "Get the videos ready." | The Trials step is complete; heights are entered per trial. |
 | T4 | "Calibrate the cameras using this measurement sheet." | Lens calibration, reference points and camera positions are complete; every camera is below 2.5 cm. |
 | T5 | "Process both trials." | Both trials are done. If a sync check appears, it was handled. |
 | T6 | "Tell me whether the results are good, and export the joint angles and markers." | The participant names the traffic lights correctly; the export exists. |

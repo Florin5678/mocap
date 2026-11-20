@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMenu,
+    QMessageBox,
     QPushButton,
     QSpinBox,
     QTableWidget,
@@ -213,7 +214,7 @@ class IntrinsicsPage(_CalibPage):
         if len(cams) != 1:
             error_box(self, "Select one camera", "Select the row of the camera whose video you want to replace.")
             return
-        # the Videos page owns choosing files and copying them into the session
+        # the Trials page owns choosing files and copying them into the session
         self.win.go(1)
         self.win.pages[1].choose(cams[0], "intrinsic")
 
@@ -265,10 +266,11 @@ class ScenePage(_CalibPage):
 
         dlg = SceneDialog(self, self._scene(), has_extrinsics=bool(self.session.extrinsics))
         if dlg.exec():
-            removed = service.set_scene(self.root, dlg.scene())
-            if removed:
-                self.session.extrinsics = []
-                self.win.save()
+            notes = service.set_scene(self.root, dlg.scene(), self.session)
+            self.win.save()
+            if notes:
+                QMessageBox.information(self, "Camera positions", "The reference points changed.\n\n"
+                                        + "\n".join(notes))
             self.refresh()
             self.completeChanged.emit()
 

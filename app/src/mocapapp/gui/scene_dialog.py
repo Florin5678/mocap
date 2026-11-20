@@ -8,6 +8,7 @@ from pathlib import Path
 from PySide6.QtCore import QPointF, QRectF, QStandardPaths, Qt
 from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import (
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -33,7 +34,8 @@ from mocapapp.gui.common import IssueView, error_box, para
 AXIS_COLORS = {"X": QColor("#d32f2f"), "Y": QColor("#2e7d32"), "Z": QColor("#1565c0")}
 MEASURING_HELP = """<b>Measuring the points</b><ul>
 <li>Mark points with tape crosses on the floor and marks on boxes, stools or stands at different heights.</li>
-<li>Measure each point from the origin along +X, +Y (to the left of +X) and up (Z), in metres, to within 5 mm.</li>
+<li>Measure each point from the origin along +X, +Y (to the left of +X) and up (Z), to within 5 mm, in the unit
+chosen above the table (metres, centimetres, inches or feet).</li>
 <li>Spread them through the whole space where the person moves; put several above the floor.</li>
 <li>Worked example: origin = floor cross by the door, +X toward the window. A cross 2 m toward the window:
 (2, 0, 0). A mark on a 0.75 m stool, 1 m toward the window and 1 m to the left: (1, 1, 0.75).</li>
@@ -140,10 +142,22 @@ class SceneDialog(QDialog):
 
         left = QWidget()
         ll = QVBoxLayout(left)
-        ll.addWidget(para("Points in metres, the same as <code>object_coords_3d</code> in Config.toml. "
-                            f"At least {sp.MIN_POINTS} points."))
+        ll.addWidget(para(f"At least {sp.MIN_POINTS} points, measured in the unit chosen here. They are saved in "
+                          "metres for Pose2Sim (<code>object_coords_3d</code> in Config.toml)."))
+        unit_row = QHBoxLayout()
+        unit_row.addWidget(QLabel("<b>Unit of the numbers</b>"))
+        self.unit_box = QComboBox()
+        for key, name in sp.UNIT_NAMES.items():
+            self.unit_box.addItem(name, key)
+        self.unit_box.setCurrentIndex(max(0, self.unit_box.findData(scene.unit)))
+        self.unit_box.setToolTip("The numbers in the table stay as typed; the unit says what they mean. Typed in "
+                                 "centimetres while metres was chosen? Choose centimetres.")
+        self.unit_box.currentIndexChanged.connect(self._unit_changed)
+        unit_row.addWidget(self.unit_box)
+        unit_row.addStretch()
+        ll.addLayout(unit_row)
         self.table = QTableWidget(0, 4)
-        self.table.setHorizontalHeaderLabels(["Label", "X (m)", "Y (m)", "Z (m) up"])
+        self._set_headers()
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.table.itemChanged.connect(self._changed)
         ll.addWidget(self.table, 1)
@@ -225,11 +239,24 @@ class SceneDialog(QDialog):
 
     # ---------- table <-> points ----------
 
+    @property
+    def unit(self) -> str:
+        return self.unit_box.currentData()
+
+    def _set_headers(self) -> None:
+        u = self.unit
+        self.table.setHorizontalHeaderLabels(["Label", f"X ({u})", f"Y ({u})", f"Z ({u}) up"])
+
+    def _unit_changed(self) -> None:
+        self._set_headers()
+        self._validate()
+
     def set_points(self, points: list[sp.ScenePoint]) -> None:
+        """Show points given in metres, in the chosen unit."""
         self.table.blockSignals(True)
         self.table.setRowCount(0)
         for q in points:
-            self._append(q.label, q.x, q.y, q.z)
+            self._append(q.label, *(sp.from_metres(v, self.unit) for v in q.xyz))
         self.table.blockSignals(False)
         self._validate()
 
@@ -240,23 +267,23 @@ class SceneDialog(QDialog):
             self.table.setItem(r, c, QTableWidgetItem(v if isinstance(v, str) else f"{v:g}"))
 
     def points(self) -> tuple[list[sp.ScenePoint], list[str]]:
-        """Parsed rows and plain-language problems with rows that are not numbers."""
+        """Parsed rows in metres, and plain-language problems with rows that are not numbers."""
         pts, bad = [], []
         for r in range(self.table.rowCount()):
             cells = [(self.table.item(r, c).text().strip() if self.table.item(r, c) else "") for c in range(4)]
             if not any(cells):
                 continue
             try:
-                xyz = [float(v.replace(",", ".")) for v in cells[1:]]
+                xyz = [sp.to_metres(float(v.replace(",", ".")), self.unit) for v in cells[1:]]
             except ValueError:
-                bad.append(f"Row {r + 1} ({cells[0] or 'no label'}): X, Y and Z must be numbers in metres.")
+                bad.append(f"Row {r + 1} ({cells[0] or 'no label'}): X, Y and Z must be numbers.")
                 continue
             pts.append(sp.ScenePoint(label=cells[0] or f"P{r + 1}", x=xyz[0], y=xyz[1], z=xyz[2]))
         return pts, bad
 
     def scene(self) -> sp.Scene:
         return sp.Scene(origin_text=self.origin.text().strip(), x_axis_text=self.x_text.text().strip(),
-                        y_axis_note=self.y_note.text().strip(), points=self.points()[0])
+                        y_axis_note=self.y_note.text().strip(), unit=self.unit, points=self.points()[0])
 
     def _changed(self, _item) -> None:
         self._validate()
@@ -311,7 +338,7 @@ class SceneDialog(QDialog):
         name, _ = QFileDialog.getOpenFileName(self, "Import points", str(Path.home()), "CSV (*.csv);;All files (*)")
         if name:
             try:
-                self.set_points(sp.from_csv(Path(name).read_text(encoding="utf-8-sig")))
+                self.set_points(sp.from_csv(Path(name).read_text(encoding="utf-8-sig"), self.unit))
             except (OSError, ValueError) as exc:
                 error_box(self, "Not imported", str(exc))
 
@@ -319,7 +346,7 @@ class SceneDialog(QDialog):
         name, _ = QFileDialog.getSaveFileName(self, "Export points", str(Path.home() / "reference_points.csv"),
                                               "CSV (*.csv)")
         if name:
-            Path(name).write_text(sp.to_csv(self.points()[0]), encoding="utf-8")
+            Path(name).write_text(sp.to_csv(self.points()[0], self.unit), encoding="utf-8")
 
     def _show_config(self) -> None:
         dlg = QDialog(self)
@@ -349,14 +376,12 @@ class SceneDialog(QDialog):
             self.origin.setText(scene.origin_text)
             self.x_text.setText(scene.x_axis_text)
             self.y_note.setText(scene.y_axis_note)
+            self.unit_box.blockSignals(True)
+            self.unit_box.setCurrentIndex(max(0, self.unit_box.findData(scene.unit)))
+            self.unit_box.blockSignals(False)
+            self._set_headers()
             self.set_points(scene.points)
 
     def _accept(self) -> None:
-        new = self.scene()
-        if (self.has_extrinsics and self._original is not None
-                and [p.model_dump() for p in new.points] != [p.model_dump() for p in self._original.points]):
-            if QMessageBox.question(self, "Points changed", "The camera positions were computed with the old points. "
-                                    "Saving deletes them; you will click the points again for every camera. "
-                                    "Continue?") != QMessageBox.StandardButton.Yes:
-                return
+        # changed points no longer delete the camera positions: they are recomputed from the saved clicks
         self.accept()

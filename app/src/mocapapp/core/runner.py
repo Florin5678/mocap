@@ -85,7 +85,7 @@ def max_cutoff_hz(fps: float) -> int:
     """Highest whole cut-off a Butterworth filter accepts at this frame rate (it must stay below fps / 2)."""
     return math.ceil(fps / 2) - 1
 SYNC_MIN_CORRELATION = 0.5
-SYNC_MAX_OFFSET_S = 5.0
+SYNC_MAX_OFFSET_S = 5.0  # longer offsets are noted, not stopped: cameras started by hand can be seconds apart
 CPU_FRAMES_PER_SECOND = 2.0  # pose estimation per video on the owner's laptop CPU (upstream-notes §6), rough
 
 
@@ -122,6 +122,17 @@ def _kill_tree(proc: subprocess.Popen) -> None:
 
 
 TQDM_RE = re.compile(r"(\d{1,3})%\|")
+
+
+def stage_fraction(line: str, bars: dict[str, float]) -> float | None:
+    """Progress of a stage from a tqdm line, or None for other lines. Upstream runs some stages per camera in
+    parallel, each with its own bar ("Processing cam01.mp4:  35%|"); their lines alternate, so the stage's progress
+    is the mean of every bar seen so far, never the last line alone (which made the progress bar jump)."""
+    m = TQDM_RE.search(line)
+    if not m:
+        return None
+    bars[line[:m.start()].strip()] = min(int(m.group(1)), 100) / 100
+    return sum(bars.values()) / len(bars)
 
 
 def _read_lines(stream, out: queue.Queue) -> None:
@@ -198,7 +209,7 @@ def check_outputs(trial_dir: Path, stage: str, cameras: list[str], session: Sess
         log = trial_dir / LOG_DIR / "filtering.log"
         if log.is_file() and "critical frequencies" in log.read_text(encoding="utf-8", errors="replace"):
             return ("The smoothing cut-off is too high for this video's frame rate: it must be below half the frame "
-                    "rate. Lower 'Smoothing cut-off' under Advanced and press Run again.")
+                    "rate. Lower 'Smoothing cut-off' under Advanced and press Run all again.")
         return "Filtering produced no file."
     if stage == "markerAugmentation":
         return None if list(p3d.glob("*_LSTM.trc")) else "Marker augmentation failed (it needs hips, knees, " \
@@ -230,6 +241,7 @@ def parse_sync(log_text: str) -> dict[str, dict]:
 
 
 def sync_issues(offsets: dict[str, dict], fps: float) -> list[str]:
+    """Problems that stop the trial before 3D until the sync is checked or accepted."""
     issues = []
     if not offsets:
         return ["No synchronisation result was found in the log."]
@@ -237,9 +249,21 @@ def sync_issues(offsets: dict[str, dict], fps: float) -> list[str]:
         c = o["correlation"]
         if not c == c or c < SYNC_MIN_CORRELATION:  # NaN or low
             issues.append(f"{cam}: low confidence (correlation {c:.2f}). Was a clear sync cue visible to all cameras?")
-        if fps and abs(o["offset_frames"]) / fps > SYNC_MAX_OFFSET_S:
-            issues.append(f"{cam}: offset {o['offset_frames'] / fps:.1f} s looks implausible.")
     return issues
+
+
+def sync_warnings(offsets: dict[str, dict], fps: float) -> list[str]:
+    """Worth a look, but the run continues: a long offset is normal when the cameras were started one by one."""
+    return [f"{cam}: offset {o['offset_frames'] / fps:.1f} s is longer than usual. Fine if the cameras were started "
+            f"that far apart; otherwise check the sync." for cam, o in offsets.items()
+            if fps and abs(o["offset_frames"]) / fps > SYNC_MAX_OFFSET_S]
+
+
+def _judge_sync(info: dict, fps: float) -> None:
+    """(Re)compute the issues and warnings of a sync result, so older records follow the current rules."""
+    if info.get("offsets"):
+        info["issues"] = sync_issues(info["offsets"], fps)
+        info["warnings"] = sync_warnings(info["offsets"], fps)
 
 
 # ---------- pre-run checks ----------
@@ -390,6 +414,8 @@ def _probe_frames(video: str, mtime_ns: int) -> int:
 def _sync_gate(session: Session, root: Path, label: str, accept: bool, listener: Listener) -> bool:
     """Stop before triangulation when the sync looks unreliable and nobody accepted it (also on resume)."""
     info = session.run_state.sync.setdefault(label, {"offsets": {}, "issues": [], "accepted": False})
+    if info.get("offsets") and session.cameras:
+        _judge_sync(info, _fps(Layout(root).trial(label), [c.name for c in session.cameras]))
     if accept and info.get("issues"):
         info["accepted"] = True
     if info.get("issues") and not info.get("accepted"):
@@ -444,10 +470,12 @@ def run_trial(session: Session, root: Path, label: str, listener: Listener = lam
         listener(Event("stage_start", label, stage, STAGE_TITLES[stage], fraction=i / len(todo)))
         t0 = time.perf_counter()
 
-        def on_line(line: str, stage=stage, i=i) -> None:
-            m = TQDM_RE.search(line)
-            if m:
-                listener(Event("progress", label, stage, line, fraction=(i + int(m.group(1)) / 100) / len(todo)))
+        bars: dict[str, float] = {}  # progress bar name (text before the percentage) -> its fraction
+
+        def on_line(line: str, stage=stage, i=i, bars=bars) -> None:
+            fraction = stage_fraction(line, bars)
+            if fraction is not None:
+                listener(Event("progress", label, stage, line, fraction=(i + fraction) / len(todo)))
             else:
                 listener(Event("line", label, stage, line))
 
@@ -476,7 +504,10 @@ def run_trial(session: Session, root: Path, label: str, listener: Listener = lam
         if stage == "synchronization":
             text = (tdir / LOG_DIR / "synchronization.log").read_text(encoding="utf-8", errors="replace")
             offsets = parse_sync(text)
-            rs.sync[label] = {"offsets": offsets, "issues": sync_issues(offsets, _fps(tdir, cams)), "accepted": False}
+            rs.sync[label] = {"offsets": offsets, "issues": [], "warnings": [], "accepted": False}
+            _judge_sync(rs.sync[label], _fps(tdir, cams))
+            if not offsets:
+                rs.sync[label]["issues"] = sync_issues(offsets, 0.0)
             if not _sync_gate(session, root, label, accept_sync, listener):
                 return False
 

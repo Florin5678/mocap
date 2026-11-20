@@ -98,3 +98,18 @@ def test_camera_moved_between_trials(tmp_path, capsys):
     assert not Layout(root).trial_calib("2").exists() and service.calibration_state(session, root) == {
         c: "ready" for c in CAMS}
     assert (Layout(root).trial("2") / "calibration" / "Calib_scene.toml").read_text() == calib.read_text()
+
+    # reference points typed in centimetres but read as metres (0.1.0rc15): choosing the unit recomputes every
+    # camera position from the clicks already made, so nothing is clicked again
+    cm = tmp_path / "points_cm.csv"
+    cm.write_text(to_csv(scene.points, "cm"))
+    assert main(["scene", "set", "--session", s, "--csv", str(cm)]) == 0  # read as metres: 100 times too large
+    np.testing.assert_allclose(load_result(work, "cam01").camera_position, np.array(CAMS["cam01"]) * 100, rtol=0.05)
+    capsys.readouterr()
+    assert main(["scene", "set", "--session", s, "--csv", str(cm), "--unit", "cm"]) == 0
+    assert capsys.readouterr().out.count("recomputed from your clicks") == len(CAMS)
+    for cam, pos in CAMS.items():
+        np.testing.assert_allclose(load_result(work, cam).camera_position, pos, atol=0.1)
+    session = load_session(root)
+    assert service.get_scene(root).unit == "cm" and len(session.extrinsics) == len(CAMS)
+    assert calib.is_file() and service.calibration_state(session, root) == {c: "ready" for c in CAMS}

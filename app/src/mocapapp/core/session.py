@@ -186,7 +186,7 @@ class Settings(BaseModel):
 class RunState(BaseModel):
     stage_done: dict[str, list[str]] = Field(default_factory=dict)  # trial label -> finished stages
     trial_status: dict[str, str] = Field(default_factory=dict)  # label -> pending|running|needs_sync_fix|failed|done
-    sync: dict[str, dict] = Field(default_factory=dict)  # label -> {"offsets", "issues", "accepted"}
+    sync: dict[str, dict] = Field(default_factory=dict)  # label -> {"offsets", "issues", "warnings", "accepted"}
     errors: dict[str, str] = Field(default_factory=dict)  # label -> plain-language failure cause
     stage_settings: dict[str, dict[str, str]] = Field(default_factory=dict)  # label -> stage -> settings it ran with
     keypoints_removed: dict[str, str] = Field(default_factory=dict)  # label -> when its 2D keypoint files were removed

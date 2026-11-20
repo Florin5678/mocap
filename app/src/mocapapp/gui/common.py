@@ -45,7 +45,13 @@ def forget_session(root: Path) -> None:
 
 
 def last_output_root() -> str:
+    """Help > Settings: the output folder for new sessions (until set there, the folder of the first session)."""
     return str(settings().value("output_root", "") or "")
+
+
+def keep_screen_on() -> bool:
+    """Help > Settings: keep the screen on and the computer awake while the app is working."""
+    return settings().value("keep_screen_on", True, type=bool)
 
 
 def badge(level: str, text: str | None = None) -> str:

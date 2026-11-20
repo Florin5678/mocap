@@ -278,7 +278,7 @@ def validate(session: Session, session_root: Path | None = None, do_probe: bool 
                 if not f:
                     report.add("action", f"{cam.name} trial {trial.label}",
                                f"No video chosen for trial {trial.label} ({trial.participant}).",
-                               "Choose it in the mapping table of the Videos step.")
+                               "Choose it in the mapping table of the Trials step.")
                 elif not Path(f).is_file() and session.run_state.trial_status.get(trial.label) == "done":
                     report.add("info", f"{cam.name} trial {trial.label}", f"The original video {Path(f).name} is "
                                "gone. The trial's results are kept, but it can only be run again from the copy in "

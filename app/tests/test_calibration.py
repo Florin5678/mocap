@@ -54,13 +54,20 @@ def test_scene_rules():
     assert any("one line" in i.what for i in errors(check_scene(s)))
     s = good_scene()
     s.points[0].x = 150
-    assert any("metres" in i.fix for i in check_scene(s))
+    assert any("centimetres" in i.fix for i in check_scene(s))
     assert errors(check_scene(Scene(points=room_points())))  # origin and +X text required
 
 
 def test_scene_import_export():
     pts = room_points()
     assert [p.xyz for p in from_csv(to_csv(pts))] == [p.xyz for p in pts]
+    # another unit (0.1.0rc15): the CSV holds that unit, the points stay in metres
+    text = to_csv(pts, "cm")
+    assert text.startswith("label,x_cm,y_cm,z_cm")
+    assert np.allclose([p.xyz for p in from_csv(text, "cm")], [p.xyz for p in pts])
+    assert from_csv("a,1,2,12\n", "ft")[0].xyz == pytest.approx([0.3048, 0.6096, 3.6576])
+    assert from_csv("a,10,0,0\n", "in")[0].x == pytest.approx(0.254)
+    assert Scene.model_validate({"points": []}).unit == "m"  # scene.json from before the unit choice
     snippet = "object_coords_3d = [[0.1, 0.48, 0.0], # closest spot\n [-0.42, 0.31, 0.0]]  # 2nd"
     parsed = from_snippet(snippet)
     assert parsed[0].label == "closest spot" and parsed[1].xyz == [-0.42, 0.31, 0.0]

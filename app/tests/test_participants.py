@@ -153,10 +153,8 @@ def test_setup_page_participants(qtbot, tmp_path, monkeypatch, no_boxes):
     win = MainWindow()
     qtbot.addWidget(win)
     setup = win.pages[0]
-    assert setup.height_table.rowCount() == 1
-    setup._resize_participants(3)
-    setup._resize_participants(2)
-    assert setup.height_table.verticalHeaderItem(1).text() == "Participant 2"
+    assert not hasattr(setup, "height_table")  # heights are entered per trial in step 2 (Trials)
+    setup.people_spin.setValue(2)
     setup.trials_spin.setValue(2)
     assert setup.spec().n_participants == 2 and setup.spec().n_trials == 4
 
@@ -178,9 +176,9 @@ def test_setup_page_participants(qtbot, tmp_path, monkeypatch, no_boxes):
     assert load_session(tmp_path).participant("1").code == "P01"
     dice.click()
     assert edit.text() == session.participant("1").code != "P01"
-    setup.people.cellWidget(0, 2).setChecked(True)  # signed consent received: the pseudonym is fixed
+    setup.people.cellWidget(0, 1).setChecked(True)  # signed consent received: the pseudonym is fixed
     assert edit.isReadOnly() and not dice.isEnabled()
-    setup.people.cellWidget(0, 2).setChecked(False)
+    setup.people.cellWidget(0, 1).setChecked(False)
     assert not edit.isReadOnly() and dice.isEnabled()
 
 
@@ -236,11 +234,12 @@ def test_videos_page_maps_trials_to_participants(qtbot, tmp_path, monkeypatch, n
     videos = win.pages[1]
     monkeypatch.setattr(videos, "check", lambda: None)
     videos.refresh()
-    grid = videos.grid
-    assert [grid.horizontalHeaderItem(c).text() for c in range(grid.columnCount())] == [
-        "Participant", "Height (m)", "cam01", "cam02"]  # participant details are asked per trial (0.1.0rc13)
-    assert grid.verticalHeaderItem(0).text() == "Trial 1"
-    assert grid.cellWidget(1, 0).currentData() == "1"
-    grid.cellWidget(1, 0).setCurrentIndex(grid.cellWidget(1, 0).findData("2"))
+    table, grid = videos.details_table, videos.grid  # two tables: trials + participant details, trial mapping
+    assert [table.horizontalHeaderItem(c).text() for c in range(table.columnCount())] == ["Participant", "Height (m)"]
+    assert [grid.horizontalHeaderItem(c).text() for c in range(grid.columnCount())] == ["cam01", "cam02"]
+    assert table.verticalHeaderItem(0).text() == grid.verticalHeaderItem(0).text() == "Trial 1"
+    assert table.cellWidget(1, 0).currentData() == "1"
+    table.cellWidget(1, 0).setCurrentIndex(table.cellWidget(1, 0).findData("2"))  # saved straight away
+    assert [t.participant for t in load_session(tmp_path).trials] == ["1", "2"]
     videos.save_mapping()
     assert [t.participant for t in load_session(tmp_path).trials] == ["1", "2"]

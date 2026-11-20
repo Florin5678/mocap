@@ -16,7 +16,7 @@ uv run mocapapp gui --session <dir>       # reopen a session
 uv run mocapapp gui --project <file>      # reopen a project file (.mocapproj) at its saved step
 ```
 
-Steps: Session -> Videos -> Lens calibration -> Reference points -> Camera positions -> Run -> Results. **File > Try with sample data** builds a ready-to-run session from upstream's demo (its calibration is imported, so the calibration steps are skipped). **File > Participant data and deletion** (also on the Session and Results steps) deletes raw footage or all data of a participant at any time; every deletion lists the exact files first.
+Steps: Session -> Trials -> Lens calibration -> Reference points -> Camera positions -> Run -> Results. **File > Try with sample data** builds a ready-to-run session from upstream's demo (its calibration is imported, so the calibration steps are skipped). **File > Participant data and deletion** (also on the Session and Results steps) deletes raw footage or all data of a participant at any time; every deletion lists the exact files first.
 
 ## Command line
 

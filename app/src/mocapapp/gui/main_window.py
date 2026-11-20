@@ -29,6 +29,8 @@ from mocapapp.gui.common import (
     error_box,
     forget_session,
     heading,
+    keep_screen_on,
+    last_output_root,
     recent_sessions,
     remember_session,
     settings,
@@ -72,6 +74,10 @@ class Page(QWidget):
     def is_complete(self) -> bool:
         return True
 
+    def step_ticked(self) -> bool:
+        """The step list's tick: a finished step. A tool without an end (the Viewer) never gets one."""
+        return self.is_complete() and not self.skipped()
+
     def skipped(self) -> bool:
         """True when this step does not apply to the session (e.g. calibration of the sample data)."""
         return False
@@ -95,6 +101,9 @@ class MainWindow(QMainWindow):
         self.session: Session | None = None
         self.project: Path | None = None  # the .mocapproj file the session was opened from or saved to
         self.busy = False
+        from mocapapp.gui.power import KeepAwake
+
+        self.keep_awake = KeepAwake()  # Help > Settings: screen on while busy
         self.setWindowTitle(s("app_name"))
         self.resize(1180, 780)
 
@@ -159,6 +168,8 @@ class MainWindow(QMainWindow):
         file.addSeparator()
         self._action(file, "&Quit", self.close, QKeySequence.StandardKey.Quit)
         help_menu = self.menuBar().addMenu("&Help")
+        self._action(help_menu, "&Settings ...", self.show_settings)
+        help_menu.addSeparator()
         self._action(help_menu, "&How it works", lambda: self.show_tutorial(0), QKeySequence.StandardKey.HelpContents)
         self._action(help_menu, "Calibration &board PDF ...", self.save_board_pdf)
         self._action(help_menu, "Participation &consent form PDF ...", lambda: self.save_consent_pdf(""))
@@ -196,7 +207,8 @@ class MainWindow(QMainWindow):
         self.root, self.session = root, session
         if root is not None:
             remember_session(root)
-            settings().setValue("output_root", str(Path(root).parent))
+            if not last_output_root():  # the output folder is chosen in Help > Settings; until then, the first one
+                settings().setValue("output_root", str(Path(root).parent))
         if root is None:
             self.project = None
         self.data_action.setEnabled(session is not None)
@@ -458,7 +470,7 @@ class MainWindow(QMainWindow):
         i = self.stack.currentIndex()
         for k, page in enumerate(self.pages):
             item = self.steps.item(k)
-            mark = "✓ " if self.session is not None and page.is_complete() and not page.skipped() else (
+            mark = "✓ " if self.session is not None and page.step_ticked() else (
                 "- " if self.session is not None and page.skipped() else "   ")
             item.setText(f"{mark}{k + 1}. {page.title}" + (" (not needed)" if self.session and page.skipped()
                                                              else ""))
@@ -492,11 +504,21 @@ class MainWindow(QMainWindow):
 
     def set_busy(self, busy: bool) -> None:
         self.busy = busy
+        if busy and keep_screen_on():
+            self.keep_awake.start()
+        elif not busy:
+            self.keep_awake.stop()
         self.steps.setEnabled(not busy)
         self.menuBar().setEnabled(not busy)
         self.update_nav()
 
     # ---------- help ----------
+
+    def show_settings(self) -> None:
+        from mocapapp.gui.settings_dialog import SettingsDialog
+
+        if SettingsDialog(self).exec() and self.session is None:
+            self.pages[0].out_edit.setText(last_output_root())  # the new-session form follows the new folder
 
     def show_tutorial(self, page: int = 0) -> None:
         from mocapapp.gui.greeting import TutorialDialog
