@@ -73,6 +73,7 @@ class Participant(BaseModel):
     consent: Consent = Field(default_factory=Consent)
     delete_raw: bool = True  # follows consent: no storage consent -> delete (PROJECT.md §6.2)
     withdrawn_at: str | None = None  # "Delete all participant data": every file of every trial is gone
+    former_codes: list[str] = Field(default_factory=list)  # pseudonyms before a change (0.1.0rc16), oldest first
 
     @field_validator("height_m", mode="before")
     @classmethod
@@ -91,7 +92,7 @@ def _delegate(name: str) -> property:
 class Trial(BaseModel):
     label: str
     participant: str = ""  # Participant.label
-    mapping_method: Literal["digit", "chronological", "manual"] | None = None
+    mapping_method: Literal["digit", "name", "chronological", "manual"] | None = None
     # PROJECT.md §8.4: set by save_session when raw footage is kept with consent ("study finished")
     retention_until: str | None = None
     raw_deleted_at: str | None = None  # working copies + overlays + 2D keypoints deleted (§8.4)

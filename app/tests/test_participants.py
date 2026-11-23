@@ -77,7 +77,7 @@ def test_trials_share_their_participant(tmp_path):
         create_session(NewSession(out_root=root, n_participants=4, camera_dirs=cams, trials_per_participant=3))
 
 
-def test_pseudonyms_can_be_changed_until_consent_or_results(tmp_path, capsys):
+def test_pseudonyms_can_be_changed_confirmed_after_consent_or_results(tmp_path, capsys):
     from mocapapp.cli.main import main
     from mocapapp.core.privacy import is_valid_code
 
@@ -98,13 +98,41 @@ def test_pseudonyms_can_be_changed_until_consent_or_results(tmp_path, capsys):
     person = new_pseudonym(session, root, "1")
     assert person.code != "P01" and is_valid_code(person.code)
 
+    # after consent or results the change needs confirming (0.1.0rc16); the old pseudonym is remembered
     session.participant("2").consent.attested = True
-    with pytest.raises(SetupError, match="untick 'Signed consent received'"):
+    with pytest.raises(SetupError, match="needs confirming.*signed consent form"):
         new_pseudonym(session, root, "2")
+    old = session.participant("2").code
+    new_pseudonym(session, root, "2", confirmed=True)
+    assert load_session(root).participant("2").former_codes == [old]
     session.participant("2").consent.attested = False
+
+    # results and exports exist: the exported files, manifest.json and trials.csv follow the new pseudonym
+    import json
+
+    code = session.participant("2").code
     session.run_state.trial_status["2"] = "done"
-    with pytest.raises(SetupError, match="already has results"):
-        rename_participant(session, root, "2", "P02")
+    save_session(session, root)
+    out = root / "export"
+    out.mkdir()
+    (out / f"{code}_trial2_trc.trc").write_text("x")
+    (out / "P01_trial1_trc.trc").write_text("x")
+    (out / "manifest.json").write_text(json.dumps({"files": [
+        {"file": f"{code}_trial2_trc.trc", "trial": "2", "code": code},
+        {"file": "P01_trial1_trc.trc", "trial": "1", "code": "P01"}], "trials": [{"trial": "2", "code": code}]}))
+    (out / "trials.csv").write_text(f"trial,code,height_m\n1,P01,\n2,{code},1.80\n")
+    with pytest.raises(SetupError, match="needs confirming.*Results exist"):
+        rename_participant(session, root, "2", "P2B")
+    rename_participant(session, root, "2", "P2B", confirmed=True)
+    data = json.loads((out / "manifest.json").read_text())
+    assert [f["file"] for f in data["files"]] == ["P2B_trial2_trc.trc", "P01_trial1_trc.trc"]
+    assert data["trials"] == [{"trial": "2", "code": "P2B"}] and (out / "P2B_trial2_trc.trc").is_file()
+    assert not (out / f"{code}_trial2_trc.trc").exists() and (out / "P01_trial1_trc.trc").is_file()
+    assert (out / "trials.csv").read_text() == "trial,code,height_m\n1,P01,\n2,P2B,1.80\n"
+    assert load_session(root).participant("2").former_codes == [old, code]
+    capsys.readouterr()
+    assert main(["session", "pseudonym", "--session", str(root), "--participant", "2", "--set", "P2C"]) == 1
+    assert "--confirm" in capsys.readouterr().out
     session.run_state.trial_status.clear()
     save_session(session, root)
 
@@ -176,10 +204,15 @@ def test_setup_page_participants(qtbot, tmp_path, monkeypatch, no_boxes):
     assert load_session(tmp_path).participant("1").code == "P01"
     dice.click()
     assert edit.text() == session.participant("1").code != "P01"
-    setup.people.cellWidget(0, 1).setChecked(True)  # signed consent received: the pseudonym is fixed
-    assert edit.isReadOnly() and not dice.isEnabled()
-    setup.people.cellWidget(0, 1).setChecked(False)
+    setup.people.cellWidget(0, 1).setChecked(True)  # signed consent received: still editable, after confirming
     assert not edit.isReadOnly() and dice.isEnabled()
+    import mocapapp.gui.pages.setup as setup_module
+
+    asked = []
+    monkeypatch.setattr(setup_module, "confirm", lambda _p, _t, text, _ok: asked.append(text) or True)
+    edit.setText("P01B")
+    edit.editingFinished.emit()
+    assert "signed consent form" in asked[0] and load_session(tmp_path).participant("1").code == "P01B"
 
 
 def test_consent_dialog_keeps_the_study_details(qtbot, tmp_path, monkeypatch, no_boxes):

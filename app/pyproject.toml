@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mocapapp"
-version = "0.1.0rc15"
+version = "0.1.0rc16"
 description = "Desktop app around Pose2Sim: multi-camera video to validated 3D pose and OpenSim kinematics, for research use only."
 requires-python = ">=3.11,<3.14"
 license = "BSD-3-Clause"

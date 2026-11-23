@@ -71,10 +71,12 @@ def _cmd_session_pseudonym(args: argparse.Namespace) -> int:
     session = load_session(root)
     try:
         session.participant(args.participant)
-        person = (new_pseudonym(session, root, args.participant) if args.random
-                  else rename_participant(session, root, args.participant, args.set))
+        person = (new_pseudonym(session, root, args.participant, args.confirm) if args.random
+                  else rename_participant(session, root, args.participant, args.set, args.confirm))
     except (SetupError, KeyError) as exc:
         print(exc if isinstance(exc, SetupError) else f"There is no participant {args.participant} in this session.")
+        if isinstance(exc, SetupError) and "needs confirming" in str(exc):
+            print("Run the same command with --confirm to change it.")
         return 1
     print(f"Participant {person.label}: pseudonym {person.code}")
     return 0
@@ -885,12 +887,14 @@ def build_parser() -> argparse.ArgumentParser:
     new.add_argument("--extrinsic", action="append", metavar="camNN=FILE", help="extrinsic video outside the folder")
     new.add_argument("--out", required=True, help="output root; the session folder is created inside it")
     new.set_defaults(func=_cmd_session_new)
-    pn = ssub.add_parser("pseudonym", help="change a participant's pseudonym (before consent and results)")
+    pn = ssub.add_parser("pseudonym", help="change a participant's pseudonym")
     pn.add_argument("--session", required=True)
     pn.add_argument("--participant", required=True, help="participant number, e.g. 2")
     group = pn.add_mutually_exclusive_group(required=True)
     group.add_argument("--set", metavar="PSEUDONYM", help="the new pseudonym (letters, digits, - or _)")
     group.add_argument("--random", action="store_true", help="a new random pseudonym")
+    pn.add_argument("--confirm", action="store_true",
+                    help="change it although a signed consent form or results already carry the old one")
     pn.set_defaults(func=_cmd_session_pseudonym)
     mv = ssub.add_parser("move", help="move a session folder into another output folder")
     mv.add_argument("--session", required=True)

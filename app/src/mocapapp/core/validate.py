@@ -122,6 +122,67 @@ def scan_dir(directory: Path) -> DirScan:
 
 # ---------- trial mapping tiers ----------
 
+NUMBER_RE = re.compile(r"\d+")
+
+
+def name_number(path: Path) -> int | None:
+    """The trial number in a file name: the last number in it (01, trial01, trial_01, Trial 1 -> 1)."""
+    found = NUMBER_RE.findall(Path(path).stem)
+    return int(found[-1]) if found else None
+
+
+def _role_like(path: Path) -> bool:
+    """'extrinsic 2.mp4', 'intrinsic_old.mp4': a calibration video under another name, never a trial."""
+    return Path(path).stem.lower().startswith(ROLES)
+
+
+def match_by_number(files: list[Path], label: str, taken: set[str] = frozenset()) -> Path | None:
+    """The one video whose name carries this trial's number (None: no such video, or more than one)."""
+    if not label.isdigit():
+        return None
+    hits = [f for f in files if not _role_like(f) and name_number(f) == int(label) and str(f) not in taken]
+    return hits[0] if len(hits) == 1 else None
+
+
+def map_by_number(per_cam: dict[str, list[Path]], labels: list[str]) -> dict[str, dict[str, Path]] | None:
+    """Tier 2: every trial of the session finds the video named with its number, on every camera. Other videos in
+    the folders (more takes than trials) are left out."""
+    result: dict[str, dict[str, Path]] = {}
+    for cam, files in per_cam.items():
+        result[cam] = {}
+        for label in labels:
+            hit = match_by_number(files, label)
+            if hit is None:
+                return None
+            result[cam][label] = hit
+    return result if labels else None
+
+
+def autofill(session: Session) -> list[str]:
+    """Choose what the names make obvious, without reading any video: a missing calibration video when the folder
+    has exactly one file named 'intrinsic' or 'extrinsic', and a trial's missing video when exactly one file is named
+    with its number. Nothing chosen before is changed. Returns what was chosen (empty: nothing)."""
+    chosen = []
+    for cam in session.cameras:
+        try:
+            scan = scan_dir(Path(cam.source_dir))
+        except OSError:
+            continue
+        for role in ROLES:
+            if getattr(cam, role) is None and len(scan.calib[role]) == 1:
+                setattr(cam, role, _ref(role, str(scan.calib[role][0]), "found"))
+                chosen.append(f"{cam.name} {role}: {scan.calib[role][0].name}")
+        taken = {str(Path(f)) for f in cam.trial_files.values()}
+        for trial in session.trials:
+            if not trial.raw_present or trial.withdrawn_at or cam.trial_files.get(trial.label):
+                continue
+            hit = match_by_number(scan.trials, trial.label, taken)
+            if hit is not None:
+                cam.trial_files[trial.label] = str(hit)
+                taken.add(str(hit))
+                chosen.append(f"{cam.name} trial {trial.label}: {hit.name}")
+    return chosen
+
 def map_by_digit(per_cam: dict[str, list[Path]], n_trials: int) -> dict[str, dict[str, Path]] | None:
     """Tier 1: the last character of the stem is the trial digit; same digit set on every camera."""
     result: dict[str, dict[str, Path]] = {}
@@ -270,6 +331,8 @@ def validate(session: Session, session_root: Path | None = None, do_probe: bool 
         # Trials already processed (or added later with their own videos) keep their labels and files: an automatic
         # mapping could renumber them and mix up results. Missing videos are asked for in the mapping table.
         report.mapping_method = "manual"
+        for what in autofill(session):
+            report.add("info", "trial mapping", f"Chosen by its name: {what}.", "Check it in the mapping table.")
         for trial in session.trials:
             if not trial.raw_present:
                 continue
@@ -295,17 +358,29 @@ def validate(session: Session, session_root: Path | None = None, do_probe: bool 
             _check_media(session, report, [t.label for t in session.trials])
         return report
     else:
-        for cam, files in per_cam_trials.items():
-            if len(files) != n_trials:
-                report.add("error", cam, f"Found {len(files)} trial videos but the session has {n_trials} trials: "
-                           + (", ".join(p.name for p in files) or "none") + ".",
-                           "Make sure each camera folder holds exactly one video per trial, plus "
-                           "'intrinsic' and 'extrinsic'.")
         if not report.ok:
             return report
-        mapping = map_by_digit(per_cam_trials, n_trials)
+        counts_ok = all(len(files) == n_trials for files in per_cam_trials.values())
+        mapping = map_by_digit(per_cam_trials, n_trials) if counts_ok else None
+        by_name = None if mapping else map_by_number(per_cam_trials, [t.label for t in session.trials])
         if mapping is not None:
             report.mapping_method = "digit"
+        elif by_name is not None:
+            mapping = by_name
+            report.mapping_method = "name"
+            for cam, files in per_cam_trials.items():
+                unused = [f.name for f in files if f not in by_name[cam].values()]
+                if unused:
+                    report.add("info", cam, "Trials matched by the number in the file name. Not used: "
+                               + ", ".join(unused) + ".", "")
+        elif not counts_ok:
+            for cam, files in per_cam_trials.items():
+                if len(files) != n_trials:
+                    report.add("error", cam, f"Found {len(files)} trial videos but the session has {n_trials} "
+                               "trials: " + (", ".join(p.name for p in files) or "none") + ".",
+                               "Name each trial's video with its number (01, trial01 or trial_01), or keep exactly "
+                               "one video per trial in each camera folder, plus 'intrinsic' and 'extrinsic'.")
+            return report
         else:
             report.mapping_method = "chronological"
             report.add("info", "trial mapping", "File names do not end in a unique trial digit on every camera; "

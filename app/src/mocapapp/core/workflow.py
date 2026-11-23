@@ -22,6 +22,7 @@ from mocapapp.core.session import (
     Session,
     Trial,
     VideoRef,
+    atomic_write_text,
     existing_codes,
     load_session,
     parse_height,
@@ -206,21 +207,30 @@ PSEUDONYM_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,23}$")
 
 
 def check_renamable(session: Session, label: str) -> Participant:
+    """Only a withdrawn participant keeps their pseudonym for good (their data is gone; the logs name it)."""
     person = session.participant(label)
     if person.withdrawn_at:
         raise SetupError(f"Participant {label} withdrew; their pseudonym stays as it was.")
-    if person.consent.attested:
-        raise SetupError(f"The signed consent form of participant {label} carries the pseudonym {person.code}. To "
-                         "change it anyway, untick 'Signed consent received' first and correct the paper form.")
-    done = session.run_state
-    if any(t.label in done.trial_status or done.stage_done.get(t.label) for t in session.trials_of(label)):
-        raise SetupError(f"Participant {label} ({person.code}) already has results under this pseudonym, so it can "
-                         "no longer be changed.")
     return person
 
 
-def rename_participant(session: Session, root: Path, label: str, code: str) -> Participant:
-    """Give a participant another pseudonym (typed by the researcher), before consent and results refer to it."""
+def rename_consequences(session: Session, label: str) -> list[str]:
+    """What a new pseudonym affects beyond session.json; the researcher confirms these first (empty: nothing)."""
+    person = session.participant(label)
+    out = []
+    if person.consent.attested:
+        out.append(f"The signed consent form carries {person.code}: write the new pseudonym on it, so that the form "
+                   "still links to the data.")
+    rs = session.run_state
+    if any(t.label in rs.trial_status or rs.stage_done.get(t.label) for t in session.trials_of(label)):
+        out.append("Results exist under the old pseudonym: the quality report and the exported files (file names, "
+                   "manifest.json, trials.csv) are updated to the new one. Copies made elsewhere keep the old one.")
+    return out
+
+
+def rename_participant(session: Session, root: Path, label: str, code: str, confirmed: bool = False) -> Participant:
+    """Give a participant another pseudonym (typed by the researcher). After consent or results this needs
+    `confirmed` (see rename_consequences); the old pseudonym is kept in `former_codes` and exports follow."""
     code = code.strip()
     person = session.participant(label)
     if code == person.code:
@@ -233,16 +243,61 @@ def rename_participant(session: Session, root: Path, label: str, code: str) -> P
     taken |= {p.code.upper() for p in session.participants if p is not person}
     if code.upper() in taken:
         raise SetupError(f"The pseudonym {code} is already used in this output folder; choose another one.")
+    consequences = rename_consequences(session, label)
+    if consequences and not confirmed:
+        raise SetupError("Changing this pseudonym needs confirming: " + " ".join(consequences))
+    old = person.code
     person.code = code
+    if consequences:
+        person.former_codes.append(old)
     save_session(session, root)
+    if consequences:
+        _rename_exports(session, root, old, code, [t.label for t in session.trials_of(label)])
     return person
 
 
-def new_pseudonym(session: Session, root: Path, label: str) -> Participant:
+def _rename_exports(session: Session, root: Path, old: str, new: str, labels: list[str]) -> None:
+    """Exported files, manifest.json and trials.csv follow a new pseudonym; the quality report is rewritten."""
+    import json
+
+    layout = Layout(root)
+    out = layout.export
+    manifest = out / "manifest.json"
+    if manifest.is_file():
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        for f in data.get("files", []):
+            if f.get("code") == old and f.get("trial") in labels:
+                name = f.get("file", "")
+                if name.startswith(f"{old}_"):
+                    renamed = new + name[len(old):]
+                    if (out / name).is_file():
+                        (out / name).replace(out / renamed)
+                    f["file"] = renamed
+                f["code"] = new
+        for row in data.get("trials", []):
+            if row.get("code") == old and row.get("trial") in labels:
+                row["code"] = new
+        atomic_write_text(manifest, json.dumps(data, indent=2) + "\n")
+    table = out / "trials.csv"
+    if table.is_file():
+        lines = table.read_text(encoding="utf-8").splitlines(keepends=True)
+        fixed = [ln.replace(f",{old}", f",{new}", 1) if ln.split(",")[1:2] == [old] and ln.split(",")[0] in labels
+                 else ln for ln in lines[1:]]
+        atomic_write_text(table, "".join(lines[:1] + fixed))
+    if layout.qa.is_dir():
+        from mocapapp.core.qa import write_report
+
+        try:
+            write_report(session, root)
+        except (OSError, ValueError):
+            pass
+
+
+def new_pseudonym(session: Session, root: Path, label: str, confirmed: bool = False) -> Participant:
     """A fresh random pseudonym for a participant (the dice button)."""
     check_renamable(session, label)
     taken = existing_codes(Path(root).parent) | {p.code for p in session.participants}
-    return rename_participant(session, root, label, make_code(session.study_code, taken))
+    return rename_participant(session, root, label, make_code(session.study_code, taken), confirmed)
 
 
 # ---------- participant details, asked per trial (0.1.0rc13) ----------

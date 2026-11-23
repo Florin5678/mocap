@@ -43,6 +43,7 @@ from mocapapp.core.workflow import (
     new_pseudonym,
     remove_detail,
     remove_participant,
+    rename_consequences,
     rename_participant,
     set_detail_enabled,
     sibling_camera_dirs,
@@ -464,29 +465,48 @@ class SetupPage(Page):
             reason = str(exc)
         edit.setReadOnly(bool(reason))
         dice.setEnabled(not reason)
-        edit.setToolTip(reason or "Type another pseudonym if you need to (letters, digits, - or _). "
-                                  "Never use the participant's real name.")
+        former = (f" Earlier pseudonyms: {', '.join(person.former_codes)}." if person.former_codes else "")
+        edit.setToolTip((reason or "Type another pseudonym if you need to (letters, digits, - or _). Never use the "
+                                   "participant's real name.") + former)
+
+    def _confirm_rename(self, person) -> bool | None:
+        """None: cancelled. The signed form or results carry the pseudonym: say what changes, then go ahead."""
+        consequences = rename_consequences(self.session, person.label)
+        if not consequences:
+            return False
+        if confirm(self, "Change the pseudonym?", "\n\n".join(consequences), "Change it"):
+            return True
+        return None
 
     def _rename(self, person, edit: QLineEdit) -> None:
         if edit.isReadOnly() or edit.text().strip() == person.code:
             edit.setText(person.code)
             return
+        confirmed = self._confirm_rename(person)
+        if confirmed is None:
+            edit.setText(person.code)
+            return
         try:
-            rename_participant(self.session, self.root, person.label, edit.text())
+            rename_participant(self.session, self.root, person.label, edit.text(), confirmed)
         except SetupError as exc:
             edit.setText(person.code)
             error_box(self, "Pseudonym not changed", str(exc))
             return
         edit.setText(person.code)
+        self._update_name_lock(person)
         self._check_existing()
 
     def _randomize(self, person, edit: QLineEdit) -> None:
+        confirmed = self._confirm_rename(person)
+        if confirmed is None:
+            return
         try:
-            new_pseudonym(self.session, self.root, person.label)
+            new_pseudonym(self.session, self.root, person.label, confirmed)
         except SetupError as exc:
             error_box(self, "Pseudonym not changed", str(exc))
             return
         edit.setText(person.code)
+        self._update_name_lock(person)
         self._check_existing()
 
     def add_person(self) -> None:

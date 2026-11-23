@@ -48,7 +48,7 @@ The steps are listed on the left. A step becomes available when the previous one
 3. Add one **folder per camera**. Each folder holds the camera's `intrinsic` and `extrinsic` videos and one video per trial; before the recordings, the folders may still be empty. If the folders are named after the cameras (`cam01`, `cam02`, ...) and sit side by side, choosing one with **Browse ...** fills in the others.
 4. Set **Trials per participant** (usually 1). A session holds at most 10 trials in total.
 5. Set the number of **Participants**. Their height and other details are entered per trial in step 2 (Trials).
-6. Press **Create session**. Every participant gets a **pseudonym**, such as `PA26-K7M2QX4`. You can still add a participant later, or remove one who has no videos yet (select the row, then **Remove participant**). The pseudonym is random; you can type another one (letters, digits, `-` or `_`, never a real name) or click the arrow next to it for a new random one, until you tick **Signed consent received** (`mocapapp session pseudonym --participant N --set P01` or `--random`).
+6. Press **Create session**. Every participant gets a **pseudonym**, such as `PA26-K7M2QX4`. You can still add a participant later, or remove one who has no videos yet (select the row, then **Remove participant**). The pseudonym is random; you can type another one (letters, digits, `-` or `_`, never a real name) or click the arrow next to it for a new random one (`mocapapp session pseudonym --participant N --set P01` or `--random`). Once **Signed consent received** is ticked or the participant has results, the app first says what a change affects and asks you to confirm: write the new pseudonym on the signed form, and the quality report and exported files are renamed with it. The old pseudonym is shown in the field's tooltip.
 7. Press **Generate ...** in a participant's row for their **participation consent form**. The first time, a window asks for the study details: study name, purpose, researchers, data handling, risks and compensation. They are printed on the form as normal text; a field left blank gets a line to write on. The form is meant to be printed; it has no fields to fill in on screen. The details are kept for the next forms of the session; only the pseudonym changes. **Generate all consent forms ...** makes one PDF with every participant's form, ready to print.
 8. When you hold a signed form, tick **Signed consent received** for that participant.
 9. Tick **Consented to storing raw footage** only if the participant agreed to it. **Delete raw footage** then follows automatically; you can change it.
@@ -59,6 +59,8 @@ A typical day: create the session and print the forms before the recordings, hav
 Keep the signed forms separate from the data: the pseudonym is the only link between a person and their data.
 
 ### Step 2 – Trials
+
+When the page opens, the app already chooses what the file names make obvious: a video named `intrinsic` or `extrinsic` in a camera folder, and for every trial the video named with its number (trial 1: `01`, `trial01`, `trial_01` or `Trial 1`). The folders may hold more takes than the session has trials; the others are left out. Nothing you chose yourself is changed.
 
 Press **Check videos**. The app reads every file and:
 
@@ -73,7 +75,7 @@ Problems are listed with what to do. In particular:
 The page has two tables with one row per trial:
 
 - **Trials and participant details**: whose trial each row is (the **Participant** column; the app fills it in recording order, the first participant's trials first) and a column for every **participant detail** ticked in step 1, such as the height in metres or centimetres. Fill them in while you add the trials; changes are saved straight away. When a participant has several trials, the values entered for one are copied into their other trials that are still empty, so normally you enter them once and change only what differs (for example the weight on a later day). An empty height is estimated, which is less accurate.
-- **Trial mapping**: which video is which trial, for every camera. If the app matched trial videos by recording time instead of by name, check it and correct it if needed, then press **Save this mapping**.
+- **Trial mapping**: which video is which trial, for every camera. If the app matched trial videos by recording time instead of by their numbers, check it and correct it if needed, then press **Save this mapping**.
 
 - **Add trial ...** adds a trial for a participant, for example one recorded on a later day: choose its video for every camera, **Save this mapping**, check and copy again. Trials already processed keep their numbers and results. **Remove trial ...** removes the selected trial (click its row number first). A trial that already has copied videos or results is deleted with them, after the list of files is shown and you type the pseudonym; the participant's other trials stay.
 

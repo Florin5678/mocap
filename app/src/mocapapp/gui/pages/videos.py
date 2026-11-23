@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
 
 from mocapapp.core.assemble import plan_inputs
 from mocapapp.core.session import save_session
-from mocapapp.core.validate import scan_dir, validate
+from mocapapp.core.validate import autofill, scan_dir, validate
 from mocapapp.core.workflow import (
     SetupError,
     add_trial,
@@ -141,6 +141,10 @@ class VideosPage(Page):
     def refresh(self) -> None:
         if self.session is None:
             return
+        # what the file names make obvious is chosen straight away: 'intrinsic'/'extrinsic', and a trial's video named
+        # with its number (01, trial01, trial_01); nothing chosen before is changed
+        if not self.session.frozen and not self.win.busy and autofill(self.session):
+            save_session(self.session, self.root)
         done = self.is_complete()
         self.status.setText("Videos are in the session. Check again after changing anything." if done else
                             "Press <b>Check videos</b> to inspect every file (this reads each video once).")

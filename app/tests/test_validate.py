@@ -82,8 +82,36 @@ def test_intrinsic2_is_a_trial_with_warning(camera_dirs):
 
 
 def test_wrong_trial_count(camera_dirs):
-    r = validate(make_session(camera_dirs(trial_names=("t1", "t2", "t3"))))
-    assert any("3 trial videos" in i.what for i in levels(r, "error"))
+    r = validate(make_session(camera_dirs(trial_names=("ta", "tb", "tc"))))  # no trial numbers in the names
+    assert any("3 trial videos" in i.what and "01, trial01" in i.fix for i in levels(r, "error"))
+
+
+def test_more_takes_than_trials_matched_by_number(camera_dirs):
+    # every take of the day in each camera folder (0.1.0rc16): trial 1 -> 01, trial 2 -> trial_02
+    s = make_session(camera_dirs(trial_names=("01", "trial_02", "03", "extrinsic bw 03-04")))
+    r = validate(s)
+    assert r.ok, [str(i) for i in r.issues]
+    assert r.mapping_method == "name" and [t.mapping_method for t in s.trials] == ["name", "name"]
+    assert [Path(s.cameras[0].trial_files[lb]).name for lb in ("1", "2")] == ["01.mp4", "trial_02.mp4"]
+    unused = [i.what for i in levels(r, "info") if "Not used" in i.what]
+    assert len(unused) == 3 and "03.mp4" in unused[0] and "extrinsic bw 03-04.mp4" in unused[0]
+
+
+def test_autofill_chooses_what_the_names_make_obvious(camera_dirs):
+    from mocapapp.core.validate import autofill, name_number
+
+    assert [name_number(Path(n)) for n in ("01.mp4", "trial_01.mp4", "Trial 12.mov", "take.mp4")] == [1, 1, 12, None]
+    s = make_session(camera_dirs(trial_names=("trial01", "trial02", "trial07")))
+    for cam in s.cameras:
+        cam.intrinsic = cam.extrinsic = None
+        cam.trial_files = {}
+    chosen = autofill(s)  # no video is read: a quick look at the names when the Trials page opens
+    assert len(chosen) == 3 * 4 and all(c.intrinsic and c.extrinsic for c in s.cameras)
+    assert [Path(f).name for f in s.cameras[1].trial_files.values()] == ["trial01.mp4", "trial02.mp4"]
+    s.cameras[0].trial_files["2"] = s.cameras[0].trial_files["1"]  # a choice made by hand stays
+    s.cameras[0].trial_files.pop("1")
+    autofill(s)
+    assert Path(s.cameras[0].trial_files["2"]).name == "trial01.mp4" and "1" not in s.cameras[0].trial_files
 
 
 def test_nested_dirs_rejected(camera_dirs):
