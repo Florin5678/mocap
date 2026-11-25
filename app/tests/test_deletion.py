@@ -128,6 +128,32 @@ def test_planned_deletion_waits_for_complete_exported_results(tmp_path, monkeypa
     assert not req.blockers and any("never be processed again" in w for w in req.warnings)
 
 
+def test_delete_for_everyone_once_the_trial_is_processed(tmp_path, monkeypatch, capsys):
+    """R13 timing 'after the trial is processed': complete, readable results are enough; no export needed. Only
+    with the all-participants option; consent-based deletion still waits for the export."""
+    root = tmp_path / "S"
+    session = _finished(root, monkeypatch, exported=False)
+    session.settings.delete_raw_when = "after_processing"  # chosen, but the all-participants option is off
+    assert any("not been exported" in b for b in deletion.plan_raw(session, root, "1", after_run=True).blockers)
+    assert main(["project", "settings", "--session", str(root), "--delete-raw-all", "on", "--delete-raw-when",
+                 "after_processing"]) == 0
+    assert "deleted for all participants after the trial is processed" in capsys.readouterr().out
+    session = load_session(root)
+    assert all(t.delete_raw for t in session.trials)  # also those with storage consent
+    plan = deletion.plan_raw(session, root, "1", after_run=True)
+    assert not plan.blockers
+    deletion.execute(plan, session)
+    assert not Layout(root).trial_input("1", "cam01").exists() and not session.trial("1").raw_present
+    mot = next((Layout(root).trial("2") / "kinematics").glob("*.mot"))
+    mot.write_text("")  # results that cannot be read still block
+    assert any("empty or unreadable" in b for b in deletion.plan_raw(session, root, "2", after_run=True).blockers)
+    with pytest.raises(SystemExit):  # argparse: not one of the choices
+        main(["project", "settings", "--session", str(root), "--delete-raw-when", "later"])
+    capsys.readouterr()
+    assert main(["project", "settings", "--session", str(root), "--cutoff", "40"]) == 1
+    assert "between 1 and 30" in capsys.readouterr().out
+
+
 def test_originals_need_the_typed_code_and_are_logged_without_paths(tmp_path, monkeypatch):
     root = tmp_path / "S"
     session = _finished(root, monkeypatch)

@@ -71,3 +71,53 @@ def trial_status(session: Session, root: Path, label: str) -> str:
     if trial_missing(session, root, label):
         return "not ready"
     return "failed" if state == "failed" else "ready"
+
+
+# ---------- the window's sidebar and the empty-project checklist (§16.3) ----------
+
+def _layout_ready(session: Session, root: Path, layout: str) -> bool:
+    from mocapapp.core.calibration import service
+
+    return all(v == "ready" for v in service.layout_state(session, root, layout).values())
+
+
+def section_todo(session: Session, root: Path) -> dict[str, int | None]:
+    """Per section: how many things still need doing (0 = all done, None = nothing there yet)."""
+    from mocapapp.core.calibration import service
+
+    cams = [c for c in session.cameras]
+    people = session.active_participants
+    trials = session.active_trials
+    return {
+        "session": sum(1 for t in trials if trial_status(session, root, t.label) == "not ready") if trials else None,
+        "participants": sum(1 for p in people if not p.consent.attested or p.height_m is None) if people else None,
+        "cameras": sum(1 for c in cams if service.lens_result(root, c.id) is None) if cams else None,
+        "layouts": sum(1 for x in session.layouts if not _layout_ready(session, root, x.id))
+        if session.layouts else None,
+        "results": None,
+    }
+
+
+def badge(todo: int | None) -> str:
+    """Sidebar badge: a tick, 'N to do', or nothing."""
+    if todo is None:
+        return ""
+    return "\u2713" if todo == 0 else f"{todo} to do"
+
+
+def checklist(session: Session, root: Path) -> list[tuple[str, str, bool]]:
+    """An empty project's first steps: (section, what to do, done)."""
+    from mocapapp.core.calibration import service
+
+    has_points = bool(session.presets) or any(x.points for x in session.layouts)
+    return [
+        ("cameras", "Add the cameras", bool(session.cameras)),
+        ("cameras", "Calibrate their lenses (intrinsic videos of the board)",
+         bool(session.cameras) and all(service.lens_result(root, c.id) for c in session.cameras)),
+        ("layouts", "Enter the measured reference points", has_points),
+        ("layouts", "Make a layout and click the points in each camera's extrinsic video",
+         any(_layout_ready(session, root, x.id) for x in session.layouts)),
+        ("participants", "Add participants: pseudonym, height, consent",
+         any(p.consent.attested and p.height_m for p in session.active_participants)),
+        ("session", "Add the first trial and choose its videos", bool(session.trials)),
+    ]

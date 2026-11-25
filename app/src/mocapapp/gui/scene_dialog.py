@@ -132,11 +132,15 @@ class SceneDiagram(QWidget):
 
 
 class SceneDialog(QDialog):
-    def __init__(self, parent: QWidget | None, scene: sp.Scene | None, has_extrinsics: bool = False):
+    def __init__(self, parent: QWidget | None, scene: sp.Scene | None, has_extrinsics: bool = False,
+                 presets: list | None = None, on_save_preset=None, title: str = "Reference points"):
+        """presets (the project's PointsPreset list) and on_save_preset(name, scene): presets kept in the project
+        (§16.2). Without them, presets are files in the app's settings folder (0.1.x)."""
         super().__init__(parent)
-        self.setWindowTitle("Reference points")
+        self.setWindowTitle(title)
         self.resize(900, 600)
         self.has_extrinsics = has_extrinsics
+        self.presets, self.on_save_preset = presets, on_save_preset
         self._original = scene.model_copy(deep=True) if scene else None
         scene = scene or sp.Scene()
 
@@ -362,17 +366,25 @@ class SceneDialog(QDialog):
     def _save_preset(self) -> None:
         name, ok = QInputDialog.getText(self, "Save preset", "Name of this point set (e.g. Lab room A):")
         if ok and name.strip():
+            if self.on_save_preset is not None:
+                self.on_save_preset(name.strip(), self.scene())
+                return
             safe = "".join(ch for ch in name.strip() if ch.isalnum() or ch in " -_")[:60]
             sp.save_scene(self.scene(), presets_dir() / f"{safe}.json")
 
     def _load_preset(self) -> None:
-        names = sorted(p.stem for p in presets_dir().glob("*.json"))
+        if self.presets is not None:
+            found = {f"{p.name} ({p.id})": p for p in self.presets}
+        else:
+            found = {p.stem: p for p in sorted(presets_dir().glob("*.json"))}
+        names = list(found)
         if not names:
             QMessageBox.information(self, "No presets", "No saved point sets yet.")
             return
         name, ok = QInputDialog.getItem(self, "Load preset", "Point set:", names, 0, False)
         if ok:
-            scene = sp.load_scene(presets_dir() / f"{name}.json")
+            item = found[name]
+            scene = sp.Scene.model_validate(item.points) if self.presets is not None else sp.load_scene(item)
             self.origin.setText(scene.origin_text)
             self.x_text.setText(scene.x_axis_text)
             self.y_note.setText(scene.y_axis_note)

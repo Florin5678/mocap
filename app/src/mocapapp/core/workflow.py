@@ -188,15 +188,15 @@ def add_participant(session: Session, root: Path, height: str | float | None = N
 
 
 def remove_participant(session: Session, root: Path, label: str) -> None:
-    """Remove a participant who has no data in the session yet (for example, one who did not come)."""
+    """Remove a participant who has no data in the project yet (for example, one who did not come), with their
+    trials. A project may have no participants (§16: it starts empty)."""
     person = session.participant(label)
-    if len(session.participants) == 1:
-        raise SetupError("A session needs at least one participant.")
     layout = Layout(root)
     for t in session.trials_of(label):
         if layout.trial(t.label).exists() or t.label in session.run_state.trial_status:
-            raise SetupError(f"Participant {label} ({person.code}) already has videos or results in this session. "
-                             "Use 'Participant data and deletion' on the Results step to delete their data instead.")
+            raise SetupError(f"Participant {label} ({person.code}) already has videos or results in this project. "
+                             "Use 'Participant data and deletion' (File menu, Participants or Results) to delete "
+                             "their data instead.")
     gone = {t.label for t in session.trials_of(label)}
     session.trials = [t for t in session.trials if t.label not in gone]
     session.participants = [p for p in session.participants if p.label != label]
@@ -1152,7 +1152,7 @@ def set_consent(session: Session, root: Path | None, participant: str, state: st
         if not c.attested:
             c.attested_at = datetime.now().isoformat(timespec="seconds")
         c.attested, c.raw_footage_storage = True, state == "keep"
-    person.delete_raw = not c.raw_footage_storage
+    person.delete_raw = session.settings.delete_raw_all or not c.raw_footage_storage
     if root is not None:
         save_session(session, root)
     return person
@@ -1249,3 +1249,141 @@ def prepare_calibration(session: Session, root: Path, cameras: list[str] | None 
     plan.bytes_needed = int(plan.bytes_needed * DISK_MARGIN)
     done = prepare_inputs(plan, report, progress)
     return sum(1 for how in done.values() if how != "existing")
+
+
+# ---------- Session settings and calibration from the GUI (PROJECT.md §16.3) ----------
+
+SETTING_FIELDS = {"pose_mode", "keypoints", "cutoff_hz", "use_augmentation", "simple_model", "save_overlay",
+                  "keep_keypoints"}
+
+
+def set_settings(session: Session, root: Path | None, **values) -> list[str]:
+    """Processing settings of the project. Finished trials whose results depend on a changed setting become out
+    of date (a new run repeats only those stages). Returns the labels that became out of date."""
+    from mocapapp.core import runner
+
+    unknown = set(values) - SETTING_FIELDS
+    if unknown:
+        raise SetupError(f"Unknown setting(s): {', '.join(sorted(unknown))}.")
+    st = session.settings
+    for key, value in values.items():
+        if key == "cutoff_hz":
+            if not 1 <= float(value) <= 30:
+                raise SetupError("The smoothing cut-off is between 1 and 30 Hz.")
+            st.filter.cutoff_hz = float(value)
+        else:
+            setattr(st, key, value)
+    rs, stale = session.run_state, []
+    for t in session.active_trials:  # results made with other settings are no longer final
+        if rs.trial_status.get(t.label) == "done" and runner.stale_stages(session, t.label):
+            rs.trial_status[t.label] = "partial"
+            stale.append(t.label)
+    if root is not None:
+        save_session(session, root)
+    return stale
+
+
+def set_project_info(session: Session, root: Path | None, study_code: str | None = None,
+                     trials_per_participant: int | None = None, notes: str | None = None) -> None:
+    """Study code (used in new pseudonyms only: existing ones never change), trials per participant (the default
+    of the add-trial row, R10) and notes."""
+    if study_code is not None:
+        session.study_code = normalise_study(study_code)
+    if trials_per_participant is not None:
+        if trials_per_participant < 1:
+            raise SetupError("Trials per participant must be 1 or more.")
+        session.trials_per_participant = trials_per_participant
+    if notes is not None:
+        session.notes = notes
+    if root is not None:
+        save_session(session, root)
+
+
+DELETE_WHEN = {"after_processing": "after the trial is processed", "after_export": "after the results are exported"}
+
+
+def set_delete_raw_all(session: Session, root: Path | None, on: bool, when: str | None = None) -> None:
+    """R13: delete the raw footage of every participant, even of those who agreed to its storage, once their trial is
+    processed or once its results are exported (`when`). Off again: each participant's consent decides (§6.2) and
+    the deletion waits for the export."""
+    if when is not None:
+        if when not in DELETE_WHEN:
+            raise SetupError(f"When is one of: {', '.join(DELETE_WHEN)}.")
+        session.settings.delete_raw_when = when
+    session.settings.delete_raw_all = on
+    for person in session.participants:
+        person.delete_raw = on or not person.consent.raw_footage_storage
+    if root is not None:
+        save_session(session, root)
+
+
+def set_board(session: Session, root: Path | None, board_type: str, cols: int, rows: int, square_mm: float) -> None:
+    """The printed calibration board (squares across and down). Lens results computed with another board stay
+    until the cameras are calibrated again."""
+    if board_type not in ("charuco", "chess"):
+        raise SetupError("The board is 'charuco' or 'chess'.")
+    if not (3 <= cols <= 30 and 3 <= rows <= 30) or not 5 <= square_mm <= 200:
+        raise SetupError("A board has 3 to 30 squares each way and squares of 5 to 200 mm.")
+    st = session.settings
+    st.board_type, st.corners_nb, st.square_size_mm = board_type, (rows - 1, cols - 1), float(square_mm)
+    if root is not None:
+        save_session(session, root)
+
+
+def calibrate_cameras(session: Session, root: Path, cameras: list[str] | None = None, every_n_sec: float = 1.0,
+                      force: bool = False, progress=print) -> list:
+    """Copy these cameras' intrinsic videos into the project, compute their lens calibration and write the
+    calibration files of trials that became ready. None = every camera with an intrinsic video."""
+    from mocapapp.core.calibration import service
+
+    ids = cameras or [c.id for c in session.cameras if c.intrinsic is not None]
+    if not ids:
+        raise SetupError("No camera has an intrinsic video yet.")
+    try:
+        prepare_calibration(session, root, ids, progress=progress)
+        results = service.run_intrinsics(session, root, ids, every_n_sec, force, progress)
+        if session.calibration_source == "app":
+            service.write_calibration(session, root)
+    finally:
+        save_session(session, root)
+    return results
+
+
+def place_camera(session: Session, root: Path, layout: str, camera: str, clicks, frame_index: int = 0,
+                 override: bool = False):
+    """A camera's position in a layout from its clicked reference points; writes the calibration files of trials
+    that became ready."""
+    from mocapapp.core.calibration import service
+
+    try:
+        result = service.run_extrinsics(session, root, layout, camera, clicks, frame_index, override)
+        if session.calibration_source == "app":
+            service.write_calibration(session, root)
+    finally:
+        save_session(session, root)
+    return result
+
+
+def set_layout_points(session: Session, root: Path, layout: str, scene, preset: str = "") -> list[str]:
+    """A layout's reference points (from the editor or a preset). Positions are recomputed from the clicks already
+    made; returns plain-language notes on them."""
+    from mocapapp.core.calibration import service
+
+    try:
+        notes = service.set_layout_points(session, root, layout, scene, preset)
+        if session.calibration_source == "app":
+            service.write_calibration(session, root)
+    finally:
+        save_session(session, root)
+    return notes
+
+
+def delete_preset(session: Session, root: Path | None, preset: str) -> None:
+    """Layouts made from it keep their own copy of the points."""
+    session.preset(preset)
+    session.presets = [p for p in session.presets if p.id != preset]
+    for lay in session.layouts:
+        if lay.preset == preset:
+            lay.preset = ""
+    if root is not None:
+        save_session(session, root)

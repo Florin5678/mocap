@@ -67,8 +67,10 @@ def camera_dirs(tmp_path):
 
 def pytest_collection_modifyitems(config, items):
     """Branch app/projects (PROJECT.md §16.6): the 0.1.x window is rebuilt in phases P3-P5; its tests are skipped
-    until then. Core and CLI tests run as usual."""
+    until then. Core and CLI tests run as usual, and so do the tests of the new window (test_window*)."""
     old_gui = pytest.mark.skip(reason="0.1.x GUI: rebuilt for projects in P3-P5 (PROJECT.md §16.6)")
     for item in items:
+        if item.path.name.startswith("test_window"):
+            continue
         if "qtbot" in getattr(item, "fixturenames", ()) or item.path.name.startswith("test_gui"):
             item.add_marker(old_gui)

@@ -201,8 +201,17 @@ def _without_double_count(raw: list[Item], results: list[Item]) -> list[Item]:
 
 # ---------- safeguard 1: results must be complete before a planned (setup checkbox) deletion ----------
 
-def results_complete(session: Session, root: Path, label: str) -> list[str]:
-    """Problems that block deleting raw footage right after a run (§8.4 safeguard 1); empty = OK."""
+def export_needed(session: Session) -> bool:
+    """A planned deletion waits for the export, unless Session settings delete everyone's raw footage once the trial
+    is processed (R13)."""
+    st = session.settings
+    return not (st.delete_raw_all and st.delete_raw_when == "after_processing")
+
+
+def results_complete(session: Session, root: Path, label: str, need_export: bool = True) -> list[str]:
+    """Problems that block deleting raw footage right after a run (§8.4 safeguard 1); empty = OK. Without
+    need_export, complete and readable results are enough (they stay in the trial folder and can be exported
+    later)."""
     from mocapapp.core.export import find_files, kinds
     from mocapapp.core.runner import STAGES
 
@@ -223,6 +232,8 @@ def results_complete(session: Session, root: Path, label: str) -> list[str]:
             head = f.read_text(encoding="utf-8", errors="replace")[:4000] if f.stat().st_size else ""
             if header not in head:
                 problems.append(f"trial {label}: {f.name} is empty or unreadable.")
+    if not need_export:
+        return problems
     manifest = Layout(root).export / "manifest.json"
     exported = []
     if manifest.is_file():
@@ -260,8 +271,9 @@ def plan_raw(session: Session, root: Path, label: str, include_originals: bool =
              after_run: bool = False) -> DeletionPlan:
     """Raw footage of one trial: working copies + overlays + 2D keypoints, optionally the originals.
 
-    after_run=True is the deletion chosen at setup (the checkbox): it waits until the results are complete and
-    exported. Otherwise (a participant's request, a later decision) it is allowed at any time, with a warning.
+    after_run=True is the planned deletion (no storage consent, or Session settings for everyone): it waits until
+    the results are complete and exported, or only complete when Session settings say 'after the trial is
+    processed'. Otherwise (a participant's request, a later decision) it is allowed at any time, with a warning.
     """
     _check_trial(session, label)
     trial = session.trial(label)
@@ -271,7 +283,7 @@ def plan_raw(session: Session, root: Path, label: str, include_originals: bool =
         plan.items += _originals(session, label)
         if plan.includes_originals:
             plan.confirm_text = trial.code
-    problems = results_complete(session, root, label)
+    problems = results_complete(session, root, label, need_export=not after_run or export_needed(session))
     if after_run:
         plan.blockers = problems
     elif problems and trial.raw_present:

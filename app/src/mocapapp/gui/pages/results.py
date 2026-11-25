@@ -116,7 +116,7 @@ class ResultsPage(Page):
         return False  # the Viewer works on the trial folders: no export needed
 
     def refresh(self) -> None:
-        if self.session is None or not self.win.reachable(self.win.pages.index(self)):
+        if self.session is None:
             return
         try:
             _path, self.results = write_report(self.session, self.root)
@@ -162,7 +162,10 @@ class ResultsPage(Page):
             elif t.raw_deleted_at:
                 state = f"deleted on {t.raw_deleted_at[:10]}"
             elif t.delete_raw:
-                state = "<b>still stored</b>, marked for deletion after export"
+                from mocapapp.core.deletion import export_needed
+
+                when = "after export" if export_needed(self.session) else "once the trial is processed"
+                state = f"<b>still stored</b>, marked for deletion {when}"
             else:
                 state = "kept with consent until the study is finished - delete it then"
             lines.append(f"Trial {html.escape(t.label)} ({html.escape(t.code)}): {state}")

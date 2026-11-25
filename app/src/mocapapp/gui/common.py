@@ -240,3 +240,23 @@ def clear_table(table) -> None:
     """Drop all rows, including cell widgets from an earlier fill."""
     table.clearContents()
     table.setRowCount(0)
+
+
+def for_each(parent: QWidget | None, title: str, items: list, action: Callable,
+             errors: tuple = (ValueError, KeyError, OSError)) -> list:
+    """Apply an action to each selected row's item. What cannot be done is listed in one message (title); the rest
+    is done. Returns the results of the actions that worked."""
+    done, failed = [], []
+    for item in items:
+        try:
+            done.append(action(item))
+        except errors as exc:
+            failed.append(str(exc).strip("'\""))
+    if failed:
+        error_box(parent, title, "\n\n".join(failed))
+    return done
+
+
+def selected_rows(view) -> list[int]:
+    """Rows selected in a table or list, top to bottom."""
+    return sorted({i.row() for i in view.selectedIndexes()})

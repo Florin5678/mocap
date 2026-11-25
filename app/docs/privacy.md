@@ -13,18 +13,17 @@ How the app handles personal data (PROJECT.md §8). This is not legal advice. Th
 | Participant details per trial (height, weight, handedness, age, gender, custom; 0.1.0rc13) | `session.json` (`trials[].details`), exported as `export/trials.csv` and `manifest.json` (`trials`) | pseudonymised; combined with movement data they can help identify a person, so ask only what the study needs. Removed with *Delete all data of this participant* and with a deleted trial. |
 | 3D markers, joint angles, scaled model | `pose-3d/`, `kinematics/`, `export/` | pseudonymised (movement can still identify a person) |
 
-Each participant's **pseudonym** (for example `PA26-K7M2QX4`) is pseudonymisation, not anonymisation. The signed consent form, which links the pseudonym to a name, stays with the experimenter, stored separately from the data. The app never stores names or e-mail addresses, and stores body mass only when the weight column is added (step 2, Trials, *Edit columns*). The researcher can replace the random pseudonym with one of their own (letters, digits, `-`, `_`; it must not be the person's name) at any time. Once signed consent is ticked or the participant has results, the app asks to confirm first, because the signed form and the exported file names carry it: the researcher writes the new pseudonym on the form, and the app renames the exported files and updates `manifest.json`, `trials.csv` and the quality report. Earlier pseudonyms are kept in `session.json` (`participants[].former_codes`) so the signed form can still be traced; copies made outside the session keep the old one. A withdrawn participant's pseudonym never changes (0.1.0rc16).
+Each participant's **pseudonym** (for example `PA26-K7M2QX4`) is pseudonymisation, not anonymisation. The signed consent form, which links the pseudonym to a name, stays with the experimenter, stored separately from the data. The app never stores names or e-mail addresses, and stores body mass only when the weight column is added (Participants, *Columns*). The researcher can replace the random pseudonym with one of their own (letters, digits, `-`, `_`; it must not be the person's name) at any time. Once signed consent is ticked or the participant has results, the app asks to confirm first, because the signed form and the exported file names carry it: the researcher writes the new pseudonym on the form, and the app renames the exported files and updates `manifest.json`, `trials.csv` and the quality report. Earlier pseudonyms are kept in `session.json` (`participants[].former_codes`) so the signed form can still be traced; copies made outside the session keep the old one. A withdrawn participant's pseudonym never changes (0.1.0rc16).
 
 ## Consent
 
-Tick **Signed consent received** for each participant once you have the signed form for that pseudonym (`mocapapp consent --attest`). The app cannot verify the form. You cannot run a participant's trials until their consent is ticked.
+Each participant's **Consent** (Participants section; `mocapapp participant consent --state`) is one choice, made once you hold the signed form for that pseudonym (0.2, unreleased):
 
-The **Delete raw footage** option follows the participant's answer about storing raw footage:
+- **Not signed yet**: the participant's trials cannot run;
+- **Signed, delete footage**: no consent to store raw footage, so it is deleted;
+- **Signed, keep footage**: storage consented, so the footage is kept until the study is finished.
 
-- no storage consent: the option is ticked;
-- storage consented: the option is unticked, and the footage is kept until the study is finished.
-
-You can change the option either way. If storage was not consented and the option is unticked, the app shows a warning, because the consent form promises deletion.
+The app cannot verify the form. What happens to the raw footage follows this choice. To delete the raw footage of every participant, also those who agreed to its storage, tick **Delete raw footage for all participants** in Session settings (`mocapapp project settings --delete-raw-all on`) and choose when: **after the trial is processed** or **after the results are exported**. Turned off again, each participant's consent decides. Raw footage without storage consent is always deleted: the consent form promises it.
 
 ## Deleting
 
@@ -58,13 +57,13 @@ There are three kinds of deletion:
 
 On the command line, nothing is deleted without `--yes`; without it, the command only lists what would go.
 
-**Deletion chosen at setup.** When *Delete raw footage* was ticked at setup, the app deletes only after:
+**Deletion that follows consent.** For a participant whose raw footage is to be deleted, the app deletes only after:
 
 - every processing step has finished;
 - the results can be read;
-- the results have been exported.
+- the results have been exported (not needed when Session settings delete everyone's raw footage *after the trial is processed*: the results stay in the project and can be exported later).
 
-You start this deletion on the Results step with **Delete raw footage now**; the command-line equivalent is `delete-raw --after-run`. A deletion on request (for example, a participant asks) works at any time. If the results are incomplete, the app warns you first: once the footage is deleted, that trial can never be processed again.
+You start this deletion in the Results section with **Delete raw footage now**; the command-line equivalent is `delete-raw --after-run`. A deletion on request (for example, a participant asks) works at any time. If the results are incomplete, the app warns you first: once the footage is deleted, that trial can never be processed again.
 
 **After a deletion:**
 

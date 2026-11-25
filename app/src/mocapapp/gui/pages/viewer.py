@@ -347,7 +347,7 @@ class ViewerPage(Page):
         return self._cache[key]
 
     def refresh(self) -> None:
-        if self.session is None or not self.win.reachable(self.win.pages.index(self)):
+        if self.session is None:
             self.timer.stop()
             return
         current = self.trial_box.currentData()

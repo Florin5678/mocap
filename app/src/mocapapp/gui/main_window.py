@@ -1,4 +1,6 @@
-"""One window, a linear wizard with a step bar and a non-destructive Back (PROJECT.md §7)."""
+"""One window, five sections in a sidebar: Session, Participants, Cameras, Layouts, Results (PROJECT.md §16.3).
+
+Sections open in any order; the sidebar shows what each still needs. Sections call core functions only."""
 
 from __future__ import annotations
 
@@ -15,7 +17,6 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QProgressDialog,
-    QPushButton,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -36,8 +37,10 @@ from mocapapp.gui.common import (
     settings,
 )
 
-TUTORIAL_PAGE = {"setup": 0, "videos": 3, "intrinsics": 3, "extrinsics": 4, "run": 5, "results": 0,
-                 "viewer": 0}
+TUTORIAL_PAGE = {"session": 0, "participants": 0, "cameras": 3, "layouts": 4, "results": 0}
+# the step a 0.1.x project file was saved at -> the section that holds it now
+OLD_STEPS = {"setup": "session", "videos": "session", "run": "session", "intrinsics": "cameras",
+             "extrinsics": "layouts", "scene": "layouts", "viewer": "results"}
 
 
 def user_guide_path() -> Path | None:
@@ -48,12 +51,13 @@ def user_guide_path() -> Path | None:
     return path if path.is_file() else None
 
 
-class Page(QWidget):
-    """A wizard step. Pages call core functions only; `refresh` re-reads the session."""
+class Section(QWidget):
+    """A section of the window. `refresh` re-reads the project; `completeChanged` recounts the sidebar badges."""
 
     key = ""
     title = ""
-    optional = False  # a step to look at, never where a session resumes
+    purpose = ""
+    optional = False
     completeChanged = Signal()
 
     def __init__(self, win: MainWindow):
@@ -71,100 +75,92 @@ class Page(QWidget):
     def refresh(self) -> None:
         pass
 
+    # the 0.1.x pages still shown inside the Results section ask these
     def is_complete(self) -> bool:
         return True
 
     def step_ticked(self) -> bool:
-        """The step list's tick: a finished step. A tool without an end (the Viewer) never gets one."""
         return self.is_complete() and not self.skipped()
 
     def skipped(self) -> bool:
-        """True when this step does not apply to the session (e.g. calibration of the sample data)."""
         return False
 
     def gates_next(self) -> bool:
-        """False when the next steps can be opened before this one is complete (export is not needed to view)."""
-        return True
+        return False
+
+
+Page = Section  # the 0.1.x page modules import this name
 
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        from mocapapp.gui.pages.calibration import ExtrinsicsPage, IntrinsicsPage
-        from mocapapp.gui.pages.results import ResultsPage
-        from mocapapp.gui.pages.run import RunPage
-        from mocapapp.gui.pages.setup import SetupPage
-        from mocapapp.gui.pages.videos import VideosPage
-        from mocapapp.gui.pages.viewer import ViewerPage
+        from mocapapp.gui.power import KeepAwake
+        from mocapapp.gui.sections.cameras import CamerasSection
+        from mocapapp.gui.sections.layouts import LayoutsSection
+        from mocapapp.gui.sections.participants import ParticipantsSection
+        from mocapapp.gui.sections.results import ResultsSection
+        from mocapapp.gui.sections.session import SessionSection
 
         self.root: Path | None = None
         self.session: Session | None = None
-        self.project: Path | None = None  # the .mocapproj file the session was opened from or saved to
+        self.project: Path | None = None  # the .mocapproj file the project was opened from or saved to
         self.busy = False
-        from mocapapp.gui.power import KeepAwake
-
         self.keep_awake = KeepAwake()  # Help > Settings: screen on while busy
         self.setWindowTitle(s("app_name"))
         self.resize(1180, 780)
 
-        self.pages: list[Page] = [SetupPage(self), VideosPage(self), IntrinsicsPage(self), ExtrinsicsPage(self),
-                                  RunPage(self), ResultsPage(self), ViewerPage(self)]
-        self.steps = QListWidget()
-        self.steps.setFixedWidth(230)
-        self.steps.currentRowChanged.connect(self._step_clicked)
+        self.sections: list[Section] = [SessionSection(self), ParticipantsSection(self), CamerasSection(self),
+                                        LayoutsSection(self), ResultsSection(self)]
+        self.pages = self.sections
+        self.sidebar = QListWidget()
+        self.sidebar.setFixedWidth(210)
+        self.sidebar.setSpacing(3)
+        self.sidebar.currentRowChanged.connect(self._sidebar_clicked)
         self.stack = QStackedWidget()
-        for page in self.pages:
-            self.steps.addItem(QListWidgetItem(page.title))
-            self.stack.addWidget(page)
-            page.completeChanged.connect(self.update_nav)
+        for section in self.sections:
+            self.sidebar.addItem(QListWidgetItem(section.title))
+            self.stack.addWidget(section)
+            section.completeChanged.connect(self.update_nav)
 
         self.purpose = QLabel()
         self.purpose.setWordWrap(True)
         self.purpose.setTextFormat(Qt.TextFormat.RichText)
         self.purpose.linkActivated.connect(lambda _: self.show_tutorial(TUTORIAL_PAGE[self.current_page().key]))
-        self.back_button = QPushButton("< Back")
-        self.next_button = QPushButton("Next >")
-        self.back_button.clicked.connect(lambda: self.go(self.stack.currentIndex() - 1))
-        self.next_button.clicked.connect(self._next)
-
         right = QVBoxLayout()
         self.page_title = heading("", 16)
         right.addWidget(self.page_title)
         right.addWidget(self.purpose)
         right.addWidget(self.stack, 1)
-        nav = QHBoxLayout()
-        nav.addWidget(self.back_button)
-        nav.addStretch()
-        self.session_label = QLabel()
-        self.session_label.setStyleSheet("color: palette(placeholder-text)")
-        nav.addWidget(self.session_label)
-        nav.addStretch()
-        nav.addWidget(self.next_button)
-        right.addLayout(nav)
         central = QWidget()
         layout = QHBoxLayout(central)
-        layout.addWidget(self.steps)
+        layout.addWidget(self.sidebar)
         layout.addLayout(right, 1)
         self.setCentralWidget(central)
+        self.session_label = QLabel()
+        self.session_label.setStyleSheet("color: palette(placeholder-text)")
+        self.statusBar().addPermanentWidget(self.session_label)
         self._menus()
-        self.go(0)
+        self.set_session(None, None)
 
     # ---------- menus ----------
 
     def _menus(self) -> None:
         file = self.menuBar().addMenu("&File")
-        self._action(file, "&New session", self.new_session, QKeySequence.StandardKey.New)
+        self._action(file, "&New project", self.new_session, QKeySequence.StandardKey.New)
         self._action(file, "&Open project ...", self.open_project_dialog, QKeySequence.StandardKey.Open)
-        self._action(file, "Open session &folder ...", self.open_session_dialog)
-        self.recent_menu = file.addMenu("Recent sessions")
+        self._action(file, "Open project &folder ...", self.open_session_dialog)
+        self.recent_menu = file.addMenu("Recent projects")
         self.recent_menu.aboutToShow.connect(self._fill_recent)
         self.save_action = self._action(file, "&Save project", self.save_project, QKeySequence.StandardKey.Save)
         self.save_as_action = self._action(file, "Save project &as ...", self.save_project_as,
                                            QKeySequence.StandardKey.SaveAs)
         self._action(file, "Try with &sample data ...", self.make_sample)
         file.addSeparator()
+        self.settings_action = self._action(file, "Session se&ttings ...", self.show_session_settings)
+        self.import_action = self._action(file, "&Import from another project ...", self.import_dialog)
         self.data_action = self._action(file, "&Participant data and deletion ...", self.show_participant_data)
-        self.move_action = self._action(file, "&Move session to another output folder ...", self.move_session_dialog)
+        self.move_action = self._action(file, "&Move project to another output folder ...", self.move_session_dialog)
         file.addSeparator()
         self._action(file, "&Quit", self.close, QKeySequence.StandardKey.Quit)
         help_menu = self.menuBar().addMenu("&Help")
@@ -201,7 +197,7 @@ class MainWindow(QMainWindow):
             action.setToolTip(" ".join(notes))
         self.recent_menu.setToolTipsVisible(True)
 
-    # ---------- session ----------
+    # ---------- project ----------
 
     def set_session(self, root: Path | None, session: Session | None) -> None:
         self.root, self.session = root, session
@@ -211,29 +207,37 @@ class MainWindow(QMainWindow):
                 settings().setValue("output_root", str(Path(root).parent))
         if root is None:
             self.project = None
-        self.data_action.setEnabled(session is not None)
-        self.move_action.setEnabled(session is not None)
-        self.save_action.setEnabled(session is not None)
-        self.save_as_action.setEnabled(session is not None)
+        for action in (self.data_action, self.move_action, self.save_action, self.save_as_action,
+                       self.settings_action, self.import_action):
+            action.setEnabled(session is not None)
         self._show_name()
-        for page in self.pages:
-            page.refresh()
+        for section in self.sections:
+            section.refresh()
+        if session is None:
+            self.go("session")
         self.update_nav()
 
     def _show_name(self) -> None:
         root = self.root
         name = self.project.stem if self.project else root.name if root else ""
-        self.session_label.setText((f"Project: {name}" if self.project else f"Session: {name}") if root else "")
+        self.session_label.setText(f"Project: {name}  ({root})" if root else "")
         self.setWindowTitle(f"{s('app_name')} - {name}" if root else s("app_name"))
 
     def save(self) -> None:
         if self.session is not None and self.root is not None:
             save_session(self.session, self.root)
 
+    def changed(self) -> None:
+        """A section changed the project: the other sections and the badges follow."""
+        for section in self.sections:
+            if section is not self.current_page():
+                section.refresh()
+        self.update_nav()
+
     # ---------- project files ----------
 
     def save_project(self) -> Path | None:
-        """Save the session and the project file (session folder + current step). Asks where the first time."""
+        """Save the project and its project file (folder + open section). Asks where the first time."""
         if self.session is None or self.busy:
             return None
         if self.project is None:
@@ -269,12 +273,12 @@ class MainWindow(QMainWindow):
         last = settings().value("last_project", "")
         start = str(Path(last).parent) if last else str(Path.home())
         name, _ = QFileDialog.getOpenFileName(self, "Open project", start,
-                                              f"mocapapp project (*{SUFFIX});;Session file (session.json)")
+                                              f"mocapapp project (*{SUFFIX});;Project file (session.json)")
         if name:
             self.open_path(Path(name))
 
     def open_path(self, path: Path) -> None:
-        """A project file, a session.json or a session folder."""
+        """A project file, a session.json or a project folder."""
         from mocapapp.core.project import SUFFIX
 
         path = Path(path)
@@ -298,44 +302,42 @@ class MainWindow(QMainWindow):
         self.project = project.path
         settings().setValue("last_project", str(project.path))
         self._show_name()
-        keys = [p.key for p in self.pages]
-        step = {"scene": "extrinsics"}.get(project.step, project.step)  # one step since 0.1.0rc17
-        index = keys.index(step) if step in keys else 0
-        if self.reachable(index):  # otherwise stay at the first unfinished step (files changed since saving)
-            self.go(index)
+        self.go(OLD_STEPS.get(project.step, project.step))
 
     def new_session(self) -> None:
         if self.busy:
             return
         self.set_session(None, None)
-        self.go(0)
 
     def open_session_dialog(self) -> None:
-        folder = QFileDialog.getExistingDirectory(self, "Open a session folder", str(Path.home()))
+        folder = QFileDialog.getExistingDirectory(self, "Open a project folder", str(Path.home()))
         if folder:
             self.open_session(Path(folder))
 
     def open_session(self, root: Path) -> bool:
+        """Open a project folder. A 0.1.x session folder is upgraded first (its old file is kept as a backup)."""
         if self.busy:
             return False
         try:
             session = load_session(root)
         except (OSError, ValueError) as exc:
-            error_box(self, "Cannot open session", f"{root} is not a readable session folder: {exc}")
+            error_box(self, "Cannot open project", f"{root} is not a readable project folder: {exc}")
             return False
         self.project = None
         self.set_session(root, session)
-        self.go(self.first_incomplete())
+        self.go("session")
         return True
 
     def make_sample(self) -> None:
         from mocapapp.core.sample import make_sample_session
 
+        if self.busy:
+            return
         folder = QFileDialog.getExistingDirectory(
-            self, "Where should the sample session be created? (ASCII-only path)", str(Path.home()))
+            self, "Where should the sample project be created? (ASCII-only path)", str(Path.home()))
         if not folder:
             return
-        dlg = QProgressDialog("Preparing the sample session ...", None, 0, 0, self)
+        dlg = QProgressDialog("Preparing the sample project ...", None, 0, 0, self)
         dlg.setWindowModality(Qt.WindowModality.WindowModal)
         dlg.setMinimumDuration(0)
         dlg.show()
@@ -344,32 +346,55 @@ class MainWindow(QMainWindow):
             dlg.close()
             self.project = None
             self.set_session(*result)
-            self.go(self.first_incomplete())
+            self.go("session")
 
         def failed(msg, details):
             dlg.close()
-            error_box(self, "Sample session not created", msg, details)
+            error_box(self, "Sample project not created", msg, details)
 
         Background(self, make_sample_session, Path(folder), on_done=done, on_error=failed,
                    on_progress=dlg.setLabelText, progress=True)
 
+    def show_session_settings(self) -> None:
+        from mocapapp.gui.session_settings import SessionSettingsDialog
+
+        if self.session is None or self.busy:
+            return
+        dlg = SessionSettingsDialog(self, self.session, self.root)
+        dlg.exec()
+        self.changed()
+        self.current_page().refresh()
+        if dlg.move_requested:
+            self.move_session_dialog()
+
+    def import_dialog(self) -> None:
+        from mocapapp.gui.import_dialog import ImportDialog
+
+        if self.session is None or self.busy:
+            return
+        dlg = ImportDialog(self, self.session, self.root)
+        dlg.exec()
+        if dlg.imported is not None:
+            self.changed()
+            self.current_page().refresh()
+
     def move_session_dialog(self) -> None:
-        """Move the session folder into another output folder (Setup step button and File menu)."""
+        """Move the project folder into another output folder (Session settings and the File menu)."""
         from mocapapp.core.workflow import SetupError, plan_move
 
         if self.session is None or self.busy:
             return
         folder = QFileDialog.getExistingDirectory(
-            self, "Choose the new output folder (the session folder moves into it)", str(Path(self.root).parent))
+            self, "Choose the new output folder (the project folder moves into it)", str(Path(self.root).parent))
         if not folder:
             return
         self.save()
         try:
             plan = plan_move(self.session, self.root, Path(folder))
         except SetupError as exc:
-            error_box(self, "Session not moved", str(exc))
+            error_box(self, "Project not moved", str(exc))
             return
-        answer = QMessageBox.question(self, "Move the session?", plan.describe())
+        answer = QMessageBox.question(self, "Move the project?", plan.describe())
         if answer != QMessageBox.StandardButton.Yes:
             return
         self.move_session(plan)
@@ -378,7 +403,7 @@ class MainWindow(QMainWindow):
         from mocapapp.core.workflow import move_session
 
         old = self.root
-        dlg = QProgressDialog("Moving the session ...", None, 0, 0, self)
+        dlg = QProgressDialog("Moving the project ...", None, 0, 0, self)
         dlg.setWindowModality(Qt.WindowModality.WindowModal)
         dlg.setMinimumDuration(0)
         dlg.show()
@@ -389,17 +414,19 @@ class MainWindow(QMainWindow):
             dlg.close()
             self.set_busy(False)
             forget_session(old)
+            key = self.current_page().key
             self.set_session(dest, self.session)  # remembers the new place and output folder
+            self.go(key)
             if self.project is not None:
-                self._write_project(self.project)  # the project file follows the session
-            self.statusBar().showMessage(f"Session moved to {dest}", 8000)
+                self._write_project(self.project)  # the project file follows the project folder
+            self.statusBar().showMessage(f"Project moved to {dest}", 8000)
             if warnings:
                 QMessageBox.warning(self, "Old folder not removed", "\n\n".join(warnings))
 
         def failed(msg, details):
             dlg.close()
             self.set_busy(False)
-            error_box(self, "Session not moved", msg, details)
+            error_box(self, "Project not moved", msg, details)
 
         self.mover = Background(self, move_session, plan, on_done=done, on_error=failed,
                                 on_progress=dlg.setLabelText, progress=True)
@@ -410,98 +437,76 @@ class MainWindow(QMainWindow):
 
         if self.session is None or self.busy:
             return
-        root = self.root
+        root, key = self.root, self.current_page().key
         dlg = ParticipantDataDialog(self, self.session, root)
         dlg.exec()
         if dlg.session_deleted:
             forget_session(root)
             self.set_session(None, None)
-            self.go(0)
             return
-        self.set_session(root, self.session)  # pages show deleted/withdrawn trials
+        self.set_session(root, self.session)  # sections show deleted/withdrawn trials
+        self.go(key)
 
     # ---------- navigation ----------
 
-    def current_page(self) -> Page:
-        return self.pages[self.stack.currentIndex()]
+    def current_page(self) -> Section:
+        return self.sections[self.stack.currentIndex()]
+
+    def section(self, key: str) -> Section:
+        return next(sec for sec in self.sections if sec.key == key)
 
     def reachable(self, index: int) -> bool:
-        if index == 0:
-            return True
-        if self.session is None:
-            return False
-        return all(p.is_complete() or p.skipped() or not p.gates_next() for p in self.pages[:index])
+        return index == 0 or self.session is not None
 
     def first_incomplete(self) -> int:
-        """Where an opened session resumes. A finished session opens on Results (export, deletion reminders),
-        not on the optional Viewer after it."""
-        for i, page in enumerate(self.pages):
-            if not (page.is_complete() or page.skipped()):
-                return i
-        return max(i for i, p in enumerate(self.pages) if not p.optional)
+        return 0
 
-    def go(self, index: int) -> None:
-        if not 0 <= index < len(self.pages) or self.busy:
+    def go(self, where: int | str) -> None:
+        keys = [sec.key for sec in self.sections]
+        index = keys.index(where) if isinstance(where, str) and where in keys else where
+        if not isinstance(index, int) or not 0 <= index < len(self.sections) or self.busy:
             return
-        # skip steps that do not apply, in the direction of travel
-        step = 1 if index >= self.stack.currentIndex() else -1
-        while 0 < index < len(self.pages) - 1 and self.pages[index].skipped():
-            index += step
         if not self.reachable(index):
-            return
+            index = 0
         self.stack.setCurrentIndex(index)
-        page = self.pages[index]
-        page.refresh()
-        self.page_title.setText(page.title)
-        self.purpose.setText(f"{s('steps.' + page.key)} <a href='why'>Why?</a>")
-        self.steps.blockSignals(True)
-        self.steps.setCurrentRow(index)
-        self.steps.blockSignals(False)
+        section = self.sections[index]
+        section.refresh()
+        self.page_title.setText(section.title)
+        self.purpose.setText(f"{section.purpose} <a href='why'>How it works</a>")
+        self.sidebar.blockSignals(True)
+        self.sidebar.setCurrentRow(index)
+        self.sidebar.blockSignals(False)
         self.update_nav()
 
-    def _step_clicked(self, row: int) -> None:
+    def _sidebar_clicked(self, row: int) -> None:
         if self.reachable(row) and not self.busy:
             self.go(row)
         else:
-            self.steps.blockSignals(True)
-            self.steps.setCurrentRow(self.stack.currentIndex())
-            self.steps.blockSignals(False)
+            self.sidebar.blockSignals(True)
+            self.sidebar.setCurrentRow(self.stack.currentIndex())
+            self.sidebar.blockSignals(False)
+
+    def badges(self) -> dict[str, str]:
+        """Sidebar badge per section: a tick, 'N to do', or nothing."""
+        from mocapapp.core import readiness
+
+        if self.session is None:
+            return {}
+        try:
+            todo = readiness.section_todo(self.session, self.root)
+        except Exception:  # a badge must never break the window (an unreadable file is reported in its section)
+            return {}
+        return {key: readiness.badge(n) for key, n in todo.items()}
 
     def update_nav(self) -> None:
-        i = self.stack.currentIndex()
-        for k, page in enumerate(self.pages):
-            item = self.steps.item(k)
-            mark = "✓ " if self.session is not None and page.step_ticked() else (
-                "- " if self.session is not None and page.skipped() else "   ")
-            item.setText(f"{mark}{k + 1}. {page.title}" + (" (not needed)" if self.session and page.skipped()
-                                                             else ""))
+        badges = self.badges()
+        for k, section in enumerate(self.sections):
+            item = self.sidebar.item(k)
+            badge = badges.get(section.key, "")
+            item.setText(f"{section.title}    {badge}" if badge else section.title)
+            item.setToolTip({"✓": "Nothing to do here"}.get(badge, badge))
             flags = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
             item.setFlags(flags if self.reachable(k) else Qt.ItemFlag.NoItemFlags)
-        self.back_button.setEnabled(i > 0 and not self.busy)
-        last = i == len(self.pages) - 1
-        self.next_button.setText("Finished!" if last else "Next >")
-        self.next_button.setToolTip("Close this session and start a new one" if last else "")
-        self.next_button.setEnabled(not self.busy and self.session is not None
-                                    and (self.pages[i].is_complete() or self.pages[i].skipped()
-                                         or not self.pages[i].gates_next()))
-
-    def _next(self) -> None:
-        if self.stack.currentIndex() < len(self.pages) - 1:
-            self.go(self.stack.currentIndex() + 1)
-        else:
-            self.finish()
-
-    def finish(self) -> None:
-        """Results exported: close the session and go back to step 1. Reminds about stored raw footage (§8.4)."""
-        from mocapapp.core.deletion import reminders
-
-        if self.session is None or self.busy:
-            return
-        self.save()
-        notes = reminders(self.session)
-        if notes:
-            QMessageBox.information(self, "Session finished", "\n\n".join(notes))
-        self.new_session()
 
     def set_busy(self, busy: bool) -> None:
         self.busy = busy
@@ -509,7 +514,7 @@ class MainWindow(QMainWindow):
             self.keep_awake.start()
         elif not busy:
             self.keep_awake.stop()
-        self.steps.setEnabled(not busy)
+        self.sidebar.setEnabled(not busy)
         self.menuBar().setEnabled(not busy)
         self.update_nav()
 
@@ -519,7 +524,7 @@ class MainWindow(QMainWindow):
         from mocapapp.gui.settings_dialog import SettingsDialog
 
         if SettingsDialog(self).exec() and self.session is None:
-            self.pages[0].out_edit.setText(last_output_root())  # the new-session form follows the new folder
+            self.section("session").out_edit.setText(last_output_root())  # the new-project form follows
 
     def show_tutorial(self, page: int = 0) -> None:
         from mocapapp.gui.greeting import TutorialDialog
@@ -540,8 +545,8 @@ class MainWindow(QMainWindow):
         save_pdf(self, "board", board_spec=self.board_spec())
 
     def save_consent_pdf(self, code: str) -> None:
-        """For a participant: ask the study details first (kept for the session's next forms). From the Help
-        menu (no pseudonym): a form with the open session's details, or a blank one."""
+        """For a participant: ask the study details first (kept for the project's next forms). From the Help
+        menu (no pseudonym): a form with the open project's details, or a blank one."""
         from mocapapp.gui.greeting import save_pdf
 
         info = self.session.study_info if self.session is not None else None
@@ -555,14 +560,14 @@ class MainWindow(QMainWindow):
             self.save()
         save_pdf(self, "consent", code=code, info=info)
 
-    def save_all_consent_pdfs(self) -> None:
-        """Every participant's form in one PDF (one form per participant, each on new pages), for printing."""
+    def save_all_consent_pdfs(self, codes: list[str] | None = None) -> None:
+        """These participants' forms (None: every participant's) in one PDF, each on new pages, for printing."""
         from mocapapp.gui.consent_dialog import ConsentInfoDialog
         from mocapapp.gui.greeting import save_pdf
 
         if self.session is None:
             return
-        codes = [p.code for p in self.session.active_participants]
+        codes = codes or [p.code for p in self.session.active_participants]
         dlg = ConsentInfoDialog(self, self.session.study_info, f"each participant's own ({len(codes)} forms)")
         if dlg.exec() != ConsentInfoDialog.DialogCode.Accepted:
             return

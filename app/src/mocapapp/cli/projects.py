@@ -142,6 +142,54 @@ def _project_info(args: argparse.Namespace) -> int:
     return 0
 
 
+def _on_off(value: str | None) -> bool | None:
+    return None if value is None else value == "on"
+
+
+@_guard
+def _project_settings(args: argparse.Namespace) -> int:
+    """Session settings (§16.3): project details, processing, raw-footage deletion and the board."""
+    from mocapapp.core import workflow
+    from mocapapp.core.runner import KEYPOINT_TITLES
+
+    root, s = _open(args)
+    if any(v is not None for v in (args.study, args.trials_per_participant, args.notes)):
+        workflow.set_project_info(s, root, args.study, args.trials_per_participant, args.notes)
+    values = {k: v for k, v in {"pose_mode": args.pose_mode, "keypoints": args.keypoints, "cutoff_hz": args.cutoff,
+                                "use_augmentation": _on_off(args.augmentation),
+                                "simple_model": None if args.body_model is None else args.body_model == "simple",
+                                "save_overlay": _on_off(args.overlay),
+                                "keep_keypoints": _on_off(args.keep_keypoints)}.items() if v is not None}
+    if values:
+        stale = workflow.set_settings(s, root, **values)
+        if stale:
+            print(f"Trial(s) {', '.join(stale)} ran with the old settings and are now out of date.")
+    if args.delete_raw_all is not None or args.delete_raw_when is not None:
+        on = s.settings.delete_raw_all if args.delete_raw_all is None else args.delete_raw_all == "on"
+        workflow.set_delete_raw_all(s, root, on, args.delete_raw_when)
+    if args.board or args.squares or args.square_mm:
+        st = s.settings
+        cols, rows = st.corners_nb[1] + 1, st.corners_nb[0] + 1
+        if args.squares:
+            try:
+                cols, rows = (int(n) for n in args.squares.lower().split("x"))
+            except ValueError:
+                raise ValueError("--squares is ACROSSxDOWN, e.g. 9x6.") from None
+        workflow.set_board(s, root, args.board or st.board_type, cols, rows, args.square_mm or st.square_size_mm)
+    st = s.settings
+    print(f"Project {root.name}: study {s.study_code or '-'}, {s.trials_per_participant} trial(s) per participant"
+          + (f"; notes: {s.notes}" if s.notes else ""))
+    print(f"  processing: {st.pose_mode}, {KEYPOINT_TITLES[st.keypoints].lower()}, cut-off {st.filter.cutoff_hz:g} Hz, "
+          f"{'LSTM augmentation' if st.use_augmentation else 'no augmentation'}, "
+          f"{'simple' if st.simple_model else 'full'} body model, overlay videos {'on' if st.save_overlay else 'off'}, "
+          f"keep 2D keypoints {'on' if st.keep_keypoints else 'off'}")
+    print("  raw footage: " + (f"deleted for all participants {workflow.DELETE_WHEN[st.delete_raw_when]}"
+                               if st.delete_raw_all else "follows each participant's consent"))
+    print(f"  board: {st.board_type}, {st.corners_nb[1] + 1}x{st.corners_nb[0] + 1} squares of "
+          f"{st.square_size_mm:g} mm")
+    return 0
+
+
 @_guard
 def _project_open(args: argparse.Namespace) -> int:
     from mocapapp.core.project import load_project
@@ -533,6 +581,26 @@ def register(sub, project_save_show) -> None:
     pi = prsub.add_parser("info", help="where the project stands: cameras, layouts, participants, trials")
     _session_arg(pi)
     pi.set_defaults(func=_project_info)
+    pse = prsub.add_parser("settings", help="Session settings: show them, or change the ones given")
+    _session_arg(pse)
+    pse.add_argument("--study", help="study code for new pseudonyms (existing ones never change)")
+    pse.add_argument("--trials-per-participant", type=int)
+    pse.add_argument("--notes")
+    pse.add_argument("--pose-mode", choices=["lightweight", "balanced", "performance"])
+    pse.add_argument("--keypoints", choices=["Body_with_feet", "Whole_body_wrist", "Whole_body"])
+    pse.add_argument("--cutoff", type=float, metavar="HZ", help="smoothing cut-off, 1-30 Hz")
+    pse.add_argument("--augmentation", choices=["on", "off"], help="LSTM-augmented markers for the kinematics")
+    pse.add_argument("--body-model", choices=["full", "simple"])
+    pse.add_argument("--overlay", choices=["on", "off"], help="save overlay videos")
+    pse.add_argument("--keep-keypoints", choices=["on", "off"], help="keep the 2D keypoint files of finished trials")
+    pse.add_argument("--delete-raw-all", choices=["on", "off"],
+                     help="delete the raw footage of every participant, also with storage consent (R13)")
+    pse.add_argument("--delete-raw-when", choices=["after_processing", "after_export"],
+                     help="once the trial is processed, or once its results are exported")
+    pse.add_argument("--board", choices=["charuco", "chess"])
+    pse.add_argument("--squares", metavar="ACROSSxDOWN", help="squares of the printed board, e.g. 9x6")
+    pse.add_argument("--square-mm", type=float)
+    pse.set_defaults(func=_project_settings)
     pim = prsub.add_parser("import", help="copy cameras, reference points and layouts from another project "
                                           "(never participants or trials)")
     _session_arg(pim)

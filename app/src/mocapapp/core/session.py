@@ -264,6 +264,10 @@ class Settings(BaseModel):
     corners_nb: tuple[int, int] = (5, 8)  # internal corners [rows-1, cols-1]
     square_size_mm: float = 25.0
     marker_resolution: int = 4
+    # R13: raw footage of every participant is deleted (even with storage consent). When: once the trial is
+    # processed (results complete and readable) or once they are also exported. Always offered, never automatic.
+    delete_raw_all: bool = False
+    delete_raw_when: Literal["after_processing", "after_export"] = "after_export"
 
 
 class RunState(BaseModel):
@@ -296,6 +300,7 @@ class Session(BaseModel):
     opensim_version: str | None = None
     created_at: str = Field(default_factory=lambda: datetime.now().isoformat(timespec="seconds"))
     study_code: str = ""
+    notes: str = ""  # the researcher's notes on the project (Session settings)
     n_trials: int
     trials_per_participant: int = 1
     participants: list[Participant] = Field(default_factory=list)
