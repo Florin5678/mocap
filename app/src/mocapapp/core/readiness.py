@@ -50,3 +50,24 @@ def trial_ready(session: Session, root: Path, label: str) -> bool:
 
 def ready_trials(session: Session, root: Path) -> list[str]:
     return [t.label for t in session.trials if trial_ready(session, root, t.label)]
+
+
+def trial_status(session: Session, root: Path, label: str) -> str:
+    """R9 Status column: not ready, ready, running, needs sync fix, failed, done, out of date (or withdrawn)."""
+    from mocapapp.core.runner import stale_stages
+
+    trial = session.trial(label)
+    if trial.withdrawn_at:
+        return "withdrawn"
+    state = session.run_state.trial_status.get(label)
+    if state == "running":
+        return "running"
+    if state == "needs_sync_fix":
+        return "needs sync fix"
+    if state in ("done", "partial"):
+        return "out of date" if stale_stages(session, label) or state == "partial" else "done"
+    if not trial.raw_present:  # footage deleted before it finished: nothing more can run
+        return "footage deleted"
+    if trial_missing(session, root, label):
+        return "not ready"
+    return "failed" if state == "failed" else "ready"

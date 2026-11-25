@@ -297,3 +297,47 @@ def test_migrate_older_releases(tmp_path, release):
     s = load_session(tmp_path / "s")
     assert s.schema_ == 2 and len(s.layouts) == 2 and len(s.participants) == 2
     assert s.trial("2").layout == "L2" and s.trial("1").layout == "L1"
+
+
+# ---------- P2: dates, imports, copies ----------
+
+def test_dates_follow_the_recording_unless_set(tmp_path, video):
+    s = project()
+    clip = video(tmp_path / "ext.mp4", creation_time="2026-03-04T10:00:00Z")
+    lay = workflow.add_layout(s, None, "Garden", ["cam01", "cam02"])
+    assert lay.date == workflow.today() and not lay.date_manual  # the day it was made, until a video says more
+    workflow.set_extrinsic_video(s, None, lay.id, "cam01", clip)
+    assert lay.date == "2026-03-04"
+    fixed = workflow.add_layout(s, None, "Fixed", ["cam01"], date="2026-03-01")
+    workflow.set_extrinsic_video(s, None, fixed.id, "cam01", clip)
+    assert fixed.date == "2026-03-01" and fixed.date_manual
+    workflow.set_mapping(s, {("cam01", "1"): clip})
+    assert s.trial("1").date == "2026-03-04"
+    workflow.set_trial_info(s, None, "2", date="2026-03-09")
+    workflow.set_mapping(s, {("cam01", "2"): clip})
+    assert s.trial("2").date == "2026-03-09"  # set by hand: kept
+
+
+def test_import_refuses_an_old_project_and_itself(tmp_path):
+    from mocapapp.core.importing import ImportError_, import_project
+
+    old = tmp_path / "old"
+    old.mkdir()
+    (old / "session.json").write_text(json.dumps(v1_session()), encoding="utf-8")
+    s = project()
+    save_session(s, tmp_path / "here")
+    with pytest.raises(ImportError_, match="Open it once with this version first"):
+        import_project(s, tmp_path / "here", old, cameras=["cam01"])
+    assert json.loads((old / "session.json").read_text())["schema"] == 1  # the other project is never changed
+    with pytest.raises(ImportError_, match="That is this project"):
+        import_project(s, tmp_path / "here", tmp_path / "here", cameras=["cam01"])
+
+
+def test_calibration_copies_survive_a_new_trial_frame_rate():
+    from mocapapp.core.assemble import _same_source
+
+    old = json.dumps({"source": "a.mp4", "size": 1, "mtime": 2, "fps": 30.0})
+    new = json.dumps({"source": "a.mp4", "size": 1, "mtime": 2, "fps": None})
+    assert _same_source(old, new, frame_rate=False)  # calibration video: still the same copy
+    assert not _same_source(old, new, frame_rate=True)  # trial video: converted again
+    assert not _same_source(old, json.dumps({"source": "b.mp4", "size": 1, "mtime": 2}), frame_rate=False)

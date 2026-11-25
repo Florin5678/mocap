@@ -429,7 +429,8 @@ def add_trial(session: Session, root: Path, participant: str | None = None, layo
     if layout:
         session.layout(layout)
     trial = Trial(label=_next_label(t.label for t in session.trials), participant=participant,
-                  mapping_method="manual", layout=layout, name=name.strip(), date=check_date(date))
+                  mapping_method="manual", layout=layout, name=name.strip(), date=check_date(date) or today(),
+                  date_manual=bool(date))
     session.trials.append(trial)
     session.link()
     copy_details(session, trial)
@@ -651,7 +652,8 @@ def add_layout(session: Session, root: Path | None, name: str, cameras: list[str
     if len(set(cameras)) != len(cameras):
         raise SetupError("A camera can only be once in a layout.")
     lay = CameraLayout(id=session.new_id("L"), name=name.strip() or f"Layout {len(session.layouts) + 1}",
-                       date=check_date(date), cameras=[LayoutCamera(camera=c) for c in cameras])
+                       date=check_date(date) or today(), date_manual=bool(date),
+                       cameras=[LayoutCamera(camera=c) for c in cameras])
     if preset:
         lay.points, lay.preset = dict(session.preset(preset).points), preset
     session.layouts.append(lay)
@@ -682,6 +684,7 @@ def edit_layout(session: Session, root: Path | None, layout: str, name: str | No
         lay.name = name.strip() or lay.name
     if date is not None:
         lay.date = check_date(date) if date else None
+        lay.date_manual = bool(date)
     if cameras is not None and cameras != lay.camera_ids():
         started = _started(session, layout)
         if started:
@@ -725,6 +728,8 @@ def set_extrinsic_video(session: Session, root: Path | None, layout: str, camera
     lc = lay.entry(camera)
     old = lc.extrinsic
     lc.extrinsic = VideoRef(file=str(path), origin="manual")
+    if not lay.date_manual:  # §16.2: the day the extrinsic videos were recorded, when the file says so
+        lay.date = recording_date(path) or lay.date
     if root is not None and (old is None or Path(old.file).resolve() != path):
         rlayout = Layout(root)
         _drop_input(rlayout.layout_input(layout, camera))
@@ -736,6 +741,23 @@ def set_extrinsic_video(session: Session, root: Path | None, layout: str, camera
         _mark_stale(session, labels)
     if root is not None:
         save_session(session, root)
+
+
+def today() -> str:
+    from datetime import date
+
+    return date.today().isoformat()
+
+
+def recording_date(file: Path) -> str | None:
+    """The local day a video was recorded, from its metadata (None if it does not say)."""
+    from mocapapp.core import media
+
+    try:
+        when = media.recording_time(media.probe(Path(file)))
+    except Exception:  # unreadable here; the video check reports it
+        return None
+    return when.astimezone().date().isoformat() if when else None
 
 
 def check_date(value: str | None) -> str | None:
@@ -783,6 +805,7 @@ def set_trial_info(session: Session, root: Path | None, label: str, name: str | 
         trial.name = name.strip()
     if date is not None:
         trial.date = check_date(date)
+        trial.date_manual = bool(date)
     if root is not None:
         save_session(session, root)
 
@@ -1014,6 +1037,8 @@ def set_mapping(session: Session, table: dict[tuple[str, str], Path], root: Path
         new = str(Path(file).resolve())
         old = trial.videos.get(cam)
         trial.videos[cam] = new
+        if not trial.date_manual:  # §16.2: the day the trial was recorded, when the file says so
+            trial.date = recording_date(Path(new)) or trial.date
         if root is not None and (old is None or Path(old).resolve() != Path(new)):
             _drop_input(Layout(root).trial_input(label, cam))
             (Layout(root).trial(label) / "videos" / f"{lay.slot(cam)}.mp4").unlink(missing_ok=True)
@@ -1078,3 +1103,149 @@ def prepare_session(session: Session, root: Path, progress=print, dry_run: bool 
         assemble_trials(session, root, progress)
         save_session(session, root)
     return report, plan
+
+
+# ---------- projects (PROJECT.md §16): empty project, consent, participant values, per-trial checks ----------
+
+def create_project(out_root: Path, study: str = "", trials_per_participant: int = 1) -> tuple[Path, Session]:
+    """An empty project folder: cameras, layouts, participants and trials are added afterwards."""
+    issues = [i for i in check_output_root(Path(out_root)) if i.level == "error"]
+    if issues:
+        raise SetupError("\n".join(str(i) for i in issues))
+    if trials_per_participant < 1:
+        raise SetupError("Trials per participant must be 1 or more.")
+    study = normalise_study(study)
+    root = Path(out_root) / session_dir_name(study)
+    if root.exists():
+        raise SetupError(f"{root} already exists; wait a minute or choose another output folder.")
+    session = Session(study_code=study, n_trials=0, trials_per_participant=trials_per_participant)
+    fill_versions(session)
+    save_session(session, root)
+    return root, session
+
+
+CONSENT_STATES = {"not-signed": "Not signed yet", "delete": "Signed, delete footage",
+                  "keep": "Signed, keep footage"}
+
+
+def consent_state(person: Participant) -> str:
+    """R11: one drop-down for the three consent facts."""
+    if not person.consent.attested:
+        return "not-signed"
+    return "keep" if person.consent.raw_footage_storage else "delete"
+
+
+def set_consent(session: Session, root: Path | None, participant: str, state: str) -> Participant:
+    """R11: Not signed yet / Signed, delete footage / Signed, keep footage (same rules as the three 0.1.x columns:
+    deletion after the run follows the storage consent, §6.2)."""
+    from datetime import datetime
+
+    if state not in CONSENT_STATES:
+        raise SetupError(f"Consent is one of: {', '.join(CONSENT_STATES)}.")
+    person = session.participant(participant)
+    if person.withdrawn_at:
+        raise SetupError(f"Participant {participant} ({person.code}) withdrew; their consent cannot change.")
+    c = person.consent
+    if state == "not-signed":
+        c.attested, c.attested_at, c.raw_footage_storage = False, None, False
+    else:
+        if not c.attested:
+            c.attested_at = datetime.now().isoformat(timespec="seconds")
+        c.attested, c.raw_footage_storage = True, state == "keep"
+    person.delete_raw = not c.raw_footage_storage
+    if root is not None:
+        save_session(session, root)
+    return person
+
+
+def set_participant_value(session: Session, root: Path | None, participant: str, key: str, value) -> str:
+    """A value in the Participants table: height on the participant, other details written to all of their
+    trials (R12: stored per trial; no separate per-trial editor)."""
+    person = session.participant(participant)
+    if key == "height":
+        person.height_m = parse_height(value)
+        for t in session.trials_of(person.label):
+            t.details.pop("height", None)
+        shown = format_height(person.height_m) if person.height_m else ""
+    else:
+        trials = session.trials_of(person.label)
+        if not trials:
+            raise SetupError(f"Participant {participant} has no trials to store '{key}' with.")
+        shown = ""
+        for t in trials:
+            shown = set_trial_detail(session, None, t.label, key, value)
+    if root is not None:
+        save_session(session, root)
+    return shown
+
+
+def check_trials(session: Session, root: Path, labels: list[str], progress=print, dry_run: bool = False):
+    """Check and copy the videos of these trials only, and build their folders: one trial never waits for the
+    others (§16.4). Returns (report, plan); the plan is None when the check found blocking problems."""
+    from mocapapp.core.assemble import assemble_trials, plan_inputs, prepare_inputs
+    from mocapapp.core.validate import validate
+
+    for label in labels:
+        ensure_open(session, label)
+    scoped = session.model_copy(deep=True)
+    scoped.trials = [t for t in scoped.trials if t.label in set(labels)]
+    scoped.link()
+    report = validate(scoped, root)
+    # what the check chose (calibration videos found by name, trial videos) goes back into the project
+    for cam in scoped.cameras:
+        session.camera(cam.id).intrinsic = cam.intrinsic
+    for lay in scoped.layouts:
+        for lc in lay.cameras:
+            session.layout(lay.id).entry(lc.camera).extrinsic = lc.extrinsic
+    for t in scoped.trials:
+        real = session.trial(t.label)
+        real.videos, real.mapping_method = dict(t.videos), t.mapping_method
+    save_session(session, root)
+    if not report.ok:
+        return report, None
+    plan = plan_inputs(scoped, root, report, labels)
+    if not dry_run:
+        prepare_inputs(plan, report, progress)
+        assemble_trials(session, root, progress, labels=labels)
+        save_session(session, root)
+    return report, plan
+
+
+def prepare_calibration(session: Session, root: Path, cameras: list[str] | None = None,
+                        layout: str | None = None, progress=print) -> int:
+    """Copy (normalise) calibration videos into the project before calibrating: these cameras' intrinsic videos
+    and/or one layout's extrinsic videos. Calibration videos keep their frame rate. Returns how many were copied."""
+    from mocapapp.core import media
+    from mocapapp.core.assemble import DISK_MARGIN, Plan, prepare_inputs
+    from mocapapp.core.validate import Report
+
+    rlayout = Layout(root)
+    sources = []
+    for cid in cameras or []:
+        cam = session.camera(cid)
+        if cam.intrinsic is None:
+            raise SetupError(f"{cam.name} has no intrinsic video yet.")
+        sources.append((Path(cam.intrinsic.file), rlayout.camera_input(cid)))
+    if layout is not None:
+        lay = session.layout(layout)
+        for lc in lay.cameras:
+            if lc.extrinsic is not None:
+                sources.append((Path(lc.extrinsic.file), rlayout.layout_input(layout, lc.camera)))
+    plan, report = Plan(), Report()
+    root.mkdir(parents=True, exist_ok=True)
+    plan.bytes_free = shutil.disk_usage(root).free
+    for src, dst in sources:
+        if not src.is_file():
+            raise SetupError(f"{src} does not exist.")
+        try:
+            info = media.probe(src)
+        except media.MediaError as exc:
+            raise SetupError(str(exc)) from None
+        report.probes[str(src)] = info
+        how = "transcode" if media.needs_transcode(info) else "link"
+        if how == "transcode" or src.resolve().anchor.lower() != Path(root).resolve().anchor.lower():
+            plan.bytes_needed += src.stat().st_size
+        plan.jobs.append((src, dst, how))
+    plan.bytes_needed = int(plan.bytes_needed * DISK_MARGIN)
+    done = prepare_inputs(plan, report, progress)
+    return sum(1 for how in done.values() if how != "existing")

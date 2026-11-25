@@ -183,8 +183,8 @@ def _cmd_session_add_trial(args: argparse.Namespace) -> int:
         return 1
     print(f"Trial {trial.label} added for participant {trial.participant} ({trial.code}); details copied from "
           "their earlier trial.")
-    print(f"Next: choose its videos with mocapapp map --session \"{root}\" --set camNN:{trial.label}=FILE "
-          "(one per camera), then mocapapp prepare.")
+    print(f"Next: choose its videos with mocapapp trial videos --session \"{root}\" --trial {trial.label} "
+          "--set camNN=FILE (one per camera), then mocapapp trial check.")
     return 0
 
 
@@ -425,8 +425,9 @@ def _cmd_calibrate(args: argparse.Namespace) -> int:
                     print(f"{what}: {state}")
             return 0
         elif args.calib_command in ("position", "video"):
-            print("Moved cameras and further calibration videos are now separate camera layouts (and duplicated "
-                  "cameras): each trial uses one layout. See PROJECT.md §16.5 for the layout and camera commands.")
+            print("A camera moved between trials is now a second layout: mocapapp layout duplicate --layout L1, "
+                  "then layout edit --video camNN=FILE and trial edit --trial N --layout L2. Another intrinsic video "
+                  "is a second camera: mocapapp camera duplicate --camera camNN, then camera edit --intrinsic FILE.")
             return 1
         if args.calib_command in ("intrinsics", "extrinsics"):
             written = service.write_calibration(session, root)
@@ -477,11 +478,12 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
     root = Path(args.session)
     session = load_session(root)
-    labels = [args.trial] if args.trial else [t.label for t in session.trials if t.raw_present]
+    chosen = [v.strip() for item in args.trial or [] for v in item.split(",") if v.strip()]
+    labels = chosen or [t.label for t in session.trials if t.raw_present]
     if args.fix_sync:
-        if not args.trial:
-            raise SystemExit("--fix-sync needs --trial.")
-        ok = runner.fix_sync(session, root, args.trial, _printer(args.verbose))
+        if len(chosen) != 1:
+            raise SystemExit("--fix-sync needs one --trial.")
+        ok = runner.fix_sync(session, root, chosen[0], _printer(args.verbose))
         return 0 if ok else 1
     issues = runner.preflight(session, root, labels)
     if not _print_issues(issues):
@@ -606,8 +608,8 @@ def _cmd_sample(args: argparse.Namespace) -> int:
         print(exc)
         return 1
     print(f"Sample session ready: {root}")
-    print(f'Next: mocapapp confirm --session "{root}" --sync-cue; mocapapp consent --session "{root}" --trial 1 '
-          f'--attest; mocapapp run --session "{root}"')
+    print(f'Next: mocapapp participant consent --session "{root}" --participant 1 --state delete; '
+          f'mocapapp run --session "{root}"')
     return 0
 
 
@@ -814,17 +816,21 @@ def build_parser() -> argparse.ArgumentParser:
     data.add_argument("--csv", metavar="FILE", help="write the values to a CSV file instead of the summary")
     data.set_defaults(func=_cmd_data)
 
-    proj = sub.add_parser("project", help="project files (.mocapproj): reopen a session at the step you were on")
-    prsub = proj.add_subparsers(dest="project_command", required=True)
-    ps = prsub.add_parser("save", help="write a project file for a session folder")
-    ps.add_argument("--session", required=True)
-    ps.add_argument("--out", required=True, help="project file to write (.mocapproj is added if missing)")
-    from mocapapp.core.project import STEPS
+    def project_save_show(prsub) -> None:
+        from mocapapp.core.project import STEPS
 
-    ps.add_argument("--step", choices=STEPS, default="setup", help="step to open at (default setup)")
-    psh = prsub.add_parser("show", help="which session folder and step a project file points to")
-    psh.add_argument("file")
-    proj.set_defaults(func=_cmd_project)
+        ps = prsub.add_parser("save", help="write a project file for a project folder")
+        ps.add_argument("--session", required=True)
+        ps.add_argument("--out", required=True, help="project file to write (.mocapproj is added if missing)")
+        ps.add_argument("--step", choices=STEPS, default="setup", help="step to open at (default setup)")
+        psh = prsub.add_parser("show", help="which project folder and step a project file points to")
+        psh.add_argument("file")
+        for p in (ps, psh):
+            p.set_defaults(func=_cmd_project)
+
+    from mocapapp.cli.projects import register
+
+    register(sub, project_save_show)
 
     pdf = sub.add_parser("pdf", help="printable calibration board and consent form")
     psub = pdf.add_subparsers(dest="pdf_command", required=True)
@@ -978,7 +984,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     run = sub.add_parser("run", help="run Pose2Sim on every trial (resumes by default)")
     run.add_argument("--session", required=True)
-    run.add_argument("--trial")
+    run.add_argument("--trial", action="append", help="only these trials, e.g. --trial 3 or --trial 3,4")
     run.add_argument("--restart", action="store_true", help="ignore finished stages and start over")
     run.add_argument("--accept-sync", action="store_true", help="continue even if synchronisation looks unreliable")
     run.add_argument("--fix-sync", action="store_true", help="open the synchronisation player for --trial")

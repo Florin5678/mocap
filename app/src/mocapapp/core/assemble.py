@@ -24,7 +24,10 @@ Progress = Callable[[str], None]
 class Plan:
     """What normalisation will do, shown to the user before anything is written."""
     jobs: list[tuple[Path, Path, str]] = field(default_factory=list)  # (source, destination, 'link'|'transcode')
-    target_fps: float | None = None
+    target_fps: float | None = None  # the frame rate trials are converted to (most common one), for display
+    # destination -> frame rate it is converted to. Only trial videos: the cameras of one trial must share a frame
+    # rate, each trial on its own; calibration videos keep theirs (a later trial never re-copies them)
+    fps: dict[Path, float] = field(default_factory=dict)
     bytes_needed: int = 0
     bytes_free: int = 0
 
@@ -36,8 +39,9 @@ class Plan:
         lines = [f"{'transcode' if how == 'transcode' else 'copy/link':9}  {src}  ->  {dst}"
                  for src, dst, how in self.jobs]
         lines.append(f"Space needed: about {self.bytes_needed / 1e9:.2f} GB; free: {self.bytes_free / 1e9:.1f} GB.")
-        if self.target_fps:
-            lines.append(f"All videos will be converted to {self.target_fps:g} fps.")
+        if self.fps:
+            rates = ", ".join(f"{r:g}" for r in sorted(set(self.fps.values())))
+            lines.append(f"Trial videos recorded at different frame rates will be converted to {rates} fps.")
         return "\n".join(lines)
 
 
@@ -83,13 +87,23 @@ def plan_inputs(session: Session, root: Path, report: Report, labels: list[str] 
     if not report.ok:
         raise ValueError("Fix the validation errors before preparing the videos.")
     sources = input_sources(session, root, labels)
-    trial_files = [Path(f) for t in session.trials for f in t.videos.values() if Path(f).is_file()]
-    plan = Plan(target_fps=_common_fps(report, trial_files))
+    plan = Plan()
+    layout = Layout(root)
+    for t in session.trials:
+        if labels is not None and t.label not in labels:
+            continue
+        files = {cid: Path(f) for cid, f in t.videos.items() if Path(f).is_file()}
+        rate = _common_fps(report, list(files.values()))
+        if rate is not None:
+            plan.fps.update({layout.trial_input(t.label, cid): rate for cid in files})
+    if plan.fps:
+        plan.target_fps = Counter(plan.fps.values()).most_common(1)[0][0]
     root.mkdir(parents=True, exist_ok=True)
     plan.bytes_free = shutil.disk_usage(root).free
     for src, dst in sources:
         info = report.probes.get(str(src)) or media.probe(src)
-        fps_change = plan.target_fps is not None and abs(info.fps - plan.target_fps) > 0.01
+        rate = plan.fps.get(dst)
+        fps_change = rate is not None and abs(info.fps - rate) > 0.01
         how = "transcode" if media.needs_transcode(info) or fps_change else "link"
         same_drive = Path(src).resolve().anchor.lower() == Path(root).resolve().anchor.lower()
         if how == "transcode" or not same_drive:
@@ -106,16 +120,18 @@ def prepare_inputs(plan: Plan, report: Report, progress: Progress = print) -> di
                       f"{plan.bytes_free / 1e9:.1f} GB free. Free up space or choose another output folder.")
     done = {}
     for i, (src, dst, _how) in enumerate(plan.jobs, 1):
-        stamp = _source_stamp(src, plan.target_fps)
+        rate = plan.fps.get(dst)
+        stamp = _source_stamp(src, rate)
         stamp_file = dst.with_name(dst.name + ".source")
-        if dst.exists() and stamp_file.is_file() and stamp_file.read_text(encoding="utf-8") == stamp:
+        if dst.exists() and stamp_file.is_file() and _same_source(stamp_file.read_text(encoding="utf-8"), stamp,
+                                                                  frame_rate=dst in plan.fps):
             done[str(dst)] = "existing"
             continue
         dst.unlink(missing_ok=True)  # another source was chosen since (new mapping or calibration video)
         dst.parent.mkdir(parents=True, exist_ok=True)
         progress(f"[{i}/{len(plan.jobs)}] {src.name} -> {dst.parent.name}/{dst.name}")
         info = report.probes.get(str(src))
-        done[str(dst)] = media.normalise(src, dst, info, plan.target_fps)
+        done[str(dst)] = media.normalise(src, dst, info, rate)
         stamp_file.write_text(stamp, encoding="utf-8")
     return done
 
@@ -124,6 +140,18 @@ def _source_stamp(src: Path, fps: float | None) -> str:
     st = Path(src).stat()
     return json.dumps({"source": str(Path(src).resolve()), "size": st.st_size, "mtime": int(st.st_mtime),
                        "fps": fps})
+
+
+def _same_source(old: str, new: str, frame_rate: bool) -> bool:
+    """The copy was made from this file. A calibration video's copy counts whatever frame rate it was made at
+    (0.1.x converted them to the trials' rate), so its calibration stays valid."""
+    if frame_rate:
+        return old == new
+    try:
+        a, b = json.loads(old), json.loads(new)
+    except json.JSONDecodeError:
+        return False
+    return {k: v for k, v in a.items() if k != "fps"} == {k: v for k, v in b.items() if k != "fps"}
 
 
 def _link_or_copy(src: Path, dst: Path) -> None:
@@ -173,6 +201,12 @@ def assemble_trials(session: Session, root: Path, progress: Progress = print,
             _link_or_copy(src, tdir / "videos" / f"{slot}.mp4")
         atomic_write_text(tdir / "Config.toml", build_config(session, trial, _scene_points(session, trial.label)))
         calib = layout.calib_file if session.calibration_source == "imported" else layout.trial_calib(trial.label)
+        if not calib.is_file() and session.calibration_source == "app":
+            # a trial added after its layout was calibrated: its own calibration file, from the layout
+            from mocapapp.core.calibration import service
+
+            if service.trial_ready(session, root, trial.label):
+                service.write_calibration(session, root, [trial.label])
         if calib.is_file():
             calib_dir = tdir / "calibration"
             calib_dir.mkdir(exist_ok=True)

@@ -648,7 +648,7 @@ class VideosPage(Page):
         text = (f"{len(plan.jobs)} videos ({converted} converted). Space needed: about "
                 f"{plan.bytes_needed / 1e9:.2f} GB; free: {plan.bytes_free / 1e9:.1f} GB.")
         if plan.target_fps:
-            text += f" All videos will be converted to {plan.target_fps:g} fps."
+            text += f" Trial videos will be converted to {plan.target_fps:g} fps."
         if not plan.enough_space:
             text = "<b>Not enough disk space.</b> " + text + " Free some space or choose another output folder."
         self.space.setText(text)

@@ -131,6 +131,7 @@ class Trial(BaseModel):
     participant: str = ""  # Participant.label
     name: str = ""  # free-text name or note (R9)
     date: str | None = None  # YYYY-MM-DD the trial was recorded (compared with its layout's date, R8)
+    date_manual: bool = False  # the researcher set the date: videos chosen later do not change it
     layout: str = ""  # CameraLayout.id
     videos: dict[str, str] = Field(default_factory=dict)  # Camera.id -> source video of this trial
     layout_override: bool = False  # the researcher accepted the 'layout from another day' warning (R8)
@@ -223,6 +224,7 @@ class CameraLayout(BaseModel):
     id: str  # L1, L2, ...
     name: str
     date: str | None = None  # YYYY-MM-DD the extrinsic videos were recorded (R8)
+    date_manual: bool = False  # the researcher set the date: videos chosen later do not change it
     points: dict | None = None  # scene_points.Scene as JSON (copied from a preset, editable)
     preset: str = ""  # PointsPreset.id the points were copied from
     cameras: list[LayoutCamera] = Field(default_factory=list)  # in calibration order: cam01, cam02, ... in trials
