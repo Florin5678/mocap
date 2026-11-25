@@ -18,7 +18,7 @@ Each participant's **pseudonym** (for example `PA26-K7M2QX4`) is pseudonymisatio
 
 ## Consent
 
-Each participant's **Consent** (Participants section; `mocapapp participant consent --state`) is one choice, made once you hold the signed form for that pseudonym (0.2, unreleased):
+Each participant's **Consent** (Participants section; `mocapapp participant consent --state`) is one choice, made once you hold the signed form for that pseudonym (0.2.0rc1):
 
 - **Not signed yet**: the participant's trials cannot run;
 - **Signed, delete footage**: no consent to store raw footage, so it is deleted;
