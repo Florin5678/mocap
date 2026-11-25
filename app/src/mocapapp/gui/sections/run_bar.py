@@ -39,6 +39,12 @@ class RunBar(QWidget):
         self.cancel = threading.Event()
         self.activity: dict[str, str] = {}  # label -> what happens to it now (its Status while busy)
         self.labels: list[str] = []
+        self.running = False  # a run's thread is working (win.busy also covers an open sync player)
+        self.players: list[str] = []  # trials whose sync player opens next, one after another
+        self.player: str | None = None  # whose player is open now
+        self.pending: list[str] = []  # sync checked or accepted, waiting for the run to take them (_take)
+        self.left: list[str] = []  # what a Stop or a failing player left undone, said when all is over
+        self.stopped = False
         self.bridge = _Bridge()
         self.bridge.event.connect(self._on_event)
 
@@ -117,6 +123,8 @@ class RunBar(QWidget):
                 for table in (ses.run_state.stage_done, ses.run_state.trial_status, ses.run_state.sync):
                     table.pop(lb, None)
         self.cancel.clear()
+        self.stopped = False
+        self.running = True
         self.labels = list(labels)
         self.log.clear()
         self.bar.setValue(0)
@@ -125,27 +133,125 @@ class RunBar(QWidget):
         self.activity = {lb: "waiting for its turn" for lb in labels}
         self._busy(True)
         Background(self, runner.run_session, ses, root, labels, self.bridge.event.emit, self.cancel, resume,
-                   accept_sync, on_done=self._finished, on_error=self._failed)
+                   accept_sync, self._take, on_done=self._finished, on_error=self._failed)
         return True
 
-    def fix_sync(self, label: str) -> None:
-        """Pose2Sim's synchronisation player for one trial; the run then continues with its offsets."""
+    # ---------- checking the sync of several trials (§6.6) ----------
+
+    def sync_eligible(self, label: str) -> bool:
+        """Needs a sync fix and is not already waiting for its player or its turn."""
+        ses = self.session
+        trial = next((t for t in ses.trials if t.label == label), None)
+        return (trial is not None and label not in self.activity and trial.raw_present and not trial.withdrawn_at
+                and ses.run_state.trial_status.get(label) == "needs_sync_fix")
+
+    def check_sync(self, labels: list[str]) -> None:
+        """Pose2Sim's synchronisation player for each trial, one after another; each trial whose player was closed
+        runs in the background straight away (after the current run, if one is going), so the next player can be
+        handled meanwhile."""
+        new = [lb for lb in labels if self.sync_eligible(lb)]
+        for lb in new:
+            self.activity[lb] = "waiting for its sync player (they open one after another)"
+        self.players += new
+        if new and self.player is None:
+            self.stopped = False
+            if not self.running:
+                self._busy(True, stop=True)
+            self._next_player()
+        else:
+            self.section.show_status()
+
+    def accept_sync(self, labels: list[str]) -> None:
+        """Continue these trials with the automatic synchronisation, in the background."""
+        self.stopped = False
+        for lb in [lb for lb in labels if self.sync_eligible(lb)]:
+            self._queue(lb)
+
+    def _next_player(self) -> None:
+        if not self.players or self.stopped:
+            for lb in self.players:
+                self.activity.pop(lb, None)
+            self.players, self.player = [], None
+            if not self.running:
+                self._idle()
+            return
+        label = self.player = self.players.pop(0)
+        self.activity[label] = "sync player open in a separate window: close it when the offsets look right"
+        if not self.running:
+            self.stage.setText(f"Trial {label}: the synchronisation player is open in a separate window. Close it "
+                               "when the offsets look right; the trial then runs in the background.")
+        self.section.show_status()
+        Background(self, runner.sync_player, self.session, self.root, label,
+                   on_done=lambda ok, lb=label: self._player_closed(lb, ok),
+                   on_error=lambda msg, _d, lb=label: self._player_closed(lb, False, msg))
+
+    def _player_closed(self, label: str, ok: bool, problem: str = "") -> None:
+        self.player = None
+        self.activity.pop(label, None)
+        if not ok:
+            self.log.appendPlainText(f"Trial {label}: the synchronisation player stopped with an error {problem}")
+            self.left.append(f"Trial {label}: the player stopped with an error; check its sync again.")
+        elif self.stopped:
+            self.left.append(f"Trial {label}: its sync was checked but it did not run; press Accept as is to "
+                             "continue with the checked sync.")
+        else:
+            self._queue(label)
+        self._next_player()
+
+    def _queue(self, label: str) -> None:
+        """Run this trial (its sync checked or accepted): now, or as soon as the current run gets to it."""
+        self.activity[label] = "sync checked: waits for its turn"
+        self.labels.append(label)
+        self.pending.append(label)
+        if self.running:
+            self.section.show_status()
+            return
+        self.running = True
+        self.cancel.clear()
         self.labels = [label]
+        self.left = []
         self.bar.setValue(0)
-        self.activity = {label: "sync player open in a separate window: close it when the offsets look right"}
-        self._busy(True, stop=False)
-        self.stage.setText(f"Trial {label}: the synchronisation player opens in a separate window. Close it when "
-                           "the offsets look right; the run then continues.")
-        Background(self, runner.fix_sync, self.session, self.root, label, self.bridge.event.emit,
+        self._busy(True)
+        Background(self, runner.run_queue, self.session, self.root, self._take, self.bridge.event.emit, self.cancel,
                    on_done=self._finished, on_error=self._failed)
 
+    def _take(self) -> str | None:  # called by the runner's thread; list.pop is atomic
+        try:
+            return self.pending.pop(0)
+        except IndexError:
+            return None
+
+    def _idle(self) -> None:
+        """No run and no player left: the window is free again."""
+        self.estimate.setVisible(False)
+        if self.left:
+            self.stage.setText("<br>".join(html.escape(x) for x in self.left))
+            self.left = []
+        self._busy(False)
+        self.win.save()
+        self.section.after_run()
+
     def stop(self) -> None:
+        """Stops the run after the current step; sync players not opened yet are dropped (an open one stays until
+        it is closed)."""
         self.cancel.set()
-        self.stage.setText("Stopping after the current step ...")
+        self.stopped = True
+        for lb in self.pending:
+            self.activity.pop(lb, None)
+            self.left.append(f"Trial {lb}: its sync was checked but it did not run; press Accept as is to continue "
+                             "with the checked sync.")
+        self.pending.clear()
+        for lb in self.players:
+            self.activity.pop(lb, None)
+        self.players = []
+        self.stage.setText("Stopping after the current step ..." if self.running else
+                           "Stopping: close the open synchronisation player.")
         self.stop_button.setEnabled(False)
+        self.section.show_status()
 
     def _busy(self, on: bool, stop: bool = True) -> None:
-        self.win.set_busy(on)
+        if on != self.win.busy:  # a run can start while a sync player keeps the window busy already
+            self.win.set_busy(on)
         self.stop_button.setEnabled(on and stop)
         self.section.show_status()
 
@@ -172,25 +278,43 @@ class RunBar(QWidget):
                 results.refresh()
 
     def _finished(self, _results) -> None:
-        self.activity = {}
+        self.running = False
+        if self.pending and not self.stopped:  # queued just after the run's last look at the queue
+            label = self.pending.pop(0)
+            self._queue(label)
+            return
+        for lb in list(self.activity):
+            if lb not in self.players and lb != self.player:
+                self.activity.pop(lb)
         self.bar.setValue(1000)
         states = self.session.run_state.trial_status
         done = [lb for lb in self.labels if states.get(lb) == "done"]
         self.stage.setText(f"Finished: {len(done)} of {len(self.labels)} trial(s) done. See each trial's status "
                            "above; the results are in Results.")
-        self.estimate.setVisible(False)
-        self._busy(False)
-        self.win.save()
-        self.section.after_run()
+        if self.left:
+            self.left.insert(0, self.stage.text())
+        if self.player is not None:  # the run is over, but a sync player is still open: wait for it
+            self.stop_button.setEnabled(not self.stopped)
+            self.win.save()
+            self.section.show_status()
+            return
+        self._idle()
 
     def _failed(self, msg: str, details: str) -> None:
-        self.activity = {}
-        self.estimate.setVisible(False)
-        self._busy(False)
+        self.running = False
+        for lb in list(self.activity):
+            if lb != self.player:
+                self.activity.pop(lb)
+        self.players = []
+        self.pending.clear()
         if self.cancel.is_set():
-            self.stage.setText("Stopped. Run the trials again to continue where they stopped.")
+            self.left.insert(0, "Stopped. Run the trials again to continue where they stopped.")
         else:
-            self.stage.setText("The run stopped with a problem.")
+            self.left.insert(0, "The run stopped with a problem.")
             error_box(self, "Run stopped", msg, details)
-        self.win.save()
-        self.section.after_run()
+        if self.player is not None:
+            self.stopped = True
+            self.stage.setText("Stopped: close the open synchronisation player.")
+            self.section.show_status()
+            return
+        self._idle()

@@ -177,20 +177,80 @@ def test_sync_buttons_in_the_trials_table(win, tmp_path, qtbot, monkeypatch):
     assert "needs sync fix" in _status(hub, "1") and fix.isEnabled() and accept.isEnabled()
     assert not one.isEnabled()  # Check sync or Accept as is, not a plain re-run
 
-    # while the sync player is open, the trial says so and no other player or run can start
-    started, background = [], run_bar.Background
-    monkeypatch.setattr(run_bar, "Background", lambda *a, **k: started.append(a[1]))
-    fix.click()
-    assert started == [runner.fix_sync]
-    assert "running" in _status(hub, "1") and "sync player open" in _status(hub, "1")
-    assert not any(b.isEnabled() for b in hub.cells["2"][1:]) and not hub.run_button.isEnabled()
-    hub.bar._finished(None)
-    assert "needs sync fix" in _status(hub, "1") and hub.cells["1"][2].isEnabled()
-    monkeypatch.setattr(run_bar, "Background", background)
-
     hub.cells["1"][3].click()  # Accept as is
     _idle(qtbot, win)
     assert ses.run_state.trial_status["1"] == "done" and "done" in _status(hub, "1")
+
+
+def test_check_sync_of_several_trials_in_the_background(win, tmp_path, qtbot, monkeypatch):
+    """Several trials need a sync fix: their players open one after another, and each trial runs as soon as its
+    player is closed, while the next player is still open (no waiting for one run before the next player)."""
+    import threading
+
+    _fake_run(monkeypatch, FakeStages(sync_log=SYNC_BAD))
+    ses = _ready_project(tmp_path, 3)
+    hub = _hub(win, tmp_path, ses)
+    hub.run_button.click()
+    _idle(qtbot, win)
+    assert set(ses.run_state.trial_status.values()) == {"needs_sync_fix"}
+    opened, release = [], threading.Event()
+
+    def player(_ses, _root, label):  # trial 1's player is closed at once, trial 2's stays open until released
+        opened.append(label)
+        if label == "2":
+            assert release.wait(60)
+        return True
+
+    monkeypatch.setattr(runner, "sync_player", player)
+    _select(hub.table, [0, 1])
+    assert hub.buttons["sync"].text() == "Check sync (2) ..." and hub.buttons["accept"].isEnabled()
+    hub.buttons["sync"].click()
+    assert win.busy
+    qtbot.waitUntil(lambda: ses.run_state.trial_status["1"] == "done", timeout=60000)
+    assert opened == ["1", "2"] and win.busy  # trial 1 ran while trial 2's player is still open
+    assert "sync player open" in _status(hub, "2")
+    # trial 3 can still be handled meanwhile: accepted as is, it joins in the background
+    assert hub.cells["3"][3].isEnabled() and not hub.cells["2"][2].isEnabled()
+    hub.cells["3"][3].click()
+    qtbot.waitUntil(lambda: ses.run_state.trial_status["3"] == "done", timeout=60000)
+    assert win.busy
+    release.set()
+    _idle(qtbot, win)
+    assert load_session(tmp_path).run_state.trial_status == {"1": "done", "2": "done", "3": "done"}
+    assert "Finished" in hub.bar.stage.text() and not hub.buttons["sync"].isEnabled()
+
+
+def test_stop_while_a_sync_player_is_open(win, tmp_path, qtbot, monkeypatch):
+    """Stop drops the players not opened yet; the open one's trial keeps its checked sync for Accept as is."""
+    import threading
+
+    _fake_run(monkeypatch, FakeStages(sync_log=SYNC_BAD))
+    ses = _ready_project(tmp_path, 2)
+    hub = _hub(win, tmp_path, ses)
+    hub.run_button.click()
+    _idle(qtbot, win)
+    opened, release = [], threading.Event()
+
+    def player(_ses, _root, label):
+        opened.append(label)
+        assert release.wait(60)
+        return True
+
+    monkeypatch.setattr(runner, "sync_player", player)
+    hub.table.clearSelection()
+    assert hub.buttons["sync"].text() == "Check sync (2) ..."  # none selected: every trial that needs it
+    hub.buttons["sync"].click()
+    qtbot.waitUntil(lambda: opened == ["1"], timeout=10000)
+    assert hub.bar.stop_button.isEnabled()
+    hub.bar.stop()
+    assert "close the open synchronisation player" in hub.bar.stage.text()
+    release.set()
+    _idle(qtbot, win)
+    assert opened == ["1"] and set(ses.run_state.trial_status.values()) == {"needs_sync_fix"}
+    assert "Trial 1: its sync was checked but it did not run" in hub.bar.stage.text()
+    hub.cells["1"][3].click()  # Accept as is continues with the checked sync
+    _idle(qtbot, win)
+    assert ses.run_state.trial_status["1"] == "done"
 
 
 def test_changing_a_setting_after_a_run_repeats_only_later_stages(win, tmp_path, qtbot, monkeypatch):

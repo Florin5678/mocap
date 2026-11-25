@@ -71,11 +71,12 @@ Select a row to work on that trial; select several with **Ctrl**-click or **Shif
 - **Change layout ...** sets the layout the trials were recorded with.
 - **Check and copy videos** checks the videos (frame rate, size against the camera's lens calibration, length) and copies them into the project, converting them when needed; your original files are never changed. Each trial is checked on its own: a problem in one never holds the others back. With none selected, it checks every trial whose videos are chosen but not copied yet.
 - **Delete raw footage ...** and **Remove trial ...** (section 4). A trial without copied videos or results is removed after one question; its participant stays.
+- **Check sync ...** and **Accept sync as is** for the selected trials that stopped with *needs sync fix* (none selected: all of them), also while other trials run (below).
 - **Consent forms ...** makes one PDF with the forms of the selected trials' participants.
 
 Each row also has **Run this trial**, and, when a trial stopped for its synchronisation, **Check sync ...** and **Accept as is** (below).
 
-**Adding a trial.** The row under the table is filled in from the previous trial; change what differs and press **Add**. The **participant** (highlighted) is the previous trial's participant while they have fewer trials than *trials per participant*, otherwise a participant without trials yet, otherwise a **new participant** with a random pseudonym. The layout and name come from the previous trial; the date is left empty and becomes the day the videos were recorded.
+**Adding a trial.** The row under the table is filled in from the previous trial; change what differs and press **Add**. The **participant** (highlighted) is the previous trial's participant while they have fewer trials than *trials per participant*, otherwise a participant without trials yet, otherwise a **new participant** with a random pseudonym. The layout and name come from the previous trial (the layout: a newer one, when one was made on a later day); the date is left empty and becomes the day the videos were recorded.
 
 **The trial panel** opens under the table when one trial is selected:
 
@@ -92,7 +93,7 @@ Each row also has **Run this trial**, and, when a trial stopped for its synchron
 - **Stop:** stops after the current step; run the trials again later to continue. Finished stages are kept.
 - **A trial recorded later** (another participant, another day): add it, choose its videos, check and copy, and run just that one. Finished trials are not touched.
 - **Failures:** if one trial fails, the others continue. The reason is shown in its Status, with the full log under `trials/trial_<number>/mocap_logs/`.
-- **Synchronisation:** if the app is unsure that the cameras are lined up for a trial (a low correlation), that trial stops with **needs sync fix**. **Check sync ...** opens a player in a separate window; close it when the offsets look right and the trial continues by itself (it first copies the trial's keypoint files, which can take several minutes). **Accept as is** continues with the automatic result. An offset longer than 5 s does not stop the trial: it is listed in the quality report, and is fine if the cameras were started that far apart.
+- **Synchronisation:** if the app is unsure that the cameras are lined up for a trial (a low correlation), that trial stops with **needs sync fix**. **Check sync ...** opens a player in a separate window; close it when the offsets look right and the trial continues by itself in the background (it first copies the trial's keypoint files, which can take several minutes). For several trials, select them and use **Check sync (n) ...** above the table: their players open one after another, and each trial starts running as soon as its player is closed, so you can check the next one meanwhile. This also works while other trials run: the checked trials join the run. **Accept as is** (or **Accept sync as is** for the selected trials) continues with the automatic result. **Stop** drops the players not opened yet; a trial whose sync you checked but that did not run keeps the checked sync: press **Accept as is** later to continue with it. An offset longer than 5 s does not stop the trial: it is listed in the quality report, and is fine if the cameras were started that far apart.
 
 **Processing settings** (Session settings). The defaults suit most studies.
 

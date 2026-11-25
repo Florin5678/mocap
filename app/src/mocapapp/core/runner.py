@@ -543,9 +543,10 @@ def remove_keypoints(trial_dir: Path) -> int:
 
 
 def run_session(session: Session, root: Path, labels: list[str] | None = None, listener: Listener = lambda e: None,
-                cancel: threading.Event | None = None, resume: bool = True, accept_sync: bool = False
-                ) -> dict[str, str]:
-    """Run every selected trial; one failure never stops the others (FR-4.5)."""
+                cancel: threading.Event | None = None, resume: bool = True, accept_sync: bool = False,
+                take: Callable[[], str | None] | None = None) -> dict[str, str]:
+    """Run every selected trial; one failure never stops the others (FR-4.5). take: trials whose sync was checked
+    (or accepted) meanwhile, run afterwards (run_queue)."""
     results = {}
     for trial in session.trials:
         if labels and trial.label not in labels:
@@ -556,35 +557,60 @@ def run_session(session: Session, root: Path, labels: list[str] | None = None, l
             continue
         run_trial(session, root, trial.label, listener, cancel, resume, accept_sync=accept_sync)
         results[trial.label] = session.run_state.trial_status[trial.label]
+    if take is not None:
+        results.update(run_queue(session, root, take, listener, cancel))
     return results
 
 
-def fix_sync(session: Session, root: Path, label: str, listener: Listener = lambda e: None) -> bool:
-    """Open upstream's synchronisation player for one trial, then accept its result and continue the run."""
-    import tomlkit
-
-    tdir = Layout(root).trial(label)
-    cfg_path = tdir / "Config.toml"
-    original = cfg_path.read_text(encoding="utf-8")
-    doc = tomlkit.parse(original)
-    doc["synchronization"]["synchronization_gui"] = True
-    env_backend = os.environ.get("MPLBACKEND")
-    try:
-        cfg_path.write_text(tomlkit.dumps(doc), encoding="utf-8")
-        os.environ.pop("MPLBACKEND", None)  # the player needs a real window
-        code = subprocess.run([sys.executable, "-c", "from Pose2Sim.Pose2Sim import Pose2SimPipeline; "
-                               "Pose2SimPipeline().synchronization()"], cwd=tdir,
-                              env={k: v for k, v in stage_env().items() if k != "MPLBACKEND"}, check=False).returncode
-    finally:
-        cfg_path.write_text(original, encoding="utf-8")
-        if env_backend is not None:
-            os.environ["MPLBACKEND"] = env_backend
-    if code:
-        return False
+def accept_checked_sync(session: Session, label: str) -> None:
+    """The sync of a trial that needed a fix was checked in the player (or is accepted as is): continue from it."""
     rs = session.run_state
     rs.sync.setdefault(label, {})["accepted"] = True
     rs.stage_done[label] = [s for s in rs.stage_done.get(label, []) if s in ("poseEstimation", "synchronization")]
     if "synchronization" not in rs.stage_done[label]:
         rs.stage_done[label].append("synchronization")
+
+
+def run_queue(session: Session, root: Path, take: Callable[[], str | None], listener: Listener = lambda e: None,
+              cancel: threading.Event | None = None) -> dict[str, str]:
+    """Run trials whose sync was checked or accepted, one after another, as long as take() hands out another
+    (None: the queue is empty). Each continues from its synchronisation."""
+    results = {}
+    while not (cancel and cancel.is_set()):
+        label = take()
+        if label is None:
+            break
+        accept_checked_sync(session, label)
+        run_trial(session, root, label, listener, cancel, resume=True, accept_sync=True)
+        results[label] = session.run_state.trial_status[label]
+    return results
+
+
+def sync_player(session: Session, root: Path, label: str) -> bool:
+    """Open upstream's synchronisation player for one trial in a separate window; True when it was closed normally.
+    It changes only that trial's synchronised files, never the project file, so it can be open while other trials
+    run; run_queue continues the trial afterwards."""
+    import tomlkit
+
+    cfg_path = Layout(root).trial(label) / "Config.toml"
+    original = cfg_path.read_text(encoding="utf-8")
+    doc = tomlkit.parse(original)
+    doc["synchronization"]["synchronization_gui"] = True
+    try:
+        cfg_path.write_text(tomlkit.dumps(doc), encoding="utf-8")
+        code = subprocess.run([sys.executable, "-c", "from Pose2Sim.Pose2Sim import Pose2SimPipeline; "
+                               "Pose2SimPipeline().synchronization()"], cwd=cfg_path.parent,
+                              env={k: v for k, v in stage_env().items() if k != "MPLBACKEND"},  # a real window
+                              check=False).returncode
+    finally:
+        cfg_path.write_text(original, encoding="utf-8")
+    return code == 0
+
+
+def fix_sync(session: Session, root: Path, label: str, listener: Listener = lambda e: None) -> bool:
+    """Open upstream's synchronisation player for one trial, then accept its result and continue the run."""
+    if not sync_player(session, root, label):
+        return False
+    accept_checked_sync(session, label)
     save_session(session, root)
     return run_trial(session, root, label, listener, accept_sync=True)

@@ -480,11 +480,20 @@ def _cmd_run(args: argparse.Namespace) -> int:
     session = load_session(root)
     chosen = [v.strip() for item in args.trial or [] for v in item.split(",") if v.strip()]
     labels = chosen or [t.label for t in session.trials if t.raw_present]
-    if args.fix_sync:
-        if len(chosen) != 1:
-            raise SystemExit("--fix-sync needs one --trial.")
-        ok = runner.fix_sync(session, root, chosen[0], _printer(args.verbose))
-        return 0 if ok else 1
+    if args.fix_sync:  # every player first (one after another), then the trials run without waiting for anyone
+        if not chosen:
+            raise SystemExit("--fix-sync needs --trial (one or several).")
+        checked = []
+        for label in chosen:
+            print(f"Trial {label}: the synchronisation player opens. Close it when the offsets look right.")
+            if runner.sync_player(session, root, label):
+                checked.append(label)
+            else:
+                print(f"Trial {label}: the player stopped with an error; this trial is left out.")
+        todo = list(checked)
+        runner.run_queue(session, root, lambda: todo.pop(0) if todo else None, _printer(args.verbose))
+        states = session.run_state.trial_status
+        return 0 if checked == chosen and all(states.get(lb) == "done" for lb in chosen) else 1
     issues = runner.preflight(session, root, labels)
     if not _print_issues(issues):
         print("\nFix the items above before running.")
@@ -988,7 +997,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--trial", action="append", help="only these trials, e.g. --trial 3 or --trial 3,4")
     run.add_argument("--restart", action="store_true", help="ignore finished stages and start over")
     run.add_argument("--accept-sync", action="store_true", help="continue even if synchronisation looks unreliable")
-    run.add_argument("--fix-sync", action="store_true", help="open the synchronisation player for --trial")
+    run.add_argument("--fix-sync", action="store_true",
+                     help="open the synchronisation player for each --trial, one after another, then run them")
     run.add_argument("--verbose", action="store_true", help="show Pose2Sim's own output")
     run.set_defaults(func=_cmd_run)
 

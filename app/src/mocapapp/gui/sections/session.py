@@ -214,6 +214,13 @@ class SessionSection(Section):
                 ("check", "Check and copy videos", lambda: self.check_and_copy(), "Checks the videos of the selected "
                  "trials and copies them into the project, each trial on its own (none selected: every trial whose "
                  "videos are chosen but not copied yet)."),
+                ("sync", "Check sync ...", lambda: self.bar.check_sync(self.sync_labels()), "Opens Pose2Sim's "
+                 "synchronisation player for each selected trial that needs a sync fix (none selected: every such "
+                 "trial), one after another. Each trial runs in the background as soon as its player is closed, also "
+                 "while other trials run."),
+                ("accept", "Accept sync as is", lambda: self.bar.accept_sync(self.sync_labels()), "The selected "
+                 "trials that need a sync fix (none selected: every such trial) continue with the automatic "
+                 "synchronisation, in the background."),
                 ("raw", "Delete raw footage ...", self.delete_raw, "Deletes the working copies of the selected "
                  "trials' videos; the 3D results are kept. One confirmation per trial."),
                 ("remove", "Remove trial ...", self.remove, "Removes the selected trials. A trial with videos or "
@@ -321,10 +328,10 @@ class SessionSection(Section):
             one.clicked.connect(lambda _=False, lb=t.label: self._start([lb]))
             fix = QPushButton("Check sync ...")
             fix.setToolTip("Opens Pose2Sim's synchronisation player, where the offsets can be corrected.")
-            fix.clicked.connect(lambda _=False, lb=t.label: self.bar.fix_sync(lb))
+            fix.clicked.connect(lambda _=False, lb=t.label: self.bar.check_sync([lb]))
             accept = QPushButton("Accept as is")
             accept.setToolTip("Continues with the automatic synchronisation.")
-            accept.clicked.connect(lambda _=False, lb=t.label: self._start([lb], accept_sync=True))
+            accept.clicked.connect(lambda _=False, lb=t.label: self.bar.accept_sync([lb]))
             for c, b in enumerate((one, fix, accept), STATUS + 1):
                 self.table.setCellWidget(r, c, b)
             self.cells[t.label] = (state, one, fix, accept)
@@ -369,9 +376,16 @@ class SessionSection(Section):
             status, msg = self._status(label)
             state.setText(status_badge(status) + (f" - {html.escape(msg)}" if msg else ""))
             one.setEnabled(not busy and status != "needs sync fix" and self.runnable(label))
-            for b in (fix, accept):
-                b.setEnabled(not busy and status == "needs sync fix")
+            for b in (fix, accept):  # also during a run: the trial joins it (§6.6)
+                b.setEnabled(status == "needs sync fix" and self.bar.sync_eligible(label))
         self._enable()
+
+    def sync_labels(self) -> list[str]:
+        """The selected trials (none selected: all) that need a sync fix and are not queued yet."""
+        if self.session is None:
+            return []
+        chosen = self.selected() or [t.label for t in self.session.trials]
+        return [lb for lb in chosen if self.bar.sync_eligible(lb)]
 
     def selected(self) -> list[str]:
         if self.session is None:
@@ -398,6 +412,11 @@ class SessionSection(Section):
             self.buttons[key].setEnabled(not busy and bool(open_))
         self.buttons["check"].setEnabled(not busy and bool(self.session.trials))
         self.buttons["forms"].setEnabled(bool(self.session.active_participants))
+        sync = self.sync_labels()
+        for key, text in (("sync", "Check sync"), ("accept", "Accept sync as is")):
+            self.buttons[key].setEnabled(bool(sync))
+            self.buttons[key].setText(text + (f" ({len(sync)})" if len(sync) > 1 else "") + (" ..." if key == "sync"
+                                                                                              else ""))
         for key, text in (("duplicate", "Duplicate"), ("remove", "Remove trial"), ("raw", "Delete raw footage"),
                           ("check", "Check and copy videos")):
             dots = " ..." if key in ("remove", "raw") else ""
@@ -433,6 +452,7 @@ class SessionSection(Section):
             self.add_layout.addItem(f"{lay.name} ({lay.date})" if lay.date else lay.name, lay.id)
         last = ses.trials[-1] if ses.trials else None
         self.add_layout.setCurrentIndex(max(0, self.add_layout.findData(workflow.default_layout(ses))))
+        self.add_layout.fit_items()
         self.add_name.setText(last.name if last else "")
         self.add_date.clear()
 

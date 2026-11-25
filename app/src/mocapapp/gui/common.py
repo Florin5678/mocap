@@ -229,6 +229,12 @@ class NoWheelCombo(QComboBox):
     def wheelEvent(self, event) -> None:  # noqa: N802 (Qt name)
         event.ignore()  # the table or page around it scrolls instead
 
+    def fit_items(self) -> None:
+        """Wide enough for its longest item: AdjustToContents alone can still cut off the end of an item's text."""
+        metrics = self.fontMetrics()
+        longest = max((metrics.horizontalAdvance(self.itemText(i)) for i in range(self.count())), default=0)
+        self.setMinimumWidth(longest + 48)  # frame, padding and the arrow
+
 
 def para(text: str):
     """A wrapped paragraph label (an unwrapped long label forces the whole page wider than the window)."""

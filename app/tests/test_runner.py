@@ -97,6 +97,23 @@ def test_unreliable_sync_stops_before_triangulation_even_on_resume(tmp_path, fak
     assert s.run_state.sync["1"]["offsets"]["cam02"]["offset_frames"] == -1
 
 
+def test_fix_sync_of_several_trials_on_the_command_line(tmp_path, fake, monkeypatch, capsys):
+    """`run --fix-sync` with several trials: every player first, then the trials run one after another."""
+    from mocapapp.cli.main import main
+
+    f = fake(sync_log=SYNC_BAD)
+    session = make_session(tmp_path, n_trials=3)
+    runner.run_session(session, tmp_path)
+    opened = []
+    monkeypatch.setattr(runner, "sync_player", lambda _s, _r, label: opened.append(label) or label != "3")
+    f.calls.clear()
+    assert main(["run", "--session", str(tmp_path), "--trial", "1,2,3", "--fix-sync"]) == 1  # trial 3's player failed
+    assert opened == ["1", "2", "3"] and {lb for lb, _ in f.calls} == {"1", "2"}
+    states = load_session(tmp_path).run_state.trial_status
+    assert states == {"1": "done", "2": "done", "3": "needs_sync_fix"}
+    assert "Trial 3: the player stopped with an error" in capsys.readouterr().out
+
+
 def test_long_sync_offset_is_noted_not_stopped(tmp_path, fake, monkeypatch):
     # cameras started by hand can be seconds apart: a long offset with a good correlation runs through
     fake(sync_log="--> Camera cam01 and cam02: 404 frames offset, correlation 0.86.\n")
