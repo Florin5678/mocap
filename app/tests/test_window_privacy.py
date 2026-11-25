@@ -50,7 +50,8 @@ def test_results_page_deletes_marked_footage_after_export(qtbot, tmp_path, monke
     qtbot.addWidget(win)
     win.set_session(root, session)
     win.go("results")
-    results = win.section("results").results_page
+    results = win.section("results")
+    results.tabs.setCurrentIndex(3)  # Export
     assert win.current_page().key == "results" and results.delete_now.isEnabled()
     assert "still stored" in results.deletion.text() and "kept with consent" in results.deletion.text()
     shown = auto_delete(monkeypatch)

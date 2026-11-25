@@ -108,8 +108,9 @@ def test_space_check_warns_before_a_full_drive(tmp_path, monkeypatch):
     assert not [i for i in runner.preflight(session, tmp_path, ["1", "2"]) if i.where == "disk space"]
 
 
-def test_run_page_options(qtbot, tmp_path, monkeypatch):
+def test_space_options_in_session_settings(qtbot, tmp_path, monkeypatch):
     from mocapapp.gui.main_window import MainWindow
+    from mocapapp.gui.session_settings import SessionSettingsDialog
     from tests.test_viewer_projects import _wizard_done
 
     root = tmp_path / "S"
@@ -117,12 +118,12 @@ def test_run_page_options(qtbot, tmp_path, monkeypatch):
     win = MainWindow()
     qtbot.addWidget(win)
     win.open_session(root)
-    win.go(4)
-    page = win.pages[4]
-    assert page.key == "run" and not page.overlay_box.isChecked()
-    assert page.keep_box.isChecked()  # the helper session keeps its keypoints
-    page.overlay_box.setChecked(True)
-    page.keep_box.setChecked(False)
+    dlg = SessionSettingsDialog(win, win.session, root)
+    qtbot.addWidget(dlg)
+    assert not dlg.overlay.isChecked() and dlg.keep.isChecked()  # the helper session keeps its keypoints
+    dlg.overlay.setChecked(True)
+    dlg.keep.setChecked(False)
+    dlg._accept()
     saved = load_session(root).settings
     assert saved.save_overlay and not saved.keep_keypoints
     assert win.session.run_state.trial_status["1"] == "done"  # these options never make results stale

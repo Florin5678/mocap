@@ -7,7 +7,7 @@ greeting_title = "Markerless motion capture"
 greeting_text = "Turn videos of one person, filmed with two or more cameras, into 3D movement data and joint angles."
 greeting_tutorial = "How it works"
 greeting_tutorial_note = "recommended for first-time use"
-greeting_start = "Start session"
+greeting_start = "Start"
 
 sync_reminder = """Before each trial: start all cameras, then give a clear sync cue visible to all (clap with raised \
 hands, or jump), and include at least 5 s of clear up-and-down movement. Cameras that were not started with a cue \
@@ -17,13 +17,5 @@ intrinsic_content = """intrinsic video: the printed board moved slowly through t
 into every corner - recorded with the same resolution, zoom, focus and stabilisation as the trials."""
 extrinsic_content = """extrinsic video: a few seconds with the camera in its final position, showing the reference \
 points. Do not touch the camera afterwards."""
-cameras_stay_put = "Cameras must not move during the session. If one is moved, start a new session."
+cameras_stay_put = "Cameras must not move while a layout is used. If one is moved, record a new extrinsic video and make a new layout (Duplicate this one)."
 
-[steps]
-setup = "Session: where the output goes and where each camera's videos are."
-videos = "Trials: who each trial belongs to, their height and other details, consent, which video is which trial and the calibration videos; then copy the videos into the session."
-intrinsics = "Intrinsic calibration (the lens): computed from each camera's board video."
-extrinsics = "Extrinsic calibration (camera positions): enter the measured reference points that define the floor and the directions X, Y, Z, then click them in one picture per camera."
-run = "Run: check the summary, then let the computer do the rest."
-results = "Results: quality report, 3D preview and export."
-viewer = "Viewer: watch the 3D movement and look at the numbers - joint angles and marker positions over time, trial by trial."

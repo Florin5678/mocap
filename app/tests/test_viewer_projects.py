@@ -33,11 +33,11 @@ def _results(root, n_trials=2):
 def test_project_file_round_trip_and_moves(tmp_path, capsys):
     root = tmp_path / "data" / "PA26_session"
     _results(root)
-    path = save_project(tmp_path / "data" / "gait", root, "run")
+    path = save_project(tmp_path / "data" / "gait", root, "run")  # a 0.1.x step: saved as its section
     assert path.name == "gait.mocapproj"
     data = json.loads(path.read_text(encoding="utf-8"))
-    assert data["session_relative"] == "PA26_session" and data["step"] == "run"
-    assert load_project(path).session == root.resolve() and load_project(path).step == "run"
+    assert data["session_relative"] == "PA26_session" and data["step"] == "session"
+    assert load_project(path).session == root.resolve() and load_project(path).step == "session"
 
     moved = tmp_path / "moved"
     shutil.move(str(tmp_path / "data"), moved)  # project and session moved together: relative path wins
@@ -55,7 +55,7 @@ def test_project_file_round_trip_and_moves(tmp_path, capsys):
     assert main(["project", "save", "--session", str(moved / "PA26_session"), "--out", str(tmp_path / "p"),
                  "--step", "viewer"]) == 0
     assert main(["project", "show", str(tmp_path / "p.mocapproj")]) == 0
-    assert "Step: viewer" in capsys.readouterr().out
+    assert "Section: results" in capsys.readouterr().out
     assert main(["project", "show", str(tmp_path / "x.mocapproj")]) == 1
 
 
@@ -123,25 +123,23 @@ def test_save_and_open_project_at_its_step(qtbot, tmp_path, monkeypatch):
     win = MainWindow()
     qtbot.addWidget(win)
     win.open_session(root)
-    assert win.current_page().key == "results"  # a finished session resumes on Results, not the Viewer
-    win.go(6)
-    assert win.current_page().key == "viewer"
+    win.go("results")
     asked = []
     monkeypatch.setattr(QFileDialog, "getSaveFileName",
                         lambda *a, **k: (asked.append(a[2]), (str(tmp_path / "study"), ""))[1])
     assert win.save_project() == (tmp_path / "study.mocapproj").resolve()
     assert asked == [str(tmp_path / "S.mocapproj")] and "Project: study" in win.session_label.text()
-    win.go(4)
+    win.go("participants")
     win.save_project()  # second time: no dialog, same file
-    assert len(asked) == 1 and load_project(tmp_path / "study.mocapproj").step == "run"
+    assert len(asked) == 1 and load_project(tmp_path / "study.mocapproj").step == "participants"
 
     other = MainWindow()
     qtbot.addWidget(other)
     other.open_path(tmp_path / "study.mocapproj")
-    assert other.root == root.resolve() and other.current_page().key == "run" and other.project
-    other.go(6)
-    other.close()  # closing keeps the project at the step the researcher was on
-    assert load_project(tmp_path / "study.mocapproj").step == "viewer"
+    assert other.root == root.resolve() and other.current_page().key == "participants" and other.project
+    other.go("results")
+    other.close()  # closing keeps the project at the section the researcher was on
+    assert load_project(tmp_path / "study.mocapproj").step == "results"
     other.new_session()
     assert other.project is None and not other.save_action.isEnabled()
 
@@ -156,9 +154,13 @@ def test_viewer_shows_and_compares_trials(qtbot, tmp_path, monkeypatch):
     win = MainWindow()
     qtbot.addWidget(win)
     win.open_session(root)
-    win.go(6)
-    v = win.pages[6]
-    assert [v.trial_box.itemText(i) for i in range(2)] == ["Trial 1 (T1-ABCDEF1)", "Trial 2 (T1-ABCDEF2)"]
+    win.go("results")
+    res = win.section("results")
+    v = res.viewer
+    assert [res.list.item(i).text() for i in range(2)] == ["\u25cf Trial 1 (T1-ABCDEF1): CHECK",
+                                                           "\u25cf Trial 2 (T1-ABCDEF2): CHECK"]
+    assert [v.trial_box.itemData(i) for i in range(2)] == ["1", "2"] and res.selected() == "1"
+    res.tabs.setCurrentIndex(1)
     assert v.source_box.currentText() == "smoothed + LSTM" and v.slider.maximum() == 19
     v.slider.setValue(10)
     assert v.view.frame == 10 and "frame 11/20" in v.time_label.text()
@@ -168,7 +170,7 @@ def test_viewer_shows_and_compares_trials(qtbot, tmp_path, monkeypatch):
     v.toggle_play()
     assert not v.timer.isActive()
 
-    v.tabs.setCurrentIndex(1)
+    res.tabs.setCurrentIndex(2)  # Data
     assert v.ticked() == ["arm_flex_r", "elbow_flex_r"] and v.table_model.columnCount() == 3
     v.compare_box.setChecked(True)
     assert len(v.axes.get_lines()) == 5  # 2 columns x 2 trials + the time cursor
@@ -187,5 +189,6 @@ def test_viewer_shows_and_compares_trials(qtbot, tmp_path, monkeypatch):
     v.save_csv()
     assert (tmp_path / "out.csv").read_text(encoding="utf-8").startswith("time (s),Hip X (m)")
 
-    v.trial_box.setCurrentIndex(1)
+    res.list.setCurrentRow(1)
+    assert v.trial_box.currentData() == "2"
     assert v.markers is not None and v.source_box.currentText() == "smoothed + LSTM"

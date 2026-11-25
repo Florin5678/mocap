@@ -15,8 +15,16 @@ from mocapapp.core.session import SESSION_FILE, atomic_write_text
 
 SUFFIX = ".mocapproj"
 FORMAT = "mocapapp-project"
-STEPS = ("setup", "videos", "intrinsics", "extrinsics", "run", "results", "viewer")
-OLD_STEPS = {"scene": "extrinsics"}  # 0.1.0rc17: reference points and camera positions are one step
+STEPS = ("session", "participants", "cameras", "layouts", "results")  # the window's sections (PROJECT.md §16.3)
+# the step a 0.1.x project file was saved at -> the section that holds it now
+OLD_STEPS = {"setup": "session", "videos": "session", "run": "session", "intrinsics": "cameras",
+             "extrinsics": "layouts", "scene": "layouts", "viewer": "results"}
+
+
+def section(step: str | None) -> str:
+    """The section a project file opens at (0.1.x step names are understood)."""
+    step = OLD_STEPS.get(step, step)
+    return step if step in STEPS else "session"
 
 
 class ProjectError(ValueError):
@@ -37,7 +45,7 @@ def project_path(path: Path) -> Path:
     return path if path.suffix.lower() == SUFFIX else path.with_name(path.name + SUFFIX)
 
 
-def save_project(path: Path, session_root: Path, step: str = "setup") -> Path:
+def save_project(path: Path, session_root: Path, step: str = "session") -> Path:
     """Write the project file. The session folder is stored relative to the file (so both can be moved together)
     and as an absolute path (so the file alone can be moved)."""
     from mocapapp import __version__
@@ -51,7 +59,7 @@ def save_project(path: Path, session_root: Path, step: str = "setup") -> Path:
     except ValueError:  # another drive on Windows
         relative = None
     data = {"format": FORMAT, "version": 1, "session": str(root), "session_relative": relative,
-            "step": step if step in STEPS else "setup",
+            "step": section(step),
             "saved_at": datetime.now().isoformat(timespec="seconds"), "app_version": __version__}
     path.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_text(path, json.dumps(data, indent=2) + "\n")
@@ -73,9 +81,7 @@ def load_project(path: Path) -> Project:
         candidates.append(Path(data["session"]))
     for root in candidates:
         if (root / SESSION_FILE).is_file():
-            step = OLD_STEPS.get(data.get("step"), data.get("step"))
-            step = step if step in STEPS else "setup"
-            return Project(path, root, step, data.get("saved_at", ""), data.get("app_version", ""))
+            return Project(path, root, section(data.get("step")), data.get("saved_at", ""), data.get("app_version", ""))
     where = " or ".join(str(c) for c in dict.fromkeys(candidates)) or "(none given)"
     raise ProjectError(f"The session folder of {path.name} was not found at {where}. It may have been moved, "
                        "renamed or deleted; open the session folder itself with File > Open session folder.")

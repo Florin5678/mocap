@@ -1,4 +1,5 @@
-"""Help > Settings: options of the app as a whole, on this computer. Options of a session stay in its steps."""
+"""Help > Settings: options of the app as a whole, on this computer. Options of a project are in its Session
+settings."""
 
 from __future__ import annotations
 
@@ -27,9 +28,9 @@ class SettingsDialog(QDialog):
         self.setWindowTitle("Settings")
         self.setMinimumWidth(620)
         layout = QVBoxLayout(self)
-        layout.addWidget(note("These settings apply to the whole app on this computer. The settings of a session "
-                              "(pose detection, smoothing, calibration board, participant details) are in its "
-                              "steps."))
+        layout.addWidget(note("These settings apply to the whole app on this computer. The settings of a project "
+                              "(pose detection, smoothing, deletion of raw footage) are in its Session settings; the "
+                              "calibration board is in Cameras."))
 
         folders = QGroupBox("Folders")
         fl = QVBoxLayout(folders)

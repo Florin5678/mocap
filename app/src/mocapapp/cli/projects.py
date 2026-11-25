@@ -196,7 +196,7 @@ def _project_open(args: argparse.Namespace) -> int:
     from mocapapp.core.session import load_session
 
     p = load_project(Path(args.file))
-    print(f"Project folder: {p.session} (last step: {p.step})")
+    print(f"Project folder: {p.session} (opens at: {p.step})")
     _print_info(p.session, load_session(p.session))
     return 0
 

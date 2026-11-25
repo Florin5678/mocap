@@ -167,6 +167,9 @@ class RunBar(QWidget):
         elif e.kind in ("trial_end", "needs_sync_fix"):
             self.activity.pop(e.trial, None)
             self.section.show_status()
+            results = self.win.section("results")
+            if self.win.current_page() is results:  # trials appear there as they finish
+                results.refresh()
 
     def _finished(self, _results) -> None:
         self.activity = {}

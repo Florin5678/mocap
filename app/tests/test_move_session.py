@@ -115,11 +115,11 @@ def test_gui_moves_session_and_its_project_file(qtbot, tmp_path, monkeypatch):
     from mocapapp.gui.main_window import MainWindow
 
     root, _ = _session(tmp_path)
-    project = save_project(tmp_path / "study", root, "setup")
+    project = save_project(tmp_path / "study", root, "session")
     win = MainWindow()
     qtbot.addWidget(win)
     win.open_path(project)
-    assert win.pages[0].move_button.isVisibleTo(win.pages[0]) and win.move_action.isEnabled()
+    assert win.move_action.isEnabled()
 
     monkeypatch.setattr(QFileDialog, "getExistingDirectory", lambda *a, **k: str(tmp_path / "out"))
     shown = []
@@ -129,10 +129,10 @@ def test_gui_moves_session_and_its_project_file(qtbot, tmp_path, monkeypatch):
 
     monkeypatch.setattr(QFileDialog, "getExistingDirectory", lambda *a, **k: str(tmp_path / "lab"))
     monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
-    win.pages[0].move_button.click()
+    win.move_session_dialog()
     qtbot.waitUntil(lambda: not win.busy and win.root != root, timeout=10000)
     dest = (tmp_path / "lab" / "T1_session").resolve()
-    assert win.root == dest and not root.exists() and str(dest) in win.pages[0].info.text()
+    assert win.root == dest and not root.exists() and str(dest) in win.section("session").info.text()
     assert load_project(project).session == dest  # the project file follows
     assert dest in [p.resolve() for p in recent_sessions()] and root not in recent_sessions()
 

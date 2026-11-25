@@ -5,16 +5,15 @@ You film one person with two or more cameras at the same time. The app turns tho
 - **3D marker positions** over time (`.trc` and `.c3d` files), and
 - **joint angles** from a scaled OpenSim body model (`.mot` and `.osim`, optionally `.bvh` for animation software).
 
-The steps, in order:
+A **project** is one study, recorded over one day or several. The window has five sections, used in any order:
 
-1. **Session** – the output folder and one folder per camera.
-2. **Trials** – one row per trial with its participant, height and consent forms; then the videos.
-3. **Intrinsic calibration** – the lens, from a video of a printed board, once per camera.
-4. **Extrinsic calibration** – measured reference points in the room that define the floor and the directions X, Y, Z; you click them in one picture per camera.
-5. **Run** – the computer does the rest; this can take a long time on a laptop, and you can leave it running.
-6. **Results** – a quality report, a 3D preview and the export.
+- **Session** – the trials: add them, choose their videos, check and copy them, and run them. The computer does the rest; this can take a long time on a laptop, and you can leave it running.
+- **Participants** – a pseudonym, height and consent for each person, and their consent forms.
+- **Cameras** – each camera and its lens, calibrated from a video of a printed board, once per camera.
+- **Layouts** – where the cameras stood: measured reference points in the room that define the floor and the directions X, Y, Z, clicked in one picture per camera. A layout is reused by every trial recorded while the cameras stayed in place.
+- **Results** – a quality report, the 3D skeleton, the data and the export.
 
-All the manual work (steps 1–4) happens before the long computation, so you can walk away once you press Run.
+Calibration is done once and reused, so later days only need the new trials – or a new layout if the cameras were set up again.
 
 === 2. Cameras and recording settings
 
@@ -23,7 +22,7 @@ Good recordings matter more than anything the software can fix later.
 - **60 frames per second, 1080p** (or better). Fast movements filmed at 30 fps come out blurred and jittery.
 - **The same frame rate on every camera.**
 - **Fixed zoom and focus.** Turn off image stabilisation and automatic lens switching (phones switch lenses silently).
-- **Tripods.** Cameras must not move during the whole session – not even a bump. If a camera moves, start a new session.
+- **Tripods.** Cameras must not move while their layout is used – not even a bump. If a camera moves, record a new extrinsic video and make a new layout.
 - Place cameras around the person at roughly chest height, looking slightly down, each seeing the whole body in every frame. **Three or more cameras** are recommended; two is the minimum.
 - Good, even light; avoid strong backlight.
 
@@ -37,13 +36,13 @@ Good recordings matter more than anything the software can fix later.
 
 === 4. The two calibration videos
 
-Every camera folder needs **two extra videos**, besides one video per trial:
+Besides one video per trial, the cameras need **two kinds of calibration video**:
 
-**`intrinsic`** – the lens calibration. Hold the printed board (step 7 of this guide) in front of the camera and move it slowly: close and far, tilted in different directions, into every corner of the picture, for about a minute. Record it with **exactly the same settings** (resolution, zoom, focus, stabilisation) as the trials. A camera keeps its lens calibration even when it is moved.
+**`intrinsic`** – the lens calibration. Hold the printed board (step 7 of this guide) in front of the camera and move it slowly: close and far, tilted in different directions, into every corner of the picture, for about a minute. Record it with **exactly the same settings** (resolution, zoom, focus, stabilisation) as the trials. Once per camera: it keeps its lens calibration even when it is moved, on later days too.
 
-**`extrinsic`** – the camera position. Record a few seconds with the camera **in its final position for the trials**, showing the reference points on the floor and at other heights (next page). Touching or bumping the camera afterwards makes this video useless.
+**`extrinsic`** – the camera position, one per camera for each layout. Record a few seconds with the camera **in its final position for the trials**, showing the reference points on the floor and at other heights (next page). Touching or bumping the camera afterwards makes this video useless: then record a new one and make a new layout.
 
-Name the files `intrinsic.mp4` and `extrinsic.mp4` (any video format works). If a file is named differently or sits in another folder, you can choose it by hand during setup.
+A video named `intrinsic` in a camera's folder is found by itself; any other file can be chosen in **Cameras** and **Layouts** (any video format works). Name trial videos with the trial's number (`1`, `01`, `trial01`, `walk1`, ...) and the app suggests them.
 
 === 5. Placing and measuring reference points
 
@@ -79,8 +78,8 @@ The board in the PDF always matches the board settings of the app.
 
 Each participant gets their own **pseudonym**, such as `PA26-K7M2QX4`. The data are stored under the pseudonym, and only the signed participation consent form – which you keep separately – links it to the person.
 
-During setup, **Generate ...** makes each participant's form with their pseudonym filled in. The study details (study name, purpose, researchers, data handling, risks, compensation) are asked once and printed on every form of the session; blank ones get a line to write on. Print the form for the participant to tick and sign. Have the form checked by your institution.
+In **Participants**, **Generate ...** makes a participant's form with their pseudonym filled in, and **Consent forms ...** makes them for several at once. The study details (study name, purpose, researchers, data handling, risks, compensation) are asked once and printed on every form of the project; blank ones get a line to write on. Print the form for the participant to tick and sign. Have the form checked by your institution.
 
-The app does not see the signed forms. Before running, you confirm for each participant that signed consent was received.
+The app does not see the signed forms. Once you hold one, set the participant's **Consent** to what was agreed (*Signed, delete footage* or *Signed, keep footage*); their trials run only then.
 
 [[download:consent]]

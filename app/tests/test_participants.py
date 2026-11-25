@@ -175,44 +175,6 @@ def no_boxes(monkeypatch):
     monkeypatch.setattr(QMessageBox, "exec", fail)
 
 
-def test_setup_page_participants(qtbot, tmp_path, monkeypatch, no_boxes):
-    """Participants are entered in the Trials table (0.1.0rc17); the Session step only sizes a new session."""
-    from mocapapp.gui.main_window import MainWindow
-
-    win = MainWindow()
-    qtbot.addWidget(win)
-    setup = win.pages[0]
-    assert not hasattr(setup, "height_table") and not hasattr(setup, "people")
-    setup.people_spin.setValue(2)
-    setup.trials_spin.setValue(2)
-    assert setup.spec().n_participants == 2 and setup.spec().n_trials == 4
-
-    session = make_session(tmp_path, n_trials=1, ready=False)
-    win.set_session(tmp_path, session)
-    videos = win.pages[1]
-    monkeypatch.setattr(videos, "check", lambda: None)
-    videos.refresh()
-    box = videos.table.cellWidget(0, 0)
-    assert videos.table.horizontalHeaderItem(0).text() == "Participant ID"
-    assert box.currentText() == session.participant("1").code  # the ID alone, no "Participant 1 (...)"
-    box.lineEdit().setText("P01")
-    box.lineEdit().editingFinished.emit()
-    qtbot.wait(10)
-    assert load_session(tmp_path).participant("1").code == "P01"
-
-    videos.table.cellWidget(0, 2).setChecked(True)  # signed consent received: still editable, after confirming
-    qtbot.wait(10)
-    import mocapapp.gui.pages.videos as videos_module
-
-    asked = []
-    monkeypatch.setattr(videos_module, "confirm", lambda _p, _t, text, _ok: asked.append(text) or True)
-    box = videos.table.cellWidget(0, 0)
-    box.lineEdit().setText("P01B")
-    box.lineEdit().editingFinished.emit()
-    qtbot.wait(10)
-    assert "signed consent form" in asked[0] and load_session(tmp_path).participant("1").code == "P01B"
-
-
 def test_consent_dialog_keeps_the_study_details(qtbot, tmp_path, monkeypatch, no_boxes):
     import mocapapp.gui.greeting
     from mocapapp.gui.consent_dialog import ConsentInfoDialog
@@ -238,42 +200,8 @@ def test_consent_dialog_keeps_the_study_details(qtbot, tmp_path, monkeypatch, no
     win.save_consent_pdf("T1-ABCDEF1")
     win.save_consent_pdf("T1-ABCDEF2")
     assert seen == [("T1-ABCDEF1", "", 1), ("T1-ABCDEF2", "Gait 2026", 2)]
-    win.pages[1].all_forms_button.click()
+    win.save_all_consent_pdfs()
     assert seen[-1][1:] == ("Gait 2026", 2) and saved[-1]["codes"] == ["T1-ABCDEF1", "T1-ABCDEF2"]
     assert saved[1]["code"] == "T1-ABCDEF2" and saved[1]["info"].study_name == "Gait 2026"
     assert load_session(tmp_path).study_info.researchers == [("A. First", ""), ("B. Second", "b@x")]
 
-
-def test_videos_page_maps_trials_to_participants(qtbot, tmp_path, monkeypatch, no_boxes):
-    from mocapapp.gui.main_window import MainWindow
-
-    session = make_session(tmp_path, n_trials=2)
-    session.trials_per_participant = 2
-    session.trials[1].participant = "1"
-    session.link()
-    raw = tmp_path / "raw"
-    raw.mkdir()
-    for cam in session.cameras:
-        for t in session.trials:
-            f = raw / f"{cam.name}_trial{t.label}.mp4"
-            f.write_bytes(b"x")
-            cam.trial_files[t.label] = str(f)
-    save_session(session, tmp_path)
-    win = MainWindow()
-    qtbot.addWidget(win)
-    win.set_session(tmp_path, session)
-    videos = win.pages[1]
-    monkeypatch.setattr(videos, "check", lambda: None)
-    videos.refresh()
-    table, grid = videos.table, videos.grid  # two tables: trials and participants, trial mapping
-    headers = [table.horizontalHeaderItem(c).text() for c in range(table.columnCount())]
-    assert headers[:2] == ["Participant ID", "Height (m)"]
-    assert [grid.horizontalHeaderItem(c).text() for c in range(grid.columnCount())] == ["cam01", "cam02"]
-    assert table.verticalHeaderItem(0).text() == grid.verticalHeaderItem(0).text() == "Trial 1"
-    box = table.cellWidget(1, 0)
-    assert box.currentData() == "1"
-    box.activated.emit(box.findData("2"))  # saved straight away
-    qtbot.wait(10)
-    assert [t.participant for t in load_session(tmp_path).trials] == ["1", "2"]
-    videos.save_mapping()
-    assert [t.participant for t in load_session(tmp_path).trials] == ["1", "2"]

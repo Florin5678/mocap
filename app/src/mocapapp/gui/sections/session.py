@@ -249,6 +249,7 @@ class SessionSection(Section):
         add.addWidget(self.add_who)
         add.addWidget(QLabel("layout"))
         self.add_layout = NoWheelCombo()
+        self.add_layout.setSizeAdjustPolicy(NoWheelCombo.SizeAdjustPolicy.AdjustToContents)
         add.addWidget(self.add_layout, 1)
         add.addWidget(QLabel("name"))
         self.add_name = QLineEdit()
@@ -431,8 +432,7 @@ class SessionSection(Section):
         for lay in ses.layouts:
             self.add_layout.addItem(f"{lay.name} ({lay.date})" if lay.date else lay.name, lay.id)
         last = ses.trials[-1] if ses.trials else None
-        default = last.layout if last and last.layout else (ses.layouts[-1].id if ses.layouts else "")
-        self.add_layout.setCurrentIndex(max(0, self.add_layout.findData(default)))
+        self.add_layout.setCurrentIndex(max(0, self.add_layout.findData(workflow.default_layout(ses))))
         self.add_name.setText(last.name if last else "")
         self.add_date.clear()
 

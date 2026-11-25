@@ -80,7 +80,7 @@ def save_pdf(parent: QWidget, kind: str, code: str = "", board_spec=None, info=N
 
 
 class TutorialDialog(QDialog):
-    """Pages with Previous/Next; the last page offers Back (to the greeting) and Start session.
+    """Pages with Previous/Next; the last page offers Back (to the greeting) and Start.
     Result in self.choice: 'back' | 'start' | None. With `standalone=True` (Help menu) the last page shows Close."""
 
     def __init__(self, parent: QWidget | None = None, standalone: bool = False):
@@ -113,7 +113,7 @@ class TutorialDialog(QDialog):
         self.prev_button = QPushButton("< Previous")
         self.next_button = QPushButton("Next >")
         self.back_button = QPushButton("Back")
-        self.start_button = QPushButton("Close" if standalone else "Start session")
+        self.start_button = QPushButton("Close" if standalone else "Start")
         self.prev_button.clicked.connect(lambda: self.show_page(self.index - 1))
         self.next_button.clicked.connect(lambda: self.show_page(self.index + 1))
         self.back_button.clicked.connect(lambda: self._finish("back"))

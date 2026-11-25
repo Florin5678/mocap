@@ -774,7 +774,7 @@ def _cmd_project(args: argparse.Namespace) -> int:
         print(exc)
         return 1
     print(f"Session folder: {p.session}")
-    print(f"Step: {p.step}")
+    print(f"Section: {p.step}")
     print(f"Saved: {p.saved_at} (mocapapp {p.app_version})")
     return 0
 
@@ -817,12 +817,13 @@ def build_parser() -> argparse.ArgumentParser:
     data.set_defaults(func=_cmd_data)
 
     def project_save_show(prsub) -> None:
-        from mocapapp.core.project import STEPS
+        from mocapapp.core.project import OLD_STEPS, STEPS
 
         ps = prsub.add_parser("save", help="write a project file for a project folder")
         ps.add_argument("--session", required=True)
         ps.add_argument("--out", required=True, help="project file to write (.mocapproj is added if missing)")
-        ps.add_argument("--step", choices=STEPS, default="setup", help="step to open at (default setup)")
+        ps.add_argument("--step", choices=STEPS + tuple(OLD_STEPS), default="session",
+                        help="section to open at (default session; 0.1.x step names are understood)")
         psh = prsub.add_parser("show", help="which project folder and step a project file points to")
         psh.add_argument("file")
         for p in (ps, psh):

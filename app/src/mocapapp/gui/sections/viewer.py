@@ -1,6 +1,6 @@
-"""Step 7: Viewer - the results of each trial as a 3D skeleton (play, scrub, rotate) and as data (joint angles and
-marker positions over time: plot, table, comparison between trials, CSV). Reads the trial folders; no export needed.
-"""
+"""The 3D and Data tabs of Results (PROJECT.md §16.3): a trial's results as a 3D skeleton (play, scrub, rotate) and as
+data (joint angles and marker positions over time: plot, table, comparison between trials, CSV). Reads the trial
+folders; no export needed. The trial shown is chosen in the Results list (`show_trial`)."""
 
 from __future__ import annotations
 
@@ -25,14 +25,13 @@ from PySide6.QtWidgets import (
     QSlider,
     QSplitter,
     QTableView,
-    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from mocapapp.core import outputs
 from mocapapp.core.session import Layout
-from mocapapp.gui.common import error_box, open_path, para
+from mocapapp.gui.common import error_box, open_path
 from mocapapp.gui.main_window import Page
 
 LEFT, RIGHT, MIDDLE, EXTRA = QColor("#1f77b4"), QColor("#d62728"), QColor("#444444"), QColor("#9e9e9e")
@@ -195,12 +194,10 @@ class TableModel(QAbstractTableModel):
         return f"{self.table.columns[i]} ({self.table.units[i]})"
 
 
-class ViewerPage(Page):
-    key, title = "viewer", "Viewer"
-    optional = True
+class Viewer(Page):
+    """Never shown itself: Results shows its two tabs, `view_tab` and `data_tab`."""
 
-    def step_ticked(self) -> bool:
-        return False  # nothing to finish here: a tick before Run looked like the step was done
+    key, title = "viewer", "Viewer"
 
     def __init__(self, win):
         super().__init__(win)
@@ -209,27 +206,15 @@ class ViewerPage(Page):
         self.checked: dict[str, set[str]] = {"angles": set(DEFAULT_ANGLES), "markers": set()}
         self.canvas = None
 
-        top = QHBoxLayout()
-        self.trial_box = QComboBox()
+        self.trial_box = QComboBox(self)  # the trials with results (not shown: Results' list chooses)
+        self.trial_box.setVisible(False)
         self.trial_box.currentIndexChanged.connect(lambda _: self.load_trial())
         self.source_box = QComboBox()
         self.source_box.setToolTip("Which 3D marker file to show: smoothed + LSTM is what the joint angles are "
                                    "usually computed from.")
         self.source_box.currentIndexChanged.connect(lambda _: self.load_markers())
-        top.addWidget(QLabel("Trial"))
-        top.addWidget(self.trial_box, 1)
-        top.addWidget(QLabel("3D markers"))
-        top.addWidget(self.source_box, 1)
-        self.empty = para("")
-
-        self.tabs = QTabWidget()
-        self.tabs.addTab(self._view_tab(), "3D")
-        self.tabs.addTab(self._data_tab(), "Data")
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.addLayout(top)
-        layout.addWidget(self.empty)
-        layout.addWidget(self.tabs, 1)
+        self.view_tab = self._view_tab()
+        self.data_tab = self._data_tab()
 
         self.timer = QTimer(self)
         self.timer.setInterval(33)
@@ -240,6 +225,10 @@ class ViewerPage(Page):
     def _view_tab(self) -> QWidget:
         w = QWidget()
         v = QVBoxLayout(w)
+        top = QHBoxLayout()
+        top.addWidget(QLabel("3D markers"))
+        top.addWidget(self.source_box, 1)
+        v.addLayout(top)
         self.view = SkeletonView()
         v.addWidget(self.view, 1)
         row = QHBoxLayout()
@@ -359,10 +348,16 @@ class ViewerPage(Page):
         found = self.trial_box.findData(current)
         self.trial_box.setCurrentIndex(max(found, 0))
         self.trial_box.blockSignals(False)
-        self.empty.setVisible(not trials)
-        self.empty.setText("No results yet: run the trials on the Run step first." if not trials else "")
-        self.tabs.setEnabled(bool(trials))
+        self.view_tab.setEnabled(bool(trials))
+        self.data_tab.setEnabled(bool(trials))
         self.load_trial()
+
+    def show_trial(self, label: str | None) -> bool:
+        """Show this trial (False: it has no results to show)."""
+        found = self.trial_box.findData(label)
+        if found >= 0 and found != self.trial_box.currentIndex():
+            self.trial_box.setCurrentIndex(found)
+        return found >= 0
 
     def load_trial(self) -> None:
         self.timer.stop()
@@ -561,7 +556,7 @@ class ViewerPage(Page):
         self.summary.setText("<br>".join(lines))
 
     def _move_cursor(self, t: float) -> None:
-        if self.cursor is not None and self.tabs.currentIndex() == 1:
+        if self.cursor is not None and self.data_tab.isVisible():
             self.cursor.set_xdata([t, t])
             self.canvas.draw_idle()
 
@@ -588,7 +583,7 @@ class ViewerPage(Page):
             tdir = self.trial_dir()
             open_path(tdir / ("kinematics" if self.dataset_box.currentData() == "angles" else "pose-3d"))
 
-    def hideEvent(self, event) -> None:  # noqa: N802
+    def stop(self) -> None:
+        """Results hid the 3D tab: stop playing."""
         self.timer.stop()
         self.play_button.setText("Play")
-        super().hideEvent(event)

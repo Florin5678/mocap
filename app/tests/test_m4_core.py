@@ -10,7 +10,7 @@ from mocapapp.cli.main import main
 from mocapapp.core import pdfs
 from mocapapp.core.calibration.intrinsics import BoardDetector, BoardSpec
 from mocapapp.core.session import Layout, load_session
-from mocapapp.core.texts import s, strings, tutorial
+from mocapapp.core.texts import s, tutorial
 from mocapapp.core.workflow import (
     NewSession,
     SetupError,
@@ -93,7 +93,7 @@ def test_texts():
     assert pages[6].downloads == ("board",) and pages[7].downloads == ("consent",)
     assert "[[download" not in pages[7].markdown
     assert "60 frames per second" in pages[1].markdown and "Z points up" in pages[4].markdown
-    assert "sync cue" in s("sync_reminder") and set(strings()["steps"]) >= {"setup", "run", "results"}
+    assert "sync cue" in s("sync_reminder") and "Layouts" in pages[0].markdown
 
 
 def _cams(tmp_path, n=2):

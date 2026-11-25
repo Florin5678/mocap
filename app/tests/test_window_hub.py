@@ -9,13 +9,16 @@ import pytest
 from PySide6.QtWidgets import QMessageBox
 
 from mocapapp.core import readiness, runner, workflow
+from mocapapp.core.calibration import service
 from mocapapp.core.session import Layout, load_session, save_session
 from mocapapp.gui.main_window import MainWindow
+from mocapapp.gui.sections import layouts as layouts_mod
 from mocapapp.gui.sections import run_bar
 from mocapapp.gui.sections import session as session_mod
+from tests.conftest import make_video
 from tests.m3_fakes import SYNC_BAD, FakeStages, make_session
 from tests.test_window_privacy import _col
-from tests.test_window_projects import _select, calibrate_in_window
+from tests.test_window_projects import CAMS, _select, calibrate_in_window
 
 pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
 
@@ -127,7 +130,7 @@ def test_full_project_on_the_hub(win, tmp_path, qtbot, monkeypatch):
 
     # Results: report, export, viewer
     win.go("results")
-    res = win.section("results").results_page
+    res = win.section("results")
     assert [r.label for r in res.results if r.status == "done"] == ["1", "2"] and "Trial 1" in res.qa.toPlainText()
     assert res.results[2].light == "grey"  # trial 3 has not run yet
     res.boxes["bvh"].setChecked(True)
@@ -136,9 +139,8 @@ def test_full_project_on_the_hub(win, tmp_path, qtbot, monkeypatch):
     names = {p.name for p in Layout(root).export.iterdir()}
     code = ses.participant("1").code
     assert f"{code}_trial1_skeleton_animation.bvh" in names and "manifest.json" in names
-    viewer = win.section("results").viewer_page
-    win.section("results").tabs.setCurrentIndex(1)
-    assert viewer.trial_box.count() == 2 and viewer.markers is not None
+    res.tabs.setCurrentIndex(1)  # 3D
+    assert res.viewer.trial_box.count() == 2 and res.viewer.markers is not None
 
 
 def _ready_project(root, n_trials):
@@ -224,6 +226,27 @@ def test_changing_a_setting_after_a_run_repeats_only_later_stages(win, tmp_path,
     assert [s for _, s in fake.calls][0] == "poseEstimation" and not hub.start_over.isChecked()
 
 
+def test_results_during_a_run(win, tmp_path, qtbot, monkeypatch):
+    """While a trial runs, Session and Results can be opened (the other sections change what the run uses); Results
+    shows trials as they finish and exports once the run is over."""
+    _fake_run(monkeypatch)
+    ses = _ready_project(tmp_path, 2)
+    hub = _hub(win, tmp_path, ses)
+    hub.run_button.click()
+    assert win.busy
+    assert win.reachable(4) and not win.reachable(1) and not win.reachable(2)
+    win.go("participants")
+    assert win.current_page() is hub
+    win.go("results")
+    res = win.section("results")
+    assert win.current_page() is res and not res.export_button.isEnabled()
+    _idle(qtbot, win)
+    assert [r.status for r in res.results] == ["done", "done"] and res.export_button.isEnabled()
+    assert res.list.count() == 2 and res.list.item(0).text().startswith("● Trial 1")
+    assert "n/a" not in res.list.item(0).text()  # a traffic light, not grey
+    assert win.reachable(1)
+
+
 def test_actions_on_several_trials(win, tmp_path, qtbot, monkeypatch):
     """Duplicate, change layout, remove for several selected trials; Run leaves out what is not ready."""
     _fake_run(monkeypatch)
@@ -265,3 +288,133 @@ def test_actions_on_several_trials(win, tmp_path, qtbot, monkeypatch):
     _select(hub.table, [])
     assert not shown, shown
     assert hub.buttons["forms"].isEnabled() and hub.add_who.currentData() is None
+
+
+def _shot(win, name):  # MOCAPAPP_SHOTS=<folder>: screenshots for the usability review
+    import os
+
+    folder = os.environ.get("MOCAPAPP_SHOTS")
+    if folder:
+        win.resize(1280, 860)
+        win.grab().save(str(Path(folder) / f"{name}.png"))
+
+
+def test_two_days(win, tmp_path, qtbot, monkeypatch):
+    """P6 usability check (PROJECT.md §16.6): a new project used over two days. Day 1: cameras, a layout, one
+    participant's two trials, run. Day 2, the project opened again: the cameras were set up again, so a new layout
+    (Duplicate, new extrinsic videos); a second participant's trials, recorded that day, run without touching day 1."""
+    import datetime as dt
+
+    _fake_run(monkeypatch)
+    win.section("session").trials_spin.setValue(2)
+    raw, root, ses = calibrate_in_window(win, tmp_path, qtbot, monkeypatch, trials=2)
+    win.go("session")
+    hub = win.section("session")
+    hub.add_name.setText("walking")
+    hub.add_button.click()
+    hub.add_button.click()
+    win.go("participants")
+    people = win.section("participants")
+    box = people.table.cellWidget(0, _col(people.table, "Consent"))
+    box.setCurrentIndex(box.findData("keep"))
+    height = people.table.cellWidget(0, _col(people.table, "Height"))
+    height.setText("172")
+    height.editingFinished.emit()
+    win.go("session")
+    for label in ("1", "2"):
+        _select(hub.table, [int(label) - 1])
+        hub.panel.use_suggested.click()
+    hub.table.clearSelection()
+    hub.buttons["check"].click()  # nothing selected: every trial whose videos are chosen
+    _idle(qtbot, win)
+    hub.run_button.click()
+    _idle(qtbot, win)
+    assert load_session(root).run_state.trial_status == {"1": "done", "2": "done"}
+    _shot(win, "day1_hub")
+    day1 = ses.layout("L1").date
+    win.close()
+
+    # Day 2: the SD cards are copied into the same camera folders; the cameras were moved since yesterday
+    day2 = (dt.date.fromisoformat(day1) + dt.timedelta(days=1)).isoformat()
+    stamp = f"{day2}T10:00:00Z"
+    for i, cam in enumerate(CAMS, 1):
+        for n in (3, 4):
+            make_video(raw / cam / f"walk{n}.mp4", seconds=0.5 + 0.05 * i, size="1280x720", creation_time=stamp)
+        make_video(tmp_path / "day2" / cam / "extrinsic.mp4", seconds=0.3 + 0.05 * i, size="1280x720",
+                   pattern="smptebars", creation_time=stamp)
+    win2 = MainWindow()
+    qtbot.addWidget(win2)
+    assert win2.open_session(root)
+    ses = win2.session
+    assert win2.current_page().key == "session" and win2.badges()["cameras"] == win2.badges()["layouts"]  # both done
+    hub = win2.section("session")
+    assert "done" in _status(hub, "1") and "done" in _status(hub, "2")
+
+    # Layouts: duplicate yesterday's layout (cameras and points kept), new extrinsic videos, click again
+    win2.go("layouts")
+    lays = win2.section("layouts")
+    _select(lays.table, [0])
+    lays.buttons["duplicate"].click()
+    assert [x.id for x in ses.layouts] == ["L1", "L2"] and lays.current == "L2" and ses.layout("L2").points
+    for cam in CAMS:
+        monkeypatch.setattr(layouts_mod, "choose_video", lambda *a, c=cam: tmp_path / "day2" / c / "extrinsic.mp4")
+        lays.choose(cam)
+    assert ses.layout("L2").date == day2  # the day its extrinsic videos were recorded
+    for cam in CAMS:
+        lays.click(cam)
+        qtbot.waitUntil(lambda c=cam: service.position_result(root, "L2", c) is not None, timeout=120000)
+        qtbot.waitUntil(lambda: not win2.busy, timeout=10000)
+    assert service.layout_state(ses, root, "L2") == {"Hall (copy): cam01": "ready", "Hall (copy): cam02": "ready"}
+
+    # Session: participant 1 has their two trials, so the add row offers a new participant, with today's layout
+    win2.go("session")
+    assert hub.add_who.currentData() is None and hub.add_layout.currentData() == "L2"
+    hub.add_button.click()
+    hub.add_button.click()
+    assert [(t.label, t.participant, t.layout) for t in ses.trials[2:]] == [("3", "2", "L2"), ("4", "2", "L2")]
+    win2.go("participants")
+    people = win2.section("participants")
+    box = people.table.cellWidget(1, _col(people.table, "Consent"))
+    box.setCurrentIndex(box.findData("delete"))
+    height = people.table.cellWidget(1, _col(people.table, "Height"))
+    height.setText("165")
+    height.editingFinished.emit()
+    win2.go("session")
+    for label in ("3", "4"):
+        _select(hub.table, [int(label) - 1])
+        hub.panel.use_suggested.click()
+        assert ses.trial(label).date == day2 and not hub.panel.accept_button.isVisibleTo(hub.panel)
+
+    # R8: a day-2 trial put on yesterday's layout warns; back on today's layout it does not
+    _select(hub.table, [3])
+    monkeypatch.setattr(session_mod, "choose_layout", lambda *a: "L1")
+    hub.buttons["layout"].click()
+    assert hub.panel.accept_button.isVisibleTo(hub.panel) and "set up again" in hub.panel.warning.text()
+    assert "not ready" in _status(hub, "4")
+    monkeypatch.setattr(session_mod, "choose_layout", lambda *a: "L2")
+    hub.buttons["layout"].click()
+    assert not hub.panel.accept_button.isVisibleTo(hub.panel)
+    _shot(win2, "day2_panel")
+
+    hub.table.clearSelection()
+    hub.buttons["check"].click()
+    _idle(qtbot, win2)
+    assert hub.selected() == ["3", "4"] and hub.run_button.text() == "Run selected (2)"  # what was checked
+    fake = _fake_run(monkeypatch)
+    hub.run_button.click()
+    _idle(qtbot, win2)
+    assert {label for label, _stage in fake.calls} == {"3", "4"}  # day 1 stays as it was
+    assert load_session(root).run_state.trial_status == {"1": "done", "2": "done", "3": "done", "4": "done"}
+    _shot(win2, "day2_hub")
+
+    # Results: all four trials; export everything, then delete participant 2's raw footage (no storage consent)
+    win2.go("results")
+    res = win2.section("results")
+    assert res.list.count() == 4 and all(r.status == "done" for r in res.results)
+    res.tabs.setCurrentIndex(3)
+    res.do_export()
+    _idle(qtbot, win2)
+    assert res.delete_now.isEnabled() and "to be deleted now" in res.deletion.text()
+    _shot(win2, "day2_results")
+    res.tabs.setCurrentIndex(1)
+    assert res.viewer.trial_box.count() == 4

@@ -37,10 +37,8 @@ from mocapapp.gui.common import (
     settings,
 )
 
+BROWSE_WHILE_BUSY = ("session", "results")  # sections that can be opened while the app works
 TUTORIAL_PAGE = {"session": 0, "participants": 0, "cameras": 3, "layouts": 4, "results": 0}
-# the step a 0.1.x project file was saved at -> the section that holds it now
-OLD_STEPS = {"setup": "session", "videos": "session", "run": "session", "intrinsics": "cameras",
-             "extrinsics": "layouts", "scene": "layouts", "viewer": "results"}
 
 
 def user_guide_path() -> Path | None:
@@ -106,6 +104,7 @@ class MainWindow(QMainWindow):
         self.session: Session | None = None
         self.project: Path | None = None  # the .mocapproj file the project was opened from or saved to
         self.busy = False
+        self.busy_from = 0  # the section that started the work the app is busy with
         self.keep_awake = KeepAwake()  # Help > Settings: screen on while busy
         self.setWindowTitle(s("app_name"))
         self.resize(1180, 780)
@@ -302,7 +301,7 @@ class MainWindow(QMainWindow):
         self.project = project.path
         settings().setValue("last_project", str(project.path))
         self._show_name()
-        self.go(OLD_STEPS.get(project.step, project.step))
+        self.go(project.step)
 
     def new_session(self) -> None:
         if self.busy:
@@ -456,7 +455,13 @@ class MainWindow(QMainWindow):
         return next(sec for sec in self.sections if sec.key == key)
 
     def reachable(self, index: int) -> bool:
-        return index == 0 or self.session is not None
+        """With nothing open only Session. While the app works (a run, a calibration, a copy), the section doing it,
+        Session and Results: the others change the project the work is using."""
+        if index == 0:
+            return True
+        if self.session is None:
+            return False
+        return not self.busy or index == self.busy_from or self.sections[index].key in BROWSE_WHILE_BUSY
 
     def first_incomplete(self) -> int:
         return 0
@@ -464,7 +469,7 @@ class MainWindow(QMainWindow):
     def go(self, where: int | str) -> None:
         keys = [sec.key for sec in self.sections]
         index = keys.index(where) if isinstance(where, str) and where in keys else where
-        if not isinstance(index, int) or not 0 <= index < len(self.sections) or self.busy:
+        if not isinstance(index, int) or not 0 <= index < len(self.sections):
             return
         if not self.reachable(index):
             index = 0
@@ -479,7 +484,7 @@ class MainWindow(QMainWindow):
         self.update_nav()
 
     def _sidebar_clicked(self, row: int) -> None:
-        if self.reachable(row) and not self.busy:
+        if self.reachable(row):
             self.go(row)
         else:
             self.sidebar.blockSignals(True)
@@ -509,14 +514,17 @@ class MainWindow(QMainWindow):
             item.setFlags(flags if self.reachable(k) else Qt.ItemFlag.NoItemFlags)
 
     def set_busy(self, busy: bool) -> None:
+        if busy and not self.busy:
+            self.busy_from = self.stack.currentIndex()
         self.busy = busy
         if busy and keep_screen_on():
             self.keep_awake.start()
         elif not busy:
             self.keep_awake.stop()
-        self.sidebar.setEnabled(not busy)
         self.menuBar().setEnabled(not busy)
         self.update_nav()
+        if not busy and self.session is not None and self.stack.currentIndex() != self.busy_from:
+            self.current_page().refresh()  # opened while the app worked (Results during a run): now up to date
 
     # ---------- help ----------
 

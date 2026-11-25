@@ -172,9 +172,8 @@ def _next_label(labels) -> str:
 
 
 def add_participant(session: Session, root: Path, height: str | float | None = None) -> Participant:
-    """A participant added later: a new pseudonym and trials_per_participant trials (with the last trial's
-    layout, or the newest layout)."""
-    layout = session.trials[-1].layout if session.trials else (session.layouts[-1].id if session.layouts else "")
+    """A participant added later: a new pseudonym and trials_per_participant trials (on default_layout)."""
+    layout = default_layout(session)
     taken = existing_codes(Path(root).parent) | {p.code for p in session.participants}
     person = Participant(label=_next_label(p.label for p in session.participants),
                          code=make_code(session.study_code, taken), height_m=parse_height(height))
@@ -425,7 +424,7 @@ def add_trial(session: Session, root: Path, participant: str | None = None, layo
     if person.withdrawn_at:
         raise SetupError(f"Participant {participant} withdrew; no trials can be added for them.")
     if layout is None:
-        layout = model.layout if model else (session.layouts[0].id if session.layouts else "")
+        layout = model.layout if like else default_layout(session)
     if layout:
         session.layout(layout)
     trial = Trial(label=_next_label(t.label for t in session.trials), participant=participant,
@@ -805,6 +804,19 @@ def set_trial_info(session: Session, root: Path | None, label: str, name: str | 
         trial.date_manual = bool(date)
     if root is not None:
         save_session(session, root)
+
+
+def default_layout(session: Session) -> str:
+    """The layout for a new trial: the last trial's, unless a layout dated later exists (the cameras were set up
+    again on another day): then the newest one. Without trials, the newest layout."""
+    if not session.layouts:
+        return ""
+    newest = max(enumerate(session.layouts), key=lambda x: (x[1].date or "", x[0]))[1]
+    last = session.trials[-1].layout if session.trials else ""
+    if last and any(lay.id == last for lay in session.layouts):
+        if (newest.date or "") <= (session.layout(last).date or ""):
+            return last
+    return newest.id
 
 
 def default_participant(session: Session, previous: str | None = None) -> str | None:
