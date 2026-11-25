@@ -25,6 +25,7 @@ from datetime import datetime
 from pathlib import Path
 
 from mocapapp.core.config_gen import gui_flags_set
+from mocapapp.core.migrate import triangulation_deps
 from mocapapp.core.session import Layout, Session, save_session
 from mocapapp.core.validate import Issue, is_ascii_path
 
@@ -51,14 +52,14 @@ def stage_inputs(session: Session, stage: str, label: str | None = None) -> str:
             "filtering": [st.filter.type, st.filter.cutoff_hz, st.filter.order],
             "markerAugmentation": [st.use_augmentation],
             "kinematics": [st.use_augmentation, True] + (["simple model"] if st.simple_model else [])}.get(stage, [])
-    if stage == "triangulation" and label is not None:  # further calibration videos this trial uses
-        for cam in session.cameras:
-            key, lens = cam.position_for(label), cam.lens_for(label)
-            if key or lens:
-                entry = next((e for e in session.extrinsics if e.get("camera") == cam.name
-                              and e.get("position", "") == key and e.get("lens", "") == lens), {})
-                deps.append(f"{cam.name}:{key}:{lens + ':' if lens else ''}{entry.get('error_px', '')}")
+    if stage == "triangulation" and label is not None:  # the trial's cameras and their solved positions (layout)
+        deps += triangulation_deps([(slot, cam.id, lc.result) for slot, cam, lc in session.trial_cameras(label)])
     return json.dumps(deps)
+
+
+def slots(session: Session, label: str) -> list[str]:
+    """The camera names in a trial's folder: cam01, cam02, ... in its layout's order."""
+    return [slot for slot, _c, _lc in session.trial_cameras(label)]
 
 
 def stale_stages(session: Session, label: str) -> list[str]:
@@ -274,9 +275,6 @@ def preflight(session: Session, root: Path, labels: list[str]) -> list[Issue]:
     if not is_ascii_path(root):
         issues.append(Issue("error", str(root), "Session path contains non-ASCII letters; OpenSim cannot save there.",
                             "Move the session to a plain-ASCII folder."))
-    if not session.sync_cue_confirmed:
-        issues.append(Issue("action", "sync cue", "Confirm that a sync cue was recorded at the start of every trial.",
-                            "mocapapp confirm --session <dir> --sync-cue"))
     gone = _missing_models(session.settings.pose_mode, session.settings.keypoints)
     if gone and labels:
         issues.append(Issue("warning", "pose models", f"The {KEYPOINT_TITLES[session.settings.keypoints].lower()} "
@@ -308,14 +306,19 @@ def preflight(session: Session, root: Path, labels: list[str]) -> list[Issue]:
         if len(tomls) != 1:
             issues.append(Issue("error", where, f"Expected one calibration file, found {len(tomls)}.",
                                 "Finish calibration (mocapapp calibrate status) and run mocapapp assemble."))
-        for cam in session.cameras:
-            if not (tdir / "videos" / f"{cam.name}.mp4").is_file():
-                issues.append(Issue("error", where, f"videos/{cam.name}.mp4 is missing.", "mocapapp assemble"))
+        names = slots(session, label)
+        if not names:
+            issues.append(Issue("action", where, "No layout chosen for this trial.", "Choose the trial's layout."))
+        for name in names:
+            if not (tdir / "videos" / f"{name}.mp4").is_file():
+                issues.append(Issue("error", where, f"videos/{name}.mp4 is missing.", "mocapapp assemble"))
         if trial.height_m is None:
-            issues.append(Issue("warning", where, "No participant height: it will be estimated (less accurate).",
-                                "Enter the measured height."))
+            issues.append(Issue("action", where, "No height for this participant.", "Enter the measured height."))
+        warning = session.layout_warning(label)
+        if warning:
+            issues.append(Issue("action", where, warning, "Make a new layout, or accept this one for the trial."))
         flt = session.settings.filter
-        fps = _fps(tdir, [c.name for c in session.cameras]) if session.cameras else 0.0
+        fps = _fps(tdir, names) if names else 0.0
         if flt.type.startswith("butterworth") and fps > 0 and flt.cutoff_hz >= fps / 2:
             issues.append(Issue("error", where, f"The smoothing cut-off ({flt.cutoff_hz:g} Hz) is too high for videos "
                                 f"at {fps:g} frames per second: it must be below half the frame rate ({fps / 2:g} Hz).",
@@ -355,8 +358,8 @@ def space_needed(session: Session, root: Path, labels: list[str]) -> int:
         if not trial.raw_present or ("poseEstimation" in done and "poseEstimation" not in stale_stages(session, label)):
             continue
         frames = video_bytes = 0
-        for cam in session.cameras:
-            video = Layout(root).trial(label) / "videos" / f"{cam.name}.mp4"
+        for name in slots(session, label):
+            video = Layout(root).trial(label) / "videos" / f"{name}.mp4"
             if video.is_file():
                 frames += _probe_frames(str(video), video.stat().st_mtime_ns)
                 video_bytes += video.stat().st_size
@@ -374,8 +377,8 @@ def estimate_seconds(session: Session, root: Path, labels: list[str]) -> float:
     total = 0.0
     for label in labels:
         longest = 0.0
-        for cam in session.cameras:
-            video = Layout(root).trial(label) / "videos" / f"{cam.name}.mp4"
+        for name in slots(session, label):
+            video = Layout(root).trial(label) / "videos" / f"{name}.mp4"
             if video.is_file():
                 info = probe(video)
                 longest = max(longest, info.duration_s * info.fps)
@@ -414,8 +417,8 @@ def _probe_frames(video: str, mtime_ns: int) -> int:
 def _sync_gate(session: Session, root: Path, label: str, accept: bool, listener: Listener) -> bool:
     """Stop before triangulation when the sync looks unreliable and nobody accepted it (also on resume)."""
     info = session.run_state.sync.setdefault(label, {"offsets": {}, "issues": [], "accepted": False})
-    if info.get("offsets") and session.cameras:
-        _judge_sync(info, _fps(Layout(root).trial(label), [c.name for c in session.cameras]))
+    if info.get("offsets") and slots(session, label):
+        _judge_sync(info, _fps(Layout(root).trial(label), slots(session, label)))
     if accept and info.get("issues"):
         info["accepted"] = True
     if info.get("issues") and not info.get("accepted"):
@@ -435,7 +438,7 @@ def run_trial(session: Session, root: Path, label: str, listener: Listener = lam
         raise ValueError(f"Trial {label}: the raw footage was deleted, so it cannot be processed again.")
     layout = Layout(root)
     tdir = layout.trial(label)
-    cams = [c.name for c in session.cameras]
+    cams = slots(session, label)
     rs = session.run_state
     done = rs.stage_done.setdefault(label, [])
     stale = stale_stages(session, label)

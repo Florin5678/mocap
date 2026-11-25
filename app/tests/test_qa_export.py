@@ -119,7 +119,7 @@ def test_cli_run_qa_export(tmp_path, monkeypatch, capsys):
     s = str(tmp_path)
     assert main(["run", "--session", s]) == 1
     out = capsys.readouterr().out
-    assert "mocapapp confirm" in out and "--attest" in out and fake.calls == []
+    assert "--attest" in out and fake.calls == []
 
     assert main(["confirm", "--session", s, "--sync-cue"]) == 0
     assert main(["consent", "--session", s, "--trial", "1", "--attest", "--raw-storage", "yes"]) == 0

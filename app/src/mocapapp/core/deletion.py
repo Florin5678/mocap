@@ -139,9 +139,9 @@ def _item(group: str, path: Path, camera: str = "") -> Item | None:
 def _working(session: Session, root: Path, label: str) -> list[Item]:
     layout = Layout(root)
     paths = []
-    for cam in session.cameras:
-        video = layout.inputs(cam.name) / f"trial_{label}.mp4"
-        paths += [video, video.with_name(video.name + ".source")]
+    folder = layout.trial_input(label, "x").parent  # inputs/trials/<label>/: every camera's copy
+    if folder.is_dir():
+        paths += sorted(p for p in folder.iterdir() if p.is_file())
     videos = layout.trial(label) / "videos"
     if videos.is_dir():
         paths += sorted(videos.iterdir())
@@ -169,9 +169,10 @@ def _originals(session: Session, label: str) -> list[Item]:
     if session.calibration_source == "imported":
         return []  # the sample session's "originals" are the demo videos shipped with the app
     items = []
-    for cam in session.cameras:
-        f = cam.trial_files.get(label)
-        if f and (i := _item("originals", Path(f), cam.name)):
+    trial = session.trial(label)
+    for camera, f in trial.videos.items():
+        name = session.camera(camera).name if camera in {c.id for c in session.cameras} else camera
+        if f and (i := _item("originals", Path(f), name)):
             items.append(i)
     return items
 
@@ -238,7 +239,7 @@ def results_complete(session: Session, root: Path, label: str) -> list[str]:
 # ---------- plans ----------
 
 def _cloud_warning(session: Session, root: Path, with_originals: bool) -> list[str]:
-    places = [root] + ([Path(c.source_dir) for c in session.cameras] if with_originals else [])
+    places = [root] + ([Path(c.source_dir) for c in session.cameras if c.source_dir] if with_originals else [])
     if any(in_cloud_folder(p) for p in places):
         return ["Some of these files are inside a cloud-synced folder (OneDrive, Dropbox, Google Drive or iCloud). "
                 "Deleting them here may leave copies in the cloud and in its online recycle bin; delete those too."]
@@ -277,8 +278,7 @@ def plan_raw(session: Session, root: Path, label: str, include_originals: bool =
         plan.warnings.append("The results of this trial are not complete. Once the footage is deleted, this trial "
                              "can never be processed again.")
     plan.warnings += _cloud_warning(session, root, include_originals)
-    if not include_originals and any(Path(f).exists() for c in session.cameras
-                                     if (f := c.trial_files.get(label))):
+    if not include_originals and any(Path(f).exists() for f in session.trial(label).videos.values() if f):
         plan.notes.append("The original recordings in the camera folders are not included. Include them to delete "
                           "them too (you will be asked to type the pseudonym).")
     plan.notes.append(KEPT_NOTE)
@@ -306,8 +306,8 @@ def plan_participant(session: Session, root: Path, label: str, include_originals
     plan.warnings += _cloud_warning(session, root, include_originals)
     plan.notes.append("The pseudonym, the date and the list of deleted paths are kept in the deletion log "
                       "(no personal data). The participant's height and details are removed from session.json.")
-    if not include_originals and any(Path(f).exists() for c in session.cameras for lbl in labels
-                                     if (f := c.trial_files.get(lbl))):
+    if not include_originals and any(Path(f).exists() for lbl in labels
+                                     for f in session.trial(lbl).videos.values() if f):
         plan.notes.append("The original recordings in the camera folders are not included.")
     return plan
 
@@ -326,8 +326,7 @@ def plan_trial(session: Session, root: Path, label: str, include_originals: bool
         plan.items += _originals(session, label)
     plan.confirm_text = trial.code  # results are deleted too: always type the pseudonym
     plan.warnings += _cloud_warning(session, root, include_originals)
-    if not include_originals and any(Path(f).exists() for c in session.cameras
-                                     if (f := c.trial_files.get(label))):
+    if not include_originals and any(Path(f).exists() for f in session.trial(label).videos.values() if f):
         plan.notes.append("The original recordings in the camera folders are not included. Include them to delete "
                           "them too.")
     plan.notes.append(f"Trial {label} is removed from the session; the other trials keep their numbers. The "

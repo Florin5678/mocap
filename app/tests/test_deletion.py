@@ -9,7 +9,7 @@ from mocapapp.cli.main import main
 from mocapapp.core import deletion, qa, runner
 from mocapapp.core.export import default_selection, export
 from mocapapp.core.session import CONSENT_FILE, Layout, load_session, save_session
-from mocapapp.core.workflow import SetupError, inputs_ready, pick_video, prepare_session
+from mocapapp.core.workflow import SetupError, inputs_ready, set_mapping, set_trial_layout
 from tests.m3_fakes import FakeStages, make_session
 
 
@@ -25,12 +25,14 @@ def _finished(root: Path, monkeypatch, exported: bool = True):
         for t in session.trials:
             original = raw / f"take{t.label}.mp4"
             original.write_bytes(b"original video " * 10)
-            cam.trial_files[t.label] = str(original)
-            (layout.inputs(cam.name)).mkdir(parents=True, exist_ok=True)
-            (layout.inputs(cam.name) / f"trial_{t.label}.mp4").write_bytes(b"working copy")
-            (layout.inputs(cam.name) / f"trial_{t.label}.mp4.source").write_text("{}")
-        (layout.inputs(cam.name) / "intrinsic.mp4").write_bytes(b"calibration")
-        (layout.inputs(cam.name) / "extrinsic.mp4").write_bytes(b"calibration")
+            t.videos[cam.id] = str(original)
+            copy = layout.trial_input(t.label, cam.id)
+            copy.parent.mkdir(parents=True, exist_ok=True)
+            copy.write_bytes(b"working copy")
+            copy.with_name(copy.name + ".source").write_text("{}")
+        for calib in (layout.camera_input(cam.id), layout.layout_input("L1", cam.id)):
+            calib.parent.mkdir(parents=True, exist_ok=True)
+            calib.write_bytes(b"calibration")
     session.settings.keep_keypoints = True  # these tests delete the 2D keypoints themselves
     runner.run_session(session, root)
     for t in session.trials:
@@ -67,7 +69,7 @@ def test_raw_plan_groups_and_execute(tmp_path, monkeypatch):
     groups = {i.group for i in plan.items}
     assert groups == {"working", "derived"}  # originals only when asked
     paths = {i.path for i in plan.items}
-    assert layout.inputs("cam01") / "trial_1.mp4" in paths and layout.trial("1") / "videos" / "cam02.mp4" in paths
+    assert layout.trial_input("1", "cam01") in paths and layout.trial("1") / "videos" / "cam02.mp4" in paths
     assert layout.trial("1") / "pose" / "cam01_json" in paths and layout.trial("1") / "pose" / "cam01_pose.mp4" in paths
     assert layout.trial("1") / "pose-associated" / "cam02_json" in paths
     assert not any("sync_cam01" in str(p) for p in paths)
@@ -79,16 +81,17 @@ def test_raw_plan_groups_and_execute(tmp_path, monkeypatch):
     assert not result.failures and result.deleted == len(plan.items)
     assert any("SD cards" in c for c in result.checklist)
     tdir = layout.trial("1")
-    assert not (tdir / "pose").exists() and not (layout.inputs("cam01") / "trial_1.mp4").exists()
+    assert not (tdir / "pose").exists() and not (layout.trial_input("1", "cam01")).exists()
     # kept: results, configs, QA, sync plot, calibration inputs, other trial, originals
     assert list((tdir / "pose-3d").glob("*_LSTM.trc")) and list((tdir / "kinematics").glob("*.mot"))
     assert (tdir / "Config.toml").is_file() and (tdir / CONSENT_FILE).is_file()
     assert (tdir / "pose-sync" / "sync_cam01_vs_cam02.png").is_file()
-    assert (layout.inputs("cam01") / "intrinsic.mp4").is_file() and (layout.inputs("cam01") / "trial_2.mp4").is_file()
-    assert Path(session.camera("cam01").trial_files["1"]).is_file()
+    assert layout.camera_input("cam01").is_file() and layout.trial_input("2", "cam01").is_file()
+    assert Path(session.trial("1").videos["cam01"]).is_file()
 
     s2 = load_session(root)
-    assert s2.trial("1").raw_deleted_at and s2.frozen and not s2.trial("1").raw_present
+    assert s2.trial("1").raw_deleted_at and s2.trial("1").frozen and not s2.trial("1").raw_present
+    assert not s2.trial("2").frozen  # R20: the lock is per trial
     log = deletion.deletion_log(root)
     assert log[-1]["code"] == "T1-ABCDEF1" and log[-1]["scope"] == "raw" and log[-1]["groups"]["working"]["items"]
     assert json.loads((layout.export / "manifest.json").read_text())["deletions"][-1]["at"] == log[-1]["at"]
@@ -99,10 +102,10 @@ def test_raw_plan_groups_and_execute(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="cannot be processed"):
         runner.run_trial(s2, root, "1")
     assert inputs_ready(s2, root)
-    with pytest.raises(SetupError, match="Start a new session"):
-        prepare_session(s2, root, progress=lambda m: None)
-    with pytest.raises(SetupError):
-        pick_video(s2, "cam01", "intrinsic", layout.inputs("cam01") / "intrinsic.mp4")
+    with pytest.raises(SetupError, match="raw footage was deleted"):
+        set_mapping(s2, {("cam01", "1"): Path(s2.trial("2").videos["cam01"])})
+    with pytest.raises(SetupError, match="raw footage was deleted"):
+        set_trial_layout(s2, None, "1", "L1-other")
     assert deletion.plan_raw(s2, root, "1").items == []  # nothing left
 
 
@@ -113,7 +116,7 @@ def test_planned_deletion_waits_for_complete_exported_results(tmp_path, monkeypa
     assert any("not been exported" in b for b in plan.blockers)
     with pytest.raises(deletion.DeletionError, match="Not deleted yet"):
         deletion.execute(plan, session)
-    assert (Layout(root).inputs("cam01") / "trial_1.mp4").is_file()
+    assert Layout(root).trial_input("1", "cam01").is_file()
     # a broken result file also blocks
     export(session, root, default_selection(), None, {})
     mot = next((Layout(root).trial("1") / "kinematics").glob("*.mot"))
@@ -209,7 +212,7 @@ def test_cloud_warning_and_reminders(tmp_path, monkeypatch):
 def test_cli_dry_run_then_delete(tmp_path, monkeypatch, capsys):
     root = tmp_path / "S"
     _finished(root, monkeypatch)
-    video = Layout(root).inputs("cam01") / "trial_1.mp4"
+    video = Layout(root).trial_input("1", "cam01")
     assert main(["delete-raw", "--session", str(root), "--trial", "1"]) == 0
     out = capsys.readouterr().out
     assert "dry run" in out and str(video) in out and video.is_file()
@@ -219,8 +222,8 @@ def test_cli_dry_run_then_delete(tmp_path, monkeypatch, capsys):
                  "--confirm", "T1-ABCDEF1", "--after-run"]) == 0
     out = capsys.readouterr().out
     assert "Deleted" in out and "[ ]" in out and not video.exists()
-    assert main(["validate", "--session", str(root)]) == 1
-    assert "Start a new session" in capsys.readouterr().out
+    with pytest.raises(SystemExit, match="raw footage was deleted"):
+        main(["map", "--session", str(root), "--set", f"cam01:1={root.parent / 'S_raw' / 'cam01' / 'take2.mp4'}"])
     assert main(["reminders", "--root", str(tmp_path)]) == 0
     assert "T1-ABCDEF2" in capsys.readouterr().out
     assert main(["delete-session", "--session", str(root), "--trial", "2", "--yes", "--confirm", "T1-ABCDEF2"]) == 0

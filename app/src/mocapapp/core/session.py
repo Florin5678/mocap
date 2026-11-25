@@ -1,4 +1,8 @@
-"""Session model (session.json) and on-disk layout (PROJECT.md §5)."""
+"""Project model (session.json) and on-disk layout (PROJECT.md §5, §16).
+
+Schema 2 (0.2): a project holds cameras (each with its lens calibration), reference-point presets, camera layouts
+(which cameras stood where, with their reference points and extrinsic videos), participants and trials. A trial
+uses one layout, and with it every camera of that layout. Older session files are upgraded by `migrate.py`."""
 
 from __future__ import annotations
 
@@ -13,7 +17,7 @@ from pydantic import BaseModel, Field, PrivateAttr, field_validator, model_valid
 
 from mocapapp import __version__
 
-SCHEMA = 1
+SCHEMA = 2
 SESSION_FILE = "session.json"
 HEIGHT_MIN_M, HEIGHT_MAX_M = 1.00, 2.30
 
@@ -51,6 +55,33 @@ class DetailField(BaseModel):
     choices: list[str] = Field(default_factory=list)
     enabled: bool = False
     builtin: bool = False
+
+
+def _is_v1(data: dict) -> bool:
+    """Every saved session.json carries its schema; data built in code without one is old only if it looks old
+    (cameras named but without ids, or the session-wide extrinsics of 0.1.x)."""
+    if "schema" in data:
+        return data["schema"] < SCHEMA
+    cams = data.get("cameras") or []
+    return "extrinsics" in data or any(isinstance(c, dict) and "id" not in c for c in cams)
+
+
+def _one_participant_per_trial(data: dict) -> dict:
+    """Sessions before 0.1.0rc9 kept pseudonym, height and consent on each trial (one participant per trial)."""
+    if data.get("participants"):
+        return data
+    data = dict(data)
+    people, trials = [], []
+    for t in data.get("trials", []):
+        if not isinstance(t, dict) or "code" not in t:
+            trials.append(t)
+            continue
+        t = dict(t)
+        people.append({"label": t["label"], **{k: t.pop(k) for k in PARTICIPANT_FIELDS if k in t}})
+        t["participant"] = t["label"]
+        trials.append(t)
+    data["participants"], data["trials"] = people, trials
+    return data
 
 
 def default_details() -> list[DetailField]:
@@ -96,8 +127,13 @@ def _delegate(name: str) -> property:
 
 
 class Trial(BaseModel):
-    label: str
+    label: str  # fixed: folders and results are named after it
     participant: str = ""  # Participant.label
+    name: str = ""  # free-text name or note (R9)
+    date: str | None = None  # YYYY-MM-DD the trial was recorded (compared with its layout's date, R8)
+    layout: str = ""  # CameraLayout.id
+    videos: dict[str, str] = Field(default_factory=dict)  # Camera.id -> source video of this trial
+    layout_override: bool = False  # the researcher accepted the 'layout from another day' warning (R8)
     mapping_method: Literal["digit", "name", "chronological", "manual"] | None = None
     # PROJECT.md §8.4: set by save_session when raw footage is kept with consent ("study finished")
     retention_until: str | None = None
@@ -130,6 +166,11 @@ class Trial(BaseModel):
     def raw_present(self) -> bool:
         return self.raw_deleted_at is None and self.withdrawn_at is None
 
+    @property
+    def frozen(self) -> bool:
+        """Raw footage deleted (or the participant withdrew): this trial's videos can no longer change (R20)."""
+        return not self.raw_present
+
 
 class VideoRef(BaseModel):
     file: str
@@ -141,53 +182,64 @@ class CalibVideo(VideoRef):
     status: Literal["pending", "ok", "warn", "fail"] = "pending"
 
 
-class CameraPosition(BaseModel):
-    """A further calibration video of a camera, used by the trials listed (0.1.0rc13 for extrinsic videos: the camera
-    was moved; 0.1.0rc17 also intrinsic ones). The camera's main video has the key "" and applies to every trial not
-    listed in one of its further videos."""
-    key: str  # "2", "3", ...
-    file: str
-    trials: list[str] = Field(default_factory=list)
-
-
-ROLES = ("intrinsic", "extrinsic")
-
-
 class Camera(BaseModel):
-    name: str  # cam01, cam02, ... (order = calibration order, see upstream-notes §2)
-    source_dir: str
+    """A camera with its lens (intrinsic) calibration, reused by every layout that includes it (R5). Locked once a
+    trial using it has started running (R6): to recalibrate, duplicate the camera and calibrate the copy."""
+    id: str  # cam01, cam02, ...: files are named after it, it never changes
+    name: str = ""  # shown to the researcher; 'camNN' by default
+    source_dir: str = ""  # folder holding this camera's videos (used to suggest files)
+    resolution: str = ""  # optional, for organisation (R5)
+    zoom: str = ""
+    focus: str = ""
+    stabilisation: str = ""
+    fps: str = ""
+    notes: str = ""
     intrinsic: CalibVideo | None = None
+
+    @model_validator(mode="after")
+    def _named(self):
+        if not self.name:
+            self.name = self.id
+        return self
+
+
+class LayoutCamera(BaseModel):
+    """One camera of a layout: its extrinsic video and, once the points were clicked, the solved position."""
+    camera: str  # Camera.id
     extrinsic: VideoRef | None = None
-    trial_files: dict[str, str] = Field(default_factory=dict)  # trial label -> source file
-    positions: list[CameraPosition] = Field(default_factory=list)  # further extrinsic videos
-    lenses: list[CameraPosition] = Field(default_factory=list)  # further intrinsic videos (0.1.0rc17)
+    # summary of the solved position: frame_index, n_points, error_cm, error_px, status, overridden
+    result: dict | None = None
 
-    def extras(self, role: str) -> list[CameraPosition]:
-        return self.lenses if role == "intrinsic" else self.positions
 
-    def video_for(self, role: str, trial: str) -> str:
-        """The key of the calibration video a trial uses with this camera ("" = the main video)."""
-        return next((p.key for p in self.extras(role) if trial in p.trials), "")
+class PointsPreset(BaseModel):
+    """Named reference points, reusable for new layouts and importable from another project (R3)."""
+    id: str  # P1, P2, ...
+    name: str
+    points: dict  # scene_points.Scene as JSON
 
-    def position_for(self, trial: str) -> str:
-        return self.video_for("extrinsic", trial)
 
-    def lens_for(self, trial: str) -> str:
-        return self.video_for("intrinsic", trial)
+class CameraLayout(BaseModel):
+    """Where the cameras stood: reference points plus one extrinsic video per camera (R7)."""
+    id: str  # L1, L2, ...
+    name: str
+    date: str | None = None  # YYYY-MM-DD the extrinsic videos were recorded (R8)
+    points: dict | None = None  # scene_points.Scene as JSON (copied from a preset, editable)
+    preset: str = ""  # PointsPreset.id the points were copied from
+    cameras: list[LayoutCamera] = Field(default_factory=list)  # in calibration order: cam01, cam02, ... in trials
+    imported_from: str = ""  # another project's name, when imported
 
-    def extra(self, role: str, key: str) -> CameraPosition:
-        for p in self.extras(role):
-            if p.key == key:
-                return p
-        raise KeyError(f"{self.name} has no {role} video {key}.")
+    def camera_ids(self) -> list[str]:
+        return [c.camera for c in self.cameras]
 
-    def position(self, key: str) -> CameraPosition:
-        return self.extra("extrinsic", key)
+    def slot(self, camera: str) -> str:
+        """The camera's name inside this layout's trial folders and calibration files: cam01, cam02, ..."""
+        return f"cam{self.camera_ids().index(camera) + 1:02d}"
 
-    def calib_videos(self, role: str) -> list[tuple[str, str]]:
-        """(key, file) of every calibration video for this role, the main one first ("" when it is chosen)."""
-        main = getattr(self, role)
-        return ([("", main.file)] if main is not None else []) + [(p.key, p.file) for p in self.extras(role)]
+    def entry(self, camera: str) -> LayoutCamera:
+        for c in self.cameras:
+            if c.camera == camera:
+                return c
+        raise KeyError(f"Layout {self.name} has no camera {camera}.")
 
 
 class FilterSettings(BaseModel):
@@ -248,11 +300,11 @@ class Session(BaseModel):
     trials: list[Trial]
     study_info: StudyInfo = Field(default_factory=StudyInfo)
     details: list[DetailField] = Field(default_factory=default_details)  # asked per trial (0.1.0rc13)
-    cameras: list[Camera]
-    extrinsics: list[dict] = Field(default_factory=list)
+    cameras: list[Camera] = Field(default_factory=list)
+    presets: list[PointsPreset] = Field(default_factory=list)
+    layouts: list[CameraLayout] = Field(default_factory=list)
     settings: Settings = Field(default_factory=Settings)
     run_state: RunState = Field(default_factory=RunState)
-    sync_cue_confirmed: bool = False
     # "app" = computed with the app's calibration steps; "imported" = an existing Calib file (sample data only)
     calibration_source: Literal["app", "imported"] = "app"
 
@@ -260,22 +312,17 @@ class Session(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def _one_participant_per_trial(cls, data):
-        """Sessions before 0.1.0rc9 kept pseudonym, height and consent on each trial (one participant per trial)."""
-        if not isinstance(data, dict) or data.get("participants"):
+    def _upgrade(cls, data):
+        """Older session files: one participant per trial (before 0.1.0rc9), then schema 1 -> 2 (0.2)."""
+        if not isinstance(data, dict):
             return data
-        data = dict(data)
-        people, trials = [], []
-        for t in data.get("trials", []):
-            if not isinstance(t, dict) or "code" not in t:
-                trials.append(t)
-                continue
-            t = dict(t)
-            people.append({"label": t["label"], **{k: t.pop(k) for k in PARTICIPANT_FIELDS if k in t}})
-            t["participant"] = t["label"]
-            trials.append(t)
-        data["participants"], data["trials"] = people, trials
+        data = _one_participant_per_trial(data)
+        if _is_v1(data):
+            from mocapapp.core.migrate import upgrade_v1
+
+            data = upgrade_v1(data).data
         return data
+
 
     @model_validator(mode="after")
     def _linked(self):
@@ -309,21 +356,72 @@ class Session(BaseModel):
     def active_participants(self) -> list[Participant]:
         return [p for p in self.participants if p.withdrawn_at is None]
 
-    def camera(self, name: str) -> Camera:
+    def camera(self, camera_id: str) -> Camera:
         for cam in self.cameras:
-            if cam.name == name:
+            if cam.id == camera_id:
                 return cam
-        raise KeyError(f"No camera named {name} in this session.")
+        raise KeyError(f"No camera {camera_id} in this project.")
+
+    def layout(self, layout_id: str) -> CameraLayout:
+        for lay in self.layouts:
+            if lay.id == layout_id:
+                return lay
+        raise KeyError(f"No layout {layout_id} in this project.")
+
+    def preset(self, preset_id: str) -> PointsPreset:
+        for p in self.presets:
+            if p.id == preset_id:
+                return p
+        raise KeyError(f"No reference-point preset {preset_id} in this project.")
+
+    def trial_layout(self, label: str) -> CameraLayout | None:
+        t = self.trial(label)
+        try:
+            return self.layout(t.layout) if t.layout else None
+        except KeyError:
+            return None
+
+    def trial_cameras(self, label: str) -> list[tuple[str, Camera, LayoutCamera]]:
+        """(slot name cam01.., camera, its entry in the layout) for every camera a trial uses, in calibration order."""
+        lay = self.trial_layout(label)
+        if lay is None:
+            return []
+        return [(lay.slot(lc.camera), self.camera(lc.camera), lc) for lc in lay.cameras]
+
+    def trials_with_layout(self, layout_id: str) -> list[Trial]:
+        return [t for t in self.trials if t.layout == layout_id]
+
+    def layouts_with_camera(self, camera_id: str) -> list[CameraLayout]:
+        return [lay for lay in self.layouts if camera_id in lay.camera_ids()]
+
+    def camera_used(self, camera_id: str) -> bool:
+        """R6: a trial whose layout includes this camera has started running (some stage finished)."""
+        done = self.run_state.stage_done
+        return any(done.get(t.label) for lay in self.layouts_with_camera(camera_id)
+                   for t in self.trials_with_layout(lay.id))
+
+    def layout_warning(self, label: str) -> str:
+        """R8: the trial was recorded on another day than its layout (and the researcher did not accept that)."""
+        t = self.trial(label)
+        lay = self.trial_layout(label)
+        if lay is None or t.layout_override or not (lay.date and t.date) or lay.date == t.date:
+            return ""
+        return (f"Trial {t.label} was recorded on {t.date}, its layout {lay.name} on {lay.date}. Were the cameras set "
+                "up again? Then record new extrinsic videos and make a new layout.")
+
+    def new_id(self, kind: str) -> str:
+        """The next free id: kind 'cam' -> cam01, cam02...; 'L' -> L1...; 'P' -> P1..."""
+        taken = {"cam": {c.id for c in self.cameras}, "L": {lay.id for lay in self.layouts},
+                 "P": {p.id for p in self.presets}}[kind]
+        n = 1
+        while (f"cam{n:02d}" if kind == "cam" else f"{kind}{n}") in taken:
+            n += 1
+        return f"cam{n:02d}" if kind == "cam" else f"{kind}{n}"
 
     @property
     def active_trials(self) -> list[Trial]:
         """Trials whose participant has not withdrawn (withdrawn participants keep only their pseudonym and the log)."""
         return [t for t in self.trials if t.withdrawn_at is None]
-
-    @property
-    def frozen(self) -> bool:
-        """Raw footage was deleted for some trial: the session's videos can no longer be prepared again."""
-        return any(not t.raw_present for t in self.trials)
 
     @property
     def asked_details(self) -> list[DetailField]:
@@ -359,12 +457,24 @@ class Layout:
     def session_json(self) -> Path:
         return self.root / SESSION_FILE
 
-    @property
-    def scene_json(self) -> Path:
-        return self.root / "scene.json"
+    def camera_input(self, camera: str) -> Path:
+        """Normalised copy of a camera's intrinsic video."""
+        return self.root / "inputs" / "cameras" / camera / "intrinsic.mp4"
 
-    def inputs(self, cam: str) -> Path:
-        return self.root / "inputs" / cam
+    def layout_input(self, layout: str, camera: str) -> Path:
+        """Normalised copy of a camera's extrinsic video in a layout."""
+        return self.root / "inputs" / "layouts" / layout / f"{camera}.mp4"
+
+    def trial_input(self, label: str, camera: str) -> Path:
+        """Normalised copy of a trial's video from one camera (by camera id)."""
+        return self.root / "inputs" / "trials" / label / f"{camera}.mp4"
+
+    @property
+    def cameras_work(self) -> Path:
+        return self.calibration_work / "cameras"  # intrinsics_<camera>.json
+
+    def layout_work(self, layout: str) -> Path:
+        return self.calibration_work / "layouts" / layout  # extrinsics_<camera>.json, frames, review images
 
     @property
     def calibration_work(self) -> Path:
@@ -372,10 +482,11 @@ class Layout:
 
     @property
     def calib_file(self) -> Path:
+        """Imported calibration (sample data): used by every trial."""
         return self.calibration_work / "Calib_scene.toml"
 
     def trial_calib(self, label: str) -> Path:
-        """Calibration for a trial that uses a further calibration video of some camera (0.1.0rc13)."""
+        """A trial's calibration, made from its layout and that layout's cameras."""
         return self.calibration_work / f"Calib_scene_trial_{label}.toml"
 
     @property
@@ -455,7 +566,14 @@ def existing_codes(output_root: Path) -> set[str]:
 
 
 def load_session(root: Path) -> Session:
+    """Read a project. An older session folder is upgraded first, on disk (migrate.migrate_dir, with a backup)."""
     path = Layout(root).session_json
     if not path.is_file():
         raise FileNotFoundError(f"No {SESSION_FILE} in {root}. Is this a session folder made by mocapapp?")
-    return Session.model_validate(json.loads(path.read_text(encoding="utf-8")))
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(data, dict) and data.get("schema", 1) < SCHEMA:
+        from mocapapp.core.migrate import migrate_dir
+
+        migrate_dir(root)
+        data = json.loads(path.read_text(encoding="utf-8"))
+    return Session.model_validate(data)

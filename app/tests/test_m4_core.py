@@ -126,24 +126,24 @@ def test_changed_sources_are_prepared_again(tmp_path):
     # another extrinsic video: the old copy and anything computed from it are dropped
     other = tmp_path / "elsewhere" / "ext.mp4"
     make_video(other, seconds=0.8)
-    (layout.calibration_work).mkdir(exist_ok=True)
-    (layout.calibration_work / "extrinsics_cam01.json").write_text("{}")
-    layout.calib_file.write_text("x")
+    layout.layout_work("L1").mkdir(parents=True, exist_ok=True)
+    (layout.layout_work("L1") / "extrinsics_cam01.json").write_text("{}")
+    layout.trial_calib("1").write_text("x")
     pick_video(session, "cam01", "extrinsic", other, root)
-    assert not (layout.inputs("cam01") / "extrinsic.mp4").exists()
-    assert not (layout.calibration_work / "extrinsics_cam01.json").exists() and not layout.calib_file.exists()
+    assert not layout.layout_input("L1", "cam01").exists()
+    assert not (layout.layout_work("L1") / "extrinsics_cam01.json").exists() and not layout.trial_calib("1").exists()
     assert not inputs_ready(session, root)
     prepare_session(session, root, progress=lambda m: None)
     assert inputs_ready(session, root)
-    assert session.camera("cam01").extrinsic.origin == "manual"
+    assert session.layout("L1").entry("cam01").extrinsic.origin == "manual"
 
     # remapping a trial file replaces its copy, even if a stale copy is still there
     new_trial = dirs[1] / "take9.mp4"
     make_video(new_trial, seconds=0.9)
     set_mapping(session, {("cam01", "1"): dirs[0] / "run1.mp4", ("cam02", "1"): new_trial}, root)
-    assert not (layout.inputs("cam02") / "trial_1.mp4").exists()
+    assert not layout.trial_input("1", "cam02").exists()
     prepare_session(session, root, progress=lambda m: None)
-    stamp = (layout.inputs("cam02") / "trial_1.mp4.source").read_text()
+    stamp = layout.trial_input("1", "cam02").with_name("cam02.mp4.source").read_text()
     assert "take9.mp4" in stamp and load_session(root).trials[0].mapping_method == "manual"
 
 

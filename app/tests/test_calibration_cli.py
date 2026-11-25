@@ -44,7 +44,7 @@ def test_calibration_flow(tmp_path, capsys):
     # click the projections of the true cameras, using each camera's own intrinsics
     from mocapapp.core.calibration.intrinsics import load_result
 
-    work = Layout(root).calibration_work
+    work, lwork = Layout(root).cameras_work, Layout(root).layout_work("L1")
     for cam, pos in CAMS.items():
         r, t = look_at(np.array(pos), [1.5, 1.0, 0.6])
         uv = project(scene.array(), r, t)
@@ -56,20 +56,21 @@ def test_calibration_flow(tmp_path, capsys):
         assert main(["calibrate", "extrinsics", "--session", s, "--camera", cam, "--points", str(csv)]) == 0
         assert load_result(work, cam) is not None
     text = capsys.readouterr().out
-    assert "All cameras calibrated" in text
+    assert "Calibration written for 1 trial(s)" in text
 
-    calib = Layout(root).calib_file
+    calib = Layout(root).trial_calib("1")
     data = rtoml.load(calib)
     assert list(data)[:3] == ["cam01", "cam02", "cam03"]
     session = load_session(root)
-    assert [e["camera"] for e in session.extrinsics] == list(CAMS)
-    for e in session.extrinsics:
-        assert e["status"] in ("ok", "warn") and e["error_cm"] < 2.5
+    lay = session.layout("L1")
+    assert lay.camera_ids() == list(CAMS)
+    for lc in lay.cameras:
+        assert lc.result["status"] in ("ok", "warn") and lc.result["error_cm"] < 2.5
     assert all(c.intrinsic.status in ("ok", "warn") for c in session.cameras)
     # recovered camera position close to the truth (intrinsics come from the synthetic board video)
     from mocapapp.core.calibration.extrinsics import load_result as load_ext
 
-    np.testing.assert_allclose(load_ext(work, "cam01").camera_position, CAMS["cam01"], atol=0.1)
+    np.testing.assert_allclose(load_ext(lwork, "cam01").camera_position, CAMS["cam01"], atol=0.1)
 
     # trials get the calibration; a corrected reference point recomputes the camera positions from the clicks
     # already made and rewrites the calibration everywhere (0.1.0rc15; before, every camera was clicked again)

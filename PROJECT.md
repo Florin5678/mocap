@@ -422,3 +422,106 @@ mocapapp delete-session --session <dir>              # withdrawal
 - Pose2Sim README (PyPI): https://pypi.org/project/pose2sim/
 - OpenSim — Scripting in Python: https://opensimconfluence.atlassian.net/wiki/spaces/OpenSim/pages/53085346/Scripting+in+Python
 - GitHub Docs — About forks: https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/working-with-forks/about-forks
+
+---
+
+## 16. Planned: project-based layout (v0.2, agreed 2026-11-25, reviewed 2026-11-25)
+
+**Status:** plan only; nothing built yet. It replaces the one-way wizard (Session → Trials → Intrinsic → Extrinsic → Run → Results → Viewer) with a hub of five sections around a trials table. Once it lands it supersedes **D5** (already relaxed in 0.1.0rc17), **D9** (already relaxed: participants can have several trials), §5.1–5.3 and the step numbering of §6. Everything else in this spec stays.
+
+**Aims.** (1) Scale: set up cameras, reference points and participants once and reuse them. (2) Speed: a new trial is one pre-filled row. (3) **Keep every current function**; only reorganise (§16.7 maps each one).
+
+### 16.1 Owner decisions (R = revamp; fixed — do not re-litigate)
+
+| # | Decision |
+|---|---|
+| R1 | The app works per **project**. A project is a study, not a single day: it can cover several days of filming and processing. Projects are saved to and opened from project files (today's `.mocapproj` + folder). |
+| R2 | **Participants exist only inside a project**; their data is saved with the project. No app-wide participant list. |
+| R3 | **Cameras, reference-point presets and layouts** are stored in the project. *Import from another project ...* copies any of them from another project's file. |
+| R4 | Sections: **Session, Participants, Cameras, Layouts, Results.** Run is a button on Session, not a section. |
+| R5 | **Cameras:** a name (default `camNN`) and optional fields: resolution, zoom, focus, stabilisation, frame rate (for organisation). Saved cameras can be **duplicated, edited and deleted**. Intrinsic calibration works as on today's Intrinsic calibration page; the result is stored with the camera and used by every trial whose layout includes it. |
+| R6 | **No intrinsic recalibration of a camera that is already used** (see §16.2 for "used"). To recalibrate, duplicate the camera and calibrate the copy. |
+| R7 | **Layouts:** what today's Extrinsic calibration page does (reference points, click points, review image, errors). A layout says which cameras are used and where they stood, so **trials show only the layout**; the cameras follow from it. |
+| R8 | **Warn when a trial reuses a layout** recorded on another day (including one imported from another project): "Were the cameras set up again? Record new extrinsic videos." The researcher can **override** it (*Use this layout anyway*); the override is recorded with the trial. |
+| R9 | **Trials table** (Session): one row per trial; **trial numbers are fixed** (folders and results are named after them), with a free-text **name/note**; a **Status** column: *not ready (what is missing), ready, running, needs sync fix, done, out of date*. *Run this trial*, *Check sync ...* and *Accept as is* stay in the row. Rows are **multi-selectable** so one action applies to several trials. A **Duplicate** action. Clicking a row opens a **trial panel** with its videos, checks and state. |
+| R10 | **Add-trial row** under the table, pre-filled from the previous trial and editable before **Add**. Participant default: the previous trial's participant while they have fewer trials than *trials per participant*, otherwise a new participant (random pseudonym). The participant field is **highlighted**. |
+| R11 | **Participants table:** random pseudonyms (editable, as now), mandatory **Height**, optional columns via *Edit columns ...* (weight, handedness, age, gender, custom), consent form buttons. Consent in **one drop-down column**: *Not signed yet / Signed, delete footage / Signed, keep footage*, same rules as today's three columns. |
+| R12 | **Details stay stored per trial** (as now). Differences between days are recorded with custom columns. **No per-trial override UI.** |
+| R13 | Raw-footage deletion at **trial level and project level**, working as it does now (§8.4). Session settings gain **Delete raw footage for all participants** (tick) with a drop-down for **when** (e.g. after the results are exported). |
+| R14 | **App settings** (Help > Settings, this computer) and **Session settings** (this project) stay separate. |
+| R15 | **Run progress per trial** in the Status column, plus a **bar at the bottom of the Session page** showing what the run is working on now. |
+| R16 | **Results** combines today's Results and Viewer: trials on the left; tabs **Quality, 3D, Data, Export**. Finished trials appear while others still run. **No Finished!/Close button.** |
+| R17 | **Keep the tutorial** (greeting "How it works"), rewritten for the new layout: calibration, the ChArUco board download, sync cue, reference points, etc. |
+| R18 | **No sync-cue tick.** Only a reminder to record a sync cue (such as a clap) at the start of every video, shown in the tutorial and on the Session page next to the trials table (keeps D2). It never blocks a run. |
+| R19 | **Start over (ignore finished stages)** stays a separate checkbox next to Run, as today, so it is hard to use by mistake. |
+| R20 | **Freezing after deletion is per trial** (§16.2): a trial whose raw footage was deleted keeps its results but cannot change videos or re-run the stages that need them; other trials and new trials are unaffected. |
+
+### 16.2 Data model
+
+- **Project** = today's session folder + `session.json` (schema 2) + optional `.mocapproj` pointer. Holds settings, cameras, point presets, layouts, participants, trials, run state. The project folder stays self-contained (movable, reproducible); imports **copy** into it.
+- **Camera** `{id, name, resolution?, zoom?, focus?, stabilisation?, fps?, intrinsic_video, intrinsics (result + QA), notes}`. **Used** = referenced by a layout of a trial that has started running (any finished stage). Used cameras: name and optional fields editable; intrinsic video and result locked (R6). Owner confirmed. Before use, recalibrating recomputes dependent layouts from their saved clicks (as today).
+- **Reference-point preset** `{id, name, unit, points, origin text, +X text}`: today's `scene.json`, named. Importable (R3).
+- **Layout** `{id, name, date, points (copied from a preset when created, editable), cameras: [{camera_id, extrinsic_video, clicks, frame, extrinsics + QA}]}`. Importable with its cameras (R3). **Date** = recording time of its extrinsic videos when readable, else the day it was made; editable.
+- **Trial** `{label (fixed), name/note, date, participant, layout_id, videos per camera of the layout, details (per trial, R12), status, run state, raw_present, delete flag}`. A trial uses every camera of its layout. **Date** = recording time of its videos when readable, else the day added. R8 compares trial date with layout date; `layout_override` records an accepted warning.
+- **Participant** as now (pseudonym, former pseudonyms, consent, delete choice, withdrawn). The consent drop-down maps onto today's fields: *Not signed yet* = not attested; *Signed, delete footage* = attested, no storage consent; *Signed, keep footage* = attested + storage consent.
+- **Freezing after deletion becomes per trial.** Today, once raw footage of **any** trial is deleted the whole session is frozen: no re-checking, re-mapping, re-copying or adding trials ("start a new session"). In a project this would block all later work, so: a trial whose raw footage was deleted keeps its results but its videos can no longer be changed and stages that need the videos cannot re-run; every other trial, and new trials, are unaffected.
+- **Calibration per trial:** each trial gets its own `Calib_scene.toml` from its layout (and the layout's cameras' intrinsics); 0.1.0rc17 already writes per-trial files.
+- **Migration** of 0.1.x sessions on open: cameras → camera entries (each extra intrinsic video → a duplicated camera); `scene.json` → preset "Points 1"; for each distinct combination of extrinsic video (and intrinsic video) per camera used by the trials → one layout; trials point to their layout. Tested on fixtures of rc13–rc17 sessions.
+
+### 16.3 Sections
+
+**Session** (home)
+- Trials table (R9) with columns: Trial, Name/note, Participant, Layout, Status, row buttons (Run this trial, Check sync ..., Accept as is). Header fixed, scrolls.
+- Add-trial row (R10) + **Add**. Videos for each layout camera are suggested by number (today's name rule) and confirmed in the trial panel.
+- Actions on selected trials: Run, Duplicate, Change layout, Check and copy videos, Delete raw footage ..., Remove trial ..., Generate consent forms.
+- Buttons: **Session settings ...**, **Run** (runs the selected trials; with none selected, every ready trial), and the **Start over (ignore finished stages)** checkbox next to it (R19).
+- Sync reminder next to the trials table: record a sync cue such as a clap at the start of every video (R18; no tick).
+- Bottom bar (R15): current stage and trial, overall progress, **Stop**, *Show Pose2Sim's own output*, time and disk estimate.
+- Empty project: a short checklist (add cameras → calibrate → reference points → layout → participants → first trial) linking to each section; sidebar badges (✓ or "N to do").
+
+**Trial panel** (opens on row click): participant, layout, date, name/note; video per camera (choose, suggested ones highlighted); *Check videos* results (fps, resolution vs the camera's calibration, length, sync); copy status and disk space; per-trial summary (today's *Before you run*); state and messages; layout-from-another-day warning with *Use this layout anyway* (R8).
+
+**Participants**: R11 table, one row per participant (pseudonym, height, chosen columns, consent drop-down, consent form *Generate ...*); *Generate all consent forms ...*; *Edit columns ...*; issues (consent missing). A value entered here is written to all of that participant's trials (R12: stored per trial, as today's copy rule; no separate per-trial editor). Owner confirmed.
+
+**Cameras**: table of saved cameras (name, optional fields, intrinsic video, result PASS/CHECK/FAIL, error, used by N trials); Add, Duplicate, Edit, Delete (refused while used), *Choose intrinsic video ...*, *Calibrate* / *Calibrate all*, board settings, advice; *Import from another project ...*.
+
+**Layouts**: list of layouts (name, date, cameras, state); per layout: reference points (from a preset; *Edit reference points ...*, issues, *Save as preset ...*), camera rows (camera, extrinsic video, Click points ..., Review image, result, points, error, position, notes); New layout (pick cameras, preset), Duplicate layout (same cameras, new videos). Presets: list. Layouts and presets: *Import from another project ...*.
+
+**Results**: trials on the left (traffic light); tabs **Quality** (metrics, QA report, 3D preview link), **3D** (viewer), **Data** (joint angles / markers, plot, compare trials, speed, CSV), **Export** (choices, Export, *Delete raw footage now*, deletion notices). Opens after Run; shows trials as they finish.
+
+**Session settings**: output folder (*Change output folder ...*), study code, trials per participant, notes, pose detection, keypoints, OpenSim model, overlays, keep 2D files, smoothing, **Delete raw footage for all participants** + when (R13). **App settings** unchanged (R14).
+
+### 16.4 Run readiness (per trial; owner confirmed)
+A trial is **ready** when: its participant has signed consent and a height (optional columns never block); its layout exists and every layout camera has an intrinsic result and extrinsics that do not block; a video is chosen, checked and copied for every layout camera; a layout warning (R8) is resolved or overridden. *Not ready* lists what is missing. Run never waits for unrelated trials.
+
+### 16.5 CLI (core and CLI first, §0.3)
+`project new|open|info|import --from <project file> [--cameras] [--points] [--layouts]`; `camera add|list|edit|duplicate|delete|calibrate`; `points preset save|list|show|check`; `layout new|list|edit|duplicate|click|status`; `participant add|list|set|consent|form`; `trial add [--like N]|list|edit|duplicate|remove|videos|check|status`; `run [--trial ..]`, `export`, `delete-raw`, `delete-session` as now. 0.1.x commands keep working where they still make sense and otherwise say which command replaces them.
+
+### 16.6 Phases (branch `app/projects`; 0.1.x stays the release line for fixes)
+
+| Phase | Content | Exit criteria |
+|---|---|---|
+| P1 | Core model (§16.2): schema 2, cameras, presets, layouts, trials→layout, per-trial freeze, readiness (§16.4), per-trial calibration files, migration of 0.1.x | Unit tests for model, readiness, R6 lock, R8 warning, migration of rc13–rc17 fixtures; golden pipeline test passes from a migrated session |
+| P2 | CLI (§16.5), import from another project | Full session from raw videos by CLI only; import copies cameras, presets and layouts (with their videos) and no participant data |
+| P3 | GUI shell: five sections, sidebar badges, Session settings, Cameras and Layouts sections | Calibrate cameras and a layout in the GUI on sample data |
+| P4 | Participants section (consent drop-down) | Consent/deletion rules tests as today (§8) |
+| P5 | Session hub: table, add row + pre-fill, multi-select actions, duplicate, trial panel, status, run per trial, bottom bar | Full wizard test rewritten on the hub; no loss vs §16.7 |
+| P6 | Results (+ viewer), tutorial, user guide, privacy notes, decisions, screenshots | Usability check of a new project with 2 days of trials; release **0.2.0rc1** |
+
+### 16.7 Where every current function goes
+
+| Today | New home |
+|---|---|
+| Session step: output folder, move, study code, trials per participant, notes | Session settings |
+| Session step: camera folders | Cameras (folder per camera for suggestions) and trial panel |
+| Trials: participant ID, height, columns, consent ticks, consent forms, issues | Participants |
+| Trials: add/remove trial | Session table (add row, actions) |
+| Trials: Check videos, mapping, name suggestions, copy + disk space | Trial panel; multi-select *Check and copy videos* |
+| Trials: calibration videos and per-trial assignment dialog | Cameras (intrinsic) and Layouts (extrinsic); trial → layout |
+| Intrinsic calibration page | Cameras |
+| Extrinsic calibration page (reference points + camera positions) | Layouts (+ presets) |
+| Run: summary, sync reminder (tick removed, R18), advanced settings, Run all/selected/this trial, Stop, Start over checkbox, Check sync, Accept as is, progress, Pose2Sim output, disk check | Session (table, actions, bottom bar), trial panel, Session settings |
+| Results: traffic lights, metrics, 3D preview, export, Delete raw footage now | Results: Quality, Export |
+| Viewer: 3D, data, compare, speed, CSV | Results: 3D, Data |
+| Finished! (save, reminders, back to start) | Dropped (R16): saving is automatic; reminders shown on Session and in recent projects |
+| File menu (participant data and deletion, recent, projects, sample data, move), Help (tutorial, board PDF, environment check, models, settings) | Unchanged; "session" wording becomes "project" |

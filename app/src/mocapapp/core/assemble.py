@@ -49,25 +49,41 @@ def _common_fps(report: Report, files: list[Path]) -> float | None:
     return Counter(rates).most_common(1)[0][0]
 
 
-def plan_inputs(session: Session, root: Path, report: Report) -> Plan:
-    if not report.ok:
-        raise ValueError("Fix the validation errors before preparing the videos.")
+def input_sources(session: Session, root: Path, labels: list[str] | None = None) -> list[tuple[Path, Path]]:
+    """(source video, normalised copy) for every camera's intrinsic video, every layout's extrinsic videos and the
+    trials' videos (only these trials when labels are given; their layouts and cameras only)."""
     layout = Layout(root)
+    trials = [t for t in session.trials if t.raw_present and (labels is None or t.label in labels)]
+    used_layouts = {t.layout for t in trials} if labels is not None else {lay.id for lay in session.layouts}
+    used_cams = {c for lay in session.layouts if lay.id in used_layouts for c in lay.camera_ids()}
+    if labels is None:
+        used_cams |= {c.id for c in session.cameras}
     sources: list[tuple[Path, Path]] = []
     for cam in session.cameras:
-        sources.append((Path(cam.intrinsic.file), layout.inputs(cam.name) / "intrinsic.mp4"))
-        sources.append((Path(cam.extrinsic.file), layout.inputs(cam.name) / "extrinsic.mp4"))
-        for pos in cam.positions:  # further extrinsic videos (0.1.0rc13), intrinsic ones (0.1.0rc17)
-            sources.append((Path(pos.file), layout.inputs(cam.name) / f"extrinsic_{pos.key}.mp4"))
-        for lens in cam.lenses:
-            sources.append((Path(lens.file), layout.inputs(cam.name) / f"intrinsic_{lens.key}.mp4"))
-        for label, f in cam.trial_files.items():
-            if not session.trial(label).raw_present:
+        if cam.intrinsic is not None and cam.id in used_cams:
+            sources.append((Path(cam.intrinsic.file), layout.camera_input(cam.id)))
+    for lay in session.layouts:
+        if lay.id not in used_layouts:
+            continue
+        for lc in lay.cameras:
+            if lc.extrinsic is not None:
+                sources.append((Path(lc.extrinsic.file), layout.layout_input(lay.id, lc.camera)))
+    for trial in trials:
+        for _slot, cam, _lc in session.trial_cameras(trial.label):
+            f = trial.videos.get(cam.id)
+            if not f:
                 continue
-            if not Path(f).is_file() and session.run_state.trial_status.get(label) == "done":
+            if not Path(f).is_file() and session.run_state.trial_status.get(trial.label) == "done":
                 continue  # finished trial whose original was removed later: its copy (if any) stays as it is
-            sources.append((Path(f), layout.inputs(cam.name) / f"trial_{label}.mp4"))
-    trial_files = [Path(f) for c in session.cameras for f in c.trial_files.values() if Path(f).is_file()]
+            sources.append((Path(f), layout.trial_input(trial.label, cam.id)))
+    return sources
+
+
+def plan_inputs(session: Session, root: Path, report: Report, labels: list[str] | None = None) -> Plan:
+    if not report.ok:
+        raise ValueError("Fix the validation errors before preparing the videos.")
+    sources = input_sources(session, root, labels)
+    trial_files = [Path(f) for t in session.trials for f in t.videos.values() if Path(f).is_file()]
     plan = Plan(target_fps=_common_fps(report, trial_files))
     root.mkdir(parents=True, exist_ok=True)
     plan.bytes_free = shutil.disk_usage(root).free
@@ -96,6 +112,7 @@ def prepare_inputs(plan: Plan, report: Report, progress: Progress = print) -> di
             done[str(dst)] = "existing"
             continue
         dst.unlink(missing_ok=True)  # another source was chosen since (new mapping or calibration video)
+        dst.parent.mkdir(parents=True, exist_ok=True)
         progress(f"[{i}/{len(plan.jobs)}] {src.name} -> {dst.parent.name}/{dst.name}")
         info = report.probes.get(str(src))
         done[str(dst)] = media.normalise(src, dst, info, plan.target_fps)
@@ -117,12 +134,10 @@ def _link_or_copy(src: Path, dst: Path) -> None:
         shutil.copy2(src, dst)
 
 
-def _scene_points(root: Path) -> list[list[float]] | None:
-    scene = Layout(root).scene_json
-    if not scene.is_file():
-        return None
-    data = json.loads(scene.read_text(encoding="utf-8"))
-    return [[p["x"], p["y"], p["z"]] for p in data.get("points", [])] or None
+def _scene_points(session: Session, label: str) -> list[list[float]] | None:
+    lay = session.trial_layout(label)
+    data = lay.points if lay is not None else None
+    return [[p["x"], p["y"], p["z"]] for p in (data or {}).get("points", [])] or None
 
 
 def assemble_trials(session: Session, root: Path, progress: Progress = print,
@@ -134,26 +149,30 @@ def assemble_trials(session: Session, root: Path, progress: Progress = print,
     if (layout.trials / "Config.toml").exists():
         raise RuntimeError(f"{layout.trials / 'Config.toml'} must not exist: Pose2Sim would treat all trials as one "
                            "batch and look for a shared calibration. Delete that file.")
-    points = _scene_points(root)
     made = []
     for trial in session.trials:
         if not trial.raw_present or (labels is not None and trial.label not in labels):
             continue
         tdir = layout.trial(trial.label)
-        missing = [c.name for c in session.cameras
-                   if not (layout.inputs(c.name) / f"trial_{trial.label}.mp4").is_file()]
+        cams = session.trial_cameras(trial.label)
+        if not cams:
+            raise ValueError(f"Trial {trial.label} has no layout yet: choose one first.")
+        missing = [c.id for _s, c, _lc in cams if not layout.trial_input(trial.label, c.id).is_file()]
         if missing and session.run_state.trial_status.get(trial.label) == "done":
             continue  # finished, and its copies were removed later: leave the trial folder as it is
         (tdir / "videos").mkdir(parents=True, exist_ok=True)
         # Upstream picks the first folder with 'calib' in its name: never create another one here.
-        for cam in session.cameras:  # cam01, cam02, ... same order as Calib_scene.toml (upstream-notes §2)
-            src = layout.inputs(cam.name) / f"trial_{trial.label}.mp4"
+        slots = {f"{slot}.mp4" for slot, _c, _lc in cams}
+        for old in (tdir / "videos").glob("*.mp4"):  # a camera no longer in the trial's layout
+            if old.name not in slots:
+                old.unlink()
+        for slot, cam, _lc in cams:  # cam01, cam02, ... same order as the trial's Calib_scene.toml (upstream-notes §2)
+            src = layout.trial_input(trial.label, cam.id)
             if not src.is_file():
                 raise FileNotFoundError(f"{src} is missing. Prepare the videos first (mocapapp assemble).")
-            _link_or_copy(src, tdir / "videos" / f"{cam.name}.mp4")
-        atomic_write_text(tdir / "Config.toml", build_config(session, trial, points))
-        calib = layout.trial_calib(trial.label)  # a trial recorded after a camera moved has its own
-        calib = calib if calib.is_file() else layout.calib_file
+            _link_or_copy(src, tdir / "videos" / f"{slot}.mp4")
+        atomic_write_text(tdir / "Config.toml", build_config(session, trial, _scene_points(session, trial.label)))
+        calib = layout.calib_file if session.calibration_source == "imported" else layout.trial_calib(trial.label)
         if calib.is_file():
             calib_dir = tdir / "calibration"
             calib_dir.mkdir(exist_ok=True)

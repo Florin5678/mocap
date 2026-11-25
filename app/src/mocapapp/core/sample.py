@@ -15,7 +15,17 @@ import rtoml
 
 from mocapapp.core.assemble import assemble_trials
 from mocapapp.core.runner import stage_env
-from mocapapp.core.session import Camera, Layout, Participant, Session, Trial, save_session, session_dir_name
+from mocapapp.core.session import (
+    Camera,
+    CameraLayout,
+    Layout,
+    LayoutCamera,
+    Participant,
+    Session,
+    Trial,
+    save_session,
+    session_dir_name,
+)
 from mocapapp.core.workflow import fill_versions
 
 DEMO_HEIGHT_M = 1.72
@@ -58,16 +68,17 @@ def make_sample_session(out_root: Path, progress: Callable[[str], None] = print)
     if root.exists():
         raise SampleError(f"{root} already exists; wait a minute and try again.")
     layout = Layout(root)
-    cams = [Camera(name=f"cam{i:02d}", source_dir=str(demo / "videos"), trial_files={"1": str(v)})
-            for i, v in enumerate(videos, 1)]
-    session = Session(study_code="SAMPLE", n_trials=1, cameras=cams, calibration_source="imported",
+    cams = [Camera(id=f"cam{i:02d}", source_dir=str(demo / "videos")) for i in range(1, len(videos) + 1)]
+    lay = CameraLayout(id="L1", name="Sample layout", cameras=[LayoutCamera(camera=c.id) for c in cams])
+    session = Session(study_code="SAMPLE", n_trials=1, cameras=cams, layouts=[lay], calibration_source="imported",
                       participants=[Participant(label="1", code="SAMPLE-DEMO", height_m=DEMO_HEIGHT_M)],
-                      trials=[Trial(label="1", participant="1", mapping_method="manual")])
+                      trials=[Trial(label="1", participant="1", mapping_method="manual", layout="L1",
+                                    videos={c.id: str(v) for c, v in zip(cams, videos, strict=True)})])
     fill_versions(session)
     progress("Copying the sample videos ...")
     for cam, video in zip(cams, videos, strict=True):
-        layout.inputs(cam.name).mkdir(parents=True, exist_ok=True)
-        shutil.copy2(video, layout.inputs(cam.name) / "trial_1.mp4")
+        layout.trial_input("1", cam.id).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(video, layout.trial_input("1", cam.id))
     progress("Converting the sample calibration (about 30 s) ...")
     calib = convert_demo_calibration(layout.calibration_work / "sample_conversion")
     shutil.copy2(calib, layout.calib_file)

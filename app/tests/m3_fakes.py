@@ -11,8 +11,10 @@ from mocapapp.core import runner
 from mocapapp.core.config_gen import build_config
 from mocapapp.core.session import (
     Camera,
+    CameraLayout,
     Consent,
     Layout,
+    LayoutCamera,
     Participant,
     Session,
     Trial,
@@ -27,9 +29,10 @@ MARKERS = ["Hip", "RHip", "LHip", "RKnee", "LKnee", "RAnkle", "LAnkle", "RHeel",
 def make_session(root: Path, n_trials: int = 2, n_cams: int = 2, ready: bool = True) -> Session:
     people = [Participant(label=str(i), code=f"T1-ABCDEF{i}", height_m=1.75, consent=Consent(attested=ready))
               for i in range(1, n_trials + 1)]
-    cams = [Camera(name=f"cam{c:02d}", source_dir=str(root / "raw")) for c in range(1, n_cams + 1)]
-    session = Session(n_trials=n_trials, participants=people, cameras=cams, sync_cue_confirmed=ready,
-                      study_code="T1", trials=[Trial(label=p.label, participant=p.label) for p in people])
+    cams = [Camera(id=f"cam{c:02d}", source_dir=str(root / "raw")) for c in range(1, n_cams + 1)]
+    lay = CameraLayout(id="L1", name="Layout 1", cameras=[LayoutCamera(camera=c.id) for c in cams])
+    session = Session(n_trials=n_trials, participants=people, cameras=cams, layouts=[lay], study_code="T1",
+                      trials=[Trial(label=p.label, participant=p.label, layout="L1") for p in people])
     trials = session.trials
     layout = Layout(root)
     for t in trials:
@@ -38,7 +41,7 @@ def make_session(root: Path, n_trials: int = 2, n_cams: int = 2, ready: bool = T
         (tdir / "calibration").mkdir()
         (tdir / "calibration" / "Calib_scene.toml").write_text("[cam01]\n")
         for c in cams:
-            (tdir / "videos" / f"{c.name}.mp4").write_bytes(b"not a real video")
+            (tdir / "videos" / f"{c.id}.mp4").write_bytes(b"not a real video")
         atomic_write_text(tdir / "Config.toml", build_config(session, t))
     save_session(session, root)
     return session

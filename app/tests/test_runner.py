@@ -143,7 +143,7 @@ def test_parse_sync_and_issues():
 def test_preflight(tmp_path):
     session = make_session(tmp_path, ready=False)
     issues = runner.preflight(session, tmp_path, ["1", "2"])
-    assert sum(i.level == "action" for i in issues) == 3  # sync cue + consent for each trial
+    assert sum(i.level == "action" for i in issues) == 2  # consent for each trial (no sync-cue tick, R18)
     assert not [i for i in issues if i.level == "error"]
 
     tdir = Layout(tmp_path).trial("1")

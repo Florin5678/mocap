@@ -158,44 +158,69 @@ def map_by_number(per_cam: dict[str, list[Path]], labels: list[str]) -> dict[str
     return result if labels else None
 
 
+def _scan(cam) -> DirScan | None:
+    try:
+        return scan_dir(Path(cam.source_dir)) if cam.source_dir else None
+    except OSError:
+        return None
+
+
+def _layout_trials(session: Session, layout: str) -> list:
+    return [t for t in session.trials_with_layout(layout) if t.raw_present and not t.withdrawn_at]
+
+
 def suggest_trials(session: Session) -> dict[tuple[str, str], Path]:
-    """(camera, trial label) -> the video named with the trial's number, for trials without a video yet on that
-    camera (exactly one such file; the Trials page shows these until 'Save this mapping', 0.1.0rc17)."""
+    """(camera id, trial label) -> the video named with the trial's number in the camera's folder, for trials without
+    a video yet on that camera (exactly one such file; shown until 'Save this mapping', 0.1.0rc17)."""
     found = {}
-    for cam in session.cameras:
-        try:
-            scan = scan_dir(Path(cam.source_dir))
-        except OSError:
+    taken_by_dir: dict[str, set[str]] = {}
+    for t in session.trials:  # a duplicated camera shares its folder: videos taken by either count
+        for _slot, cam, _lc in session.trial_cameras(t.label):
+            f = t.videos.get(cam.id)
+            if f:
+                taken_by_dir.setdefault(cam.source_dir, set()).add(str(Path(f)))
+    scans = {}
+    for trial in session.trials:
+        if not trial.raw_present or trial.withdrawn_at:
             continue
-        taken = {str(Path(f)) for f in cam.trial_files.values()}
-        for trial in session.trials:
-            if not trial.raw_present or trial.withdrawn_at or cam.trial_files.get(trial.label):
+        for _slot, cam, _lc in session.trial_cameras(trial.label):
+            if trial.videos.get(cam.id) or not cam.source_dir:
                 continue
-            hit = match_by_number(scan.trials, trial.label, taken)
+            if cam.id not in scans:
+                scans[cam.id] = _scan(cam)
+            if scans[cam.id] is None:
+                continue
+            taken = taken_by_dir.setdefault(cam.source_dir, set())
+            hit = match_by_number(scans[cam.id].trials, trial.label, taken)
             if hit is not None:
-                found[(cam.name, trial.label)] = hit
+                found[(cam.id, trial.label)] = hit
                 taken.add(str(hit))
     return found
 
 
 def autofill(session: Session, trials: bool = True) -> list[str]:
-    """Choose what the names make obvious, without reading any video: a missing calibration video when the folder
-    has exactly one file named 'intrinsic' or 'extrinsic', and a trial's missing video when exactly one file is named
-    with its number (trials=False: calibration videos only). Nothing chosen before is changed. Returns what was
-    chosen (empty: nothing)."""
+    """Choose what the names make obvious, without reading any video: a camera's missing intrinsic video when its
+    folder has exactly one file named 'intrinsic', a layout camera's missing extrinsic video when its folder has
+    exactly one file named 'extrinsic' and the camera is in no other layout, and a trial's missing video when exactly
+    one file is named with its number (trials=False: calibration videos only). Nothing chosen before is changed."""
     chosen = []
+    scans = {cam.id: _scan(cam) for cam in session.cameras}
     for cam in session.cameras:
-        try:
-            scan = scan_dir(Path(cam.source_dir))
-        except OSError:
-            continue
-        for role in ROLES:
-            if getattr(cam, role) is None and len(scan.calib[role]) == 1:
-                setattr(cam, role, _ref(role, str(scan.calib[role][0]), "found"))
-                chosen.append(f"{cam.name} {role}: {scan.calib[role][0].name}")
+        scan = scans[cam.id]
+        if scan is not None and cam.intrinsic is None and len(scan.calib["intrinsic"]) == 1:
+            cam.intrinsic = _ref("intrinsic", str(scan.calib["intrinsic"][0]), "found")
+            chosen.append(f"{cam.name} intrinsic: {scan.calib['intrinsic'][0].name}")
+    for lay in session.layouts:
+        for lc in lay.cameras:
+            scan = scans.get(lc.camera)
+            if (scan is None or lc.extrinsic is not None or len(scan.calib["extrinsic"]) != 1
+                    or len(session.layouts_with_camera(lc.camera)) != 1):
+                continue
+            lc.extrinsic = _ref("extrinsic", str(scan.calib["extrinsic"][0]), "found")
+            chosen.append(f"{lay.name} {session.camera(lc.camera).name} extrinsic: {scan.calib['extrinsic'][0].name}")
     for (camera, label), hit in (suggest_trials(session).items() if trials else []):
-        session.camera(camera).trial_files[label] = str(hit)
-        chosen.append(f"{camera} trial {label}: {hit.name}")
+        session.trial(label).videos[camera] = str(hit)
+        chosen.append(f"{session.camera(camera).name} trial {label}: {hit.name}")
     return chosen
 
 
@@ -224,7 +249,7 @@ def _chrono_key(path: Path, info: ProbeInfo | None):
 
 def map_by_time(per_cam: dict[str, list[Path]], probes: dict[str, ProbeInfo], report: Report
                 ) -> dict[str, dict[str, Path]]:
-    """Tier 2: i-th file by recording time (creation_time -> mtime -> name), cross-checked by duration."""
+    """Tier 3: i-th file by recording time (creation_time -> mtime -> name), cross-checked by duration."""
     ordered = {cam: sorted(files, key=lambda f: _chrono_key(f, probes.get(str(f))))
                for cam, files in per_cam.items()}
     result = {cam: {str(i + 1): f for i, f in enumerate(files)} for cam, files in ordered.items()}
@@ -248,130 +273,160 @@ def map_by_time(per_cam: dict[str, list[Path]], probes: dict[str, ProbeInfo], re
 
 # ---------- main entry ----------
 
+def _check_layouts(session: Session, report: Report) -> None:
+    for lay in session.layouts:
+        if not _layout_trials(session, lay.id):
+            continue
+        n = len(lay.cameras)
+        if n < 2:
+            report.add("error", lay.name, "At least 2 cameras are needed to compute 3D positions.",
+                       "Add another camera to the layout.")
+        elif n < MIN_CAMERAS:
+            report.add("warning", lay.name, f"Only {n} cameras. Results are much more robust with 3 or more.",
+                       "Use 3+ cameras if you can.")
+        cams = [session.camera(c) for c in lay.camera_ids()]
+        dirs = [(c, Path(c.source_dir).resolve()) for c in cams if c.source_dir]
+        for i, (ca, a) in enumerate(dirs):  # cameras filmed together keep their videos apart (Rule 5)
+            for cb, b in dirs[i + 1:]:
+                if a == b or a in b.parents or b in a.parents:
+                    report.add("error", f"{lay.name}: {ca.name}, {cb.name}",
+                               "Camera folders must be different and must not be inside each other.",
+                               "Give every camera its own separate folder.")
+
+
+def _used_cameras(session: Session) -> list:
+    used = {c for t in session.trials if t.raw_present for c in
+            (session.trial_layout(t.label).camera_ids() if session.trial_layout(t.label) else [])}
+    return [c for c in session.cameras if c.id in used]
+
+
 def validate(session: Session, session_root: Path | None = None, do_probe: bool = True) -> Report:
     """Check all inputs and resolve calibration videos and trial mapping in `session` (modified in place)."""
     report = Report()
     if session_root is not None:
         report.issues.extend(check_output_root(session_root))
-
-    n_trials = session.n_trials
-    if len(session.cameras) < 2:
-        report.add("error", "cameras", "At least 2 cameras are needed to compute 3D positions.",
-                   "Add another camera directory.")
-    elif len(session.cameras) < MIN_CAMERAS:
-        report.add("warning", "cameras", f"Only {len(session.cameras)} cameras. Results are much more robust "
-                   "with 3 or more.", "Use 3+ cameras if you can.")
-
-    # Rule 5: distinct, not nested
-    dirs = [Path(c.source_dir).resolve() for c in session.cameras]
-    for i, a in enumerate(dirs):
+    for t in session.trials:
+        if t.raw_present and not t.withdrawn_at and session.trial_layout(t.label) is None:
+            report.add("action", f"trial {t.label}", "No layout chosen for this trial.",
+                       "Choose the layout it was recorded with.")
+    _check_layouts(session, report)
+    used = _used_cameras(session)
+    for cam in used:
+        if not cam.source_dir:
+            continue
+        a = Path(cam.source_dir).resolve()
         if not a.is_dir():
-            report.add("error", session.cameras[i].name, f"Folder {a} does not exist.",
-                       "Pick the camera's folder again.")
-        for j, b in enumerate(dirs[i + 1:], start=i + 1):
-            if a == b or a in b.parents or b in a.parents:
-                report.add("error", f"{session.cameras[i].name}, {session.cameras[j].name}",
-                           "Camera folders must be different and must not be inside each other.",
-                           "Give every camera its own separate folder.")
-        if in_cloud_folder(a):
-            report.add("warning", session.cameras[i].name, "Folder is inside a cloud-synced folder (OneDrive, "
-                       "Dropbox, Google Drive or iCloud). Deleting raw footage may not remove the cloud copies.",
+            report.add("error", cam.name, f"Folder {a} does not exist.", "Pick the camera's folder again.")
+        elif in_cloud_folder(a):
+            report.add("warning", cam.name, "Folder is inside a cloud-synced folder (OneDrive, Dropbox, Google Drive "
+                       "or iCloud). Deleting raw footage may not remove the cloud copies.",
                        "Move the videos to a local folder if participants asked for deletion.")
     if not report.ok:
         return report
-
-    scans = {c.name: scan_dir(Path(c.source_dir)) for c in session.cameras}
+    scans = {c.id: _scan(c) for c in used}
 
     # Rules 1-3: calibration videos and trial candidates
-    used_calib: dict[str, str] = {}  # fingerprint -> "cam role"
-    per_cam_trials: dict[str, list[Path]] = {}
-    for cam in session.cameras:
-        scan = scans[cam.name]
-        for p in scan.ignored:
-            report.add("info", cam.name, f"Ignored {p.name} (not a video).")
-        for role in ROLES:
-            ref = getattr(cam, role)
-            if ref is not None and ref.origin == "manual":
-                if not Path(ref.file).is_file():
-                    report.add("action", f"{cam.name} {role}", f"The chosen file {ref.file} no longer exists.",
-                               "Choose the file again.")
-                    setattr(cam, role, None)
-                continue
-            found = scan.calib[role]
-            if len(found) == 1:
-                setattr(cam, role, _ref(role, str(found[0]), "found"))
-            else:
-                setattr(cam, role, None)
-                why = "No file named" if not found else f"{len(found)} files named"
-                report.add("action", f"{cam.name} {role}",
-                           f"{why} '{role}.*' in {cam.source_dir}.",
-                           f"Choose the {role} calibration video for {cam.name} (any folder).")
-        for role in ROLES:  # further calibration videos (0.1.0rc13 extrinsic, 0.1.0rc17 intrinsic)
-            for extra in cam.extras(role):
-                if not Path(extra.file).is_file():
-                    report.add("error", f"{cam.name} {role} video {extra.key}",
-                               f"The chosen file {extra.file} no longer exists.",
-                               "Choose another file for it, or remove it (Trials, calibration videos).")
-        trials = list(scan.trials)
-        for p in trials:
-            low = p.stem.lower()
-            if low.startswith(ROLES) and low[-1:].isdigit():
-                report.add("warning", cam.name, f"{p.name} is treated as a trial video, not a calibration video "
-                           "(only files named exactly 'intrinsic' or 'extrinsic' count).",
-                           f"Rename it to {low.rstrip('0123456789')}{p.suffix} if it is a calibration video.")
-        per_cam_trials[cam.name] = trials
+    for cam in used:
+        scan = scans[cam.id]
+        ref = cam.intrinsic
+        if ref is not None and ref.origin == "manual":
+            if not Path(ref.file).is_file():
+                report.add("action", f"{cam.name} intrinsic", f"The chosen file {ref.file} no longer exists.",
+                           "Choose the file again.")
+                cam.intrinsic = None
+        elif scan is not None and len(scan.calib["intrinsic"]) == 1:
+            cam.intrinsic = _ref("intrinsic", str(scan.calib["intrinsic"][0]), "found")
+        elif ref is None or not Path(ref.file).is_file():
+            cam.intrinsic = None
+            found = scan.calib["intrinsic"] if scan else []
+            why = "No file named" if not found else f"{len(found)} files named"
+            report.add("action", f"{cam.name} intrinsic", f"{why} 'intrinsic.*' in {cam.source_dir or 'its folder'}.",
+                       f"Choose the intrinsic calibration video for {cam.name} (any folder).")
+        if scan is not None:
+            for p in scan.ignored:
+                report.add("info", cam.name, f"Ignored {p.name} (not a video).")
+            for p in scan.trials:
+                low = p.stem.lower()
+                if low.startswith(ROLES) and low[-1:].isdigit():
+                    report.add("warning", cam.name, f"{p.name} is treated as a trial video, not a calibration video "
+                               "(only files named exactly 'intrinsic' or 'extrinsic' count).",
+                               f"Rename it to {low.rstrip('0123456789')}{p.suffix} if it is a calibration video.")
+    for lay in session.layouts:
+        if not _layout_trials(session, lay.id):
+            continue
+        for lc in lay.cameras:
+            cam = session.camera(lc.camera)
+            if lc.extrinsic is not None and not Path(lc.extrinsic.file).is_file():
+                report.add("action", f"{lay.name} {cam.name} extrinsic",
+                           f"The chosen file {lc.extrinsic.file} no longer exists.", "Choose the file again.")
+                lc.extrinsic = None
+            if lc.extrinsic is None:
+                scan = scans.get(cam.id)
+                found = scan.calib["extrinsic"] if scan else []
+                if len(found) == 1 and len(session.layouts_with_camera(cam.id)) == 1:
+                    lc.extrinsic = _ref("extrinsic", str(found[0]), "found")
+                else:
+                    report.add("action", f"{lay.name} {cam.name} extrinsic",
+                               f"No extrinsic video chosen for {cam.name} in {lay.name}.",
+                               f"Choose the extrinsic calibration video of {cam.name} for this layout (any folder).")
 
-        # different files for the two roles, no file shared between cameras
-        refs = [(role, getattr(cam, role)) for role in ROLES if getattr(cam, role)]
-        if len(refs) == 2 and Path(refs[0][1].file).resolve() == Path(refs[1][1].file).resolve():
-            report.add("error", cam.name, "The intrinsic and extrinsic videos are the same file.",
-                       "They must be two different recordings: choose another file for one of them.")
-        for role, ref in refs:
-            try:
-                fp = file_fingerprint(Path(ref.file))
-            except OSError as exc:
-                report.add("error", f"{cam.name} {role}", f"Cannot read {ref.file}: {exc}")
-                continue
-            if fp in used_calib:
-                report.add("error", f"{cam.name} {role}",
-                           f"Same recording as {used_calib[fp]} ({Path(ref.file).name}).",
-                           "Every camera needs its own calibration videos, and intrinsic/extrinsic must differ.")
-            used_calib[fp] = f"{cam.name} {role}"
+    # different files for the two roles, no file shared between cameras
+    used_calib: dict[str, tuple[str, str, str]] = {}  # fingerprint -> (where, camera folder, kind)
+    refs = [(cam, "intrinsic", cam.intrinsic) for cam in used if cam.intrinsic]
+    refs += [(session.camera(lc.camera), f"extrinsic in {lay.name}", lc.extrinsic) for lay in session.layouts
+             if _layout_trials(session, lay.id) for lc in lay.cameras if lc.extrinsic]
+    seen_pairs = set()
+    for cam, role, ref in refs:
+        try:
+            fp = file_fingerprint(Path(ref.file))
+        except OSError as exc:
+            report.add("error", f"{cam.name} {role}", f"Cannot read {ref.file}: {exc}")
+            continue
+        key = (fp, cam.id, role.split()[0])
+        if key in seen_pairs:
+            continue  # the same camera's video used again (e.g. a duplicated layout)
+        seen_pairs.add(key)
+        kind = role.split()[0]
+        if fp in used_calib and (used_calib[fp][1] != cam.source_dir or used_calib[fp][2] != kind):
+            # a duplicated camera (same folder) may share its videos; nothing else may
+            report.add("error", f"{cam.name} {role}",
+                       f"Same recording as {used_calib[fp][0]} ({Path(ref.file).name}).",
+                       "Every camera needs its own calibration videos, and intrinsic/extrinsic must differ.")
+        used_calib.setdefault(fp, (f"{cam.name} {role}", cam.source_dir, kind))
 
     # Rule 6: probe everything
+    per_cam_trials = {c.id: list(scans[c.id].trials) if scans.get(c.id) else [] for c in used}
     if do_probe:
-        files = [Path(f) for c in session.cameras for r in ROLES for _, f in c.calib_videos(r)
-                 if Path(f).is_file()]
-        files += [p for ps in per_cam_trials.values() for p in ps]
-        for f in files:
+        files = {Path(r.file) for _c, _r, r in refs if Path(r.file).is_file()}
+        files |= {p for ps in per_cam_trials.values() for p in ps}
+        for f in sorted(files):
             try:
                 report.probes[str(f)] = probe(f)
             except MediaError as exc:
                 report.add("error", f.name, str(exc), "Replace or remove this file.")
 
     # Rule 4: trial mapping
-    if _keep_mapping(session):
+    layouts_used = {t.layout for t in session.trials if t.raw_present and t.layout}
+    if _keep_mapping(session) or len(layouts_used) != 1:
         # Trials already processed (or added later with their own videos) keep their labels and files: an automatic
-        # mapping could renumber them and mix up results. Missing videos are asked for in the mapping table.
+        # mapping could renumber them and mix up results. Missing videos are asked for in the trial's videos.
         report.mapping_method = "manual"
         for what in autofill(session):
-            report.add("info", "trial mapping", f"Chosen by its name: {what}.", "Check it in the mapping table.")
+            report.add("info", "trial mapping", f"Chosen by its name: {what}.", "Check it in the trial's videos.")
         for trial in session.trials:
             if not trial.raw_present:
                 continue
-            for cam in session.cameras:
-                f = cam.trial_files.get(trial.label)
+            for _slot, cam, _lc in session.trial_cameras(trial.label):
+                f = trial.videos.get(cam.id)
+                where = f"{cam.name} trial {trial.label}"
                 if not f:
-                    report.add("action", f"{cam.name} trial {trial.label}",
-                               f"No video chosen for trial {trial.label} ({trial.participant}).",
-                               "Choose it in the mapping table of the Trials step.")
+                    report.add("action", where, f"No video chosen for trial {trial.label} ({trial.code}).",
+                               "Choose it in the trial's videos.")
                 elif not Path(f).is_file() and session.run_state.trial_status.get(trial.label) == "done":
-                    report.add("info", f"{cam.name} trial {trial.label}", f"The original video {Path(f).name} is "
-                               "gone. The trial's results are kept, but it can only be run again from the copy in "
-                               "the session.")
+                    report.add("info", where, f"The original video {Path(f).name} is gone. The trial's results are "
+                               "kept, but it can only be run again from the copy in the project.")
                 elif not Path(f).is_file():
-                    report.add("action", f"{cam.name} trial {trial.label}", f"{f} no longer exists.",
-                               "Fix the mapping table.")
+                    report.add("action", where, f"{f} no longer exists.", "Choose the trial's video again.")
                 elif do_probe and str(Path(f)) not in report.probes:
                     try:
                         report.probes[str(Path(f))] = probe(Path(f))
@@ -380,43 +435,44 @@ def validate(session: Session, session_root: Path | None = None, do_probe: bool 
         if do_probe:
             _check_media(session, report, [t.label for t in session.trials])
         return report
+    if not report.ok:
+        return report
+    lay = session.layout(next(iter(layouts_used)))
+    trials = [t for t in session.trials if t.raw_present]
+    per_cam = {c: per_cam_trials.get(c, []) for c in lay.camera_ids()}
+    n_trials = len(trials)
+    counts_ok = all(len(files) == n_trials for files in per_cam.values())
+    mapping = map_by_digit(per_cam, n_trials) if counts_ok else None
+    by_name = None if mapping else map_by_number(per_cam, [t.label for t in trials])
+    if mapping is not None:
+        report.mapping_method = "digit"
+    elif by_name is not None:
+        mapping = by_name
+        report.mapping_method = "name"
+        for cam, files in per_cam.items():
+            unused = [f.name for f in files if f not in by_name[cam].values()]
+            if unused:
+                report.add("info", session.camera(cam).name, "Trials matched by the number in the file name. Not "
+                           "used: " + ", ".join(unused) + ".", "")
+    elif not counts_ok:
+        for cam, files in per_cam.items():
+            if len(files) != n_trials:
+                report.add("error", session.camera(cam).name, f"Found {len(files)} trial videos but the project has "
+                           f"{n_trials} trials: " + (", ".join(p.name for p in files) or "none") + ".",
+                           "Name each trial's video with its number (01, trial01 or trial_01), or keep exactly "
+                           "one video per trial in each camera folder, plus 'intrinsic' and 'extrinsic'.")
+        return report
     else:
-        if not report.ok:
-            return report
-        counts_ok = all(len(files) == n_trials for files in per_cam_trials.values())
-        mapping = map_by_digit(per_cam_trials, n_trials) if counts_ok else None
-        by_name = None if mapping else map_by_number(per_cam_trials, [t.label for t in session.trials])
-        if mapping is not None:
-            report.mapping_method = "digit"
-        elif by_name is not None:
-            mapping = by_name
-            report.mapping_method = "name"
-            for cam, files in per_cam_trials.items():
-                unused = [f.name for f in files if f not in by_name[cam].values()]
-                if unused:
-                    report.add("info", cam, "Trials matched by the number in the file name. Not used: "
-                               + ", ".join(unused) + ".", "")
-        elif not counts_ok:
-            for cam, files in per_cam_trials.items():
-                if len(files) != n_trials:
-                    report.add("error", cam, f"Found {len(files)} trial videos but the session has {n_trials} "
-                               "trials: " + (", ".join(p.name for p in files) or "none") + ".",
-                               "Name each trial's video with its number (01, trial01 or trial_01), or keep exactly "
-                               "one video per trial in each camera folder, plus 'intrinsic' and 'extrinsic'.")
-            return report
-        else:
-            report.mapping_method = "chronological"
-            report.add("info", "trial mapping", "File names do not end in a unique trial digit on every camera; "
-                       "videos were matched by recording time.", "Confirm the mapping table before running.")
-            mapping = map_by_time(per_cam_trials, report.probes, report)
+        report.mapping_method = "chronological"
+        report.add("info", "trial mapping", "File names do not end in a unique trial digit on every camera; "
+                   "videos were matched by recording time.", "Confirm the trial videos before running.")
+        mapping = map_by_time(per_cam, report.probes, report)
 
     labels = sorted(next(iter(mapping.values())).keys(), key=natural_key) if mapping else []
-    for t, lbl in zip(session.trials, labels, strict=False):
+    for t, lbl in zip(trials, labels, strict=False):
         t.label = lbl
         t.mapping_method = report.mapping_method
-    for cam in session.cameras:
-        cam.trial_files = {lbl: str(mapping[cam.name][lbl]) for lbl in labels}
-
+        t.videos = {cam: str(mapping[cam][lbl]) for cam in lay.camera_ids()}
     if do_probe:
         _check_media(session, report, labels)
     return report
@@ -430,11 +486,14 @@ def _keep_mapping(session: Session) -> bool:
     rs = session.run_state
     if any(rs.stage_done.get(t.label) or t.label in rs.trial_status or not t.raw_present for t in session.trials):
         return True
+
+    def complete(t) -> bool:
+        return all(t.videos.get(c.id) for _s, c, _lc in session.trial_cameras(t.label))
+
     manual = [t.mapping_method == "manual" for t in session.trials]
     if all(manual):
-        return any(c.trial_files for c in session.cameras)
-    return any(manual) and all(c.trial_files.get(t.label) for t, m in zip(session.trials, manual, strict=True)
-                               if not m for c in session.cameras)
+        return any(t.videos for t in session.trials)
+    return any(manual) and all(complete(t) for t, m in zip(session.trials, manual, strict=True) if not m)
 
 
 def _ref(role: str, file: str, origin: str):
@@ -446,43 +505,59 @@ def _ref(role: str, file: str, origin: str):
 def _check_media(session: Session, report: Report, labels: list[str]) -> None:
     infos = report.probes
     all_fps = []
-    for cam in session.cameras:
-        files = [Path(getattr(cam, r).file) for r in ROLES if getattr(cam, r)] + [
-            Path(f) for f in cam.trial_files.values()]
-        for f in files:
-            info = infos.get(str(f))
-            if not info:
+    checked = set()
+
+    def look(where: str, f: Path) -> None:
+        info = infos.get(str(f))
+        if not info or str(f) in checked:
+            return
+        checked.add(str(f))
+        all_fps.append(info.fps)
+        if info.fps < MIN_FPS:
+            report.add("warning", where, f"{info.fps:g} fps. Fast movements need 60 fps.",
+                       "Record at 60 fps if possible.")
+        if min(info.display_size) < MIN_HEIGHT_PX:
+            report.add("warning", where, f"Resolution {info.display_size[0]}x{info.display_size[1]} is below "
+                       "1080p.", "Record at 1080p if possible.")
+        if info.vfr:
+            report.add("info", where, "Variable frame rate (common on phones); it will be converted to a "
+                       "constant frame rate.")
+        if info.rotation:
+            report.add("info", where, f"Stored rotated by {info.rotation} degrees; it will be turned upright.")
+
+    for cam in _used_cameras(session):
+        if cam.intrinsic:
+            look(f"{cam.name} {Path(cam.intrinsic.file).name}", Path(cam.intrinsic.file))
+    for lay in session.layouts:
+        for lc in lay.cameras:
+            if lc.extrinsic and _layout_trials(session, lay.id):
+                look(f"{session.camera(lc.camera).name} {Path(lc.extrinsic.file).name}", Path(lc.extrinsic.file))
+    for t in session.trials:
+        for _slot, cam, _lc in session.trial_cameras(t.label):
+            f = t.videos.get(cam.id)
+            if not f:
                 continue
-            all_fps.append(info.fps)
-            where = f"{cam.name} {f.name}"
-            if info.fps < MIN_FPS:
-                report.add("warning", where, f"{info.fps:g} fps. Fast movements need 60 fps.",
-                           "Record at 60 fps if possible.")
-            if min(info.display_size) < MIN_HEIGHT_PX:
-                report.add("warning", where, f"Resolution {info.display_size[0]}x{info.display_size[1]} is below "
-                           "1080p.", "Record at 1080p if possible.")
-            if info.vfr:
-                report.add("info", where, "Variable frame rate (common on phones); it will be converted to a "
-                           "constant frame rate.")
-            if info.rotation:
-                report.add("info", where, f"Stored rotated by {info.rotation} degrees; it will be turned upright.")
-        lens_files = dict(cam.calib_videos("intrinsic"))
-        for label, f in cam.trial_files.items():
-            intr = lens_files.get(cam.lens_for(label))
-            if intr and str(Path(intr)) in infos:
+            look(f"{cam.name} {Path(f).name}", Path(f))
+            intr = cam.intrinsic.file if cam.intrinsic else None
+            if intr and str(Path(intr)) in infos and str(Path(f)) in infos:
                 isize = infos[str(Path(intr))].display_size
-                if f in infos and infos[f].display_size != isize:
+                if infos[str(Path(f))].display_size != isize:
                     report.add("error", f"{cam.name} {Path(f).name}",
-                               f"Resolution {infos[f].display_size} differs from the intrinsic video {isize}. "
-                               "The lens calibration only holds for the same resolution and zoom.",
-                               "Record the intrinsic video with the same camera settings as the trials.")
+                               f"Resolution {infos[str(Path(f))].display_size} differs from the camera's intrinsic "
+                               f"video {isize}. The lens calibration only holds for the same resolution and zoom.",
+                               "Use a camera whose intrinsic video was recorded with the same settings (or duplicate "
+                               "the camera and calibrate it with a new intrinsic video).")
     if all_fps and max(all_fps) - min(all_fps) > FPS_TOLERANCE:
         report.add("warning", "frame rate",
                    f"Frame rates differ between videos ({min(all_fps):g}-{max(all_fps):g} fps).",
                    "Use the same fps on every camera; videos will be converted to a common rate.")
     for lbl in labels:
-        durs = {c.name: infos[c.trial_files[lbl]].duration_s for c in session.cameras
-                if c.trial_files.get(lbl) in infos}
+        try:
+            t = session.trial(lbl)
+        except KeyError:
+            continue
+        durs = {cam.name: infos[str(Path(t.videos[cam.id]))].duration_s for _s, cam, _lc in session.trial_cameras(lbl)
+                if t.videos.get(cam.id) and str(Path(t.videos[cam.id])) in infos}
         if len(durs) > 1 and max(durs.values()) - min(durs.values()) > CROSS_CAMERA_DURATION_S:
             report.add("warning", f"trial {lbl}", "Video lengths differ by more than 2 s between cameras ("
                        + ", ".join(f"{c} {d:.1f} s" for c, d in durs.items()) + ").",

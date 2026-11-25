@@ -36,12 +36,13 @@ def test_cli_new_validate_assemble(camera_dirs, tmp_path, capsys, monkeypatch):
     assert main(args) == 0
     root = next(out.iterdir())
     assert main(["validate", "--session", str(root)]) == 0
-    assert "Trial mapping (digit)" in capsys.readouterr().out
+    assert "Trial videos (digit)" in capsys.readouterr().out
 
     # a computed calibration is copied into every trial
     layout = Layout(root)
     layout.calibration_work.mkdir()
-    layout.calib_file.write_text("[cam01]\nname = 'cam01'\n")
+    for label in ("1", "2"):  # one calibration file per trial, from its layout
+        layout.trial_calib(label).write_text("[cam01]\nname = 'cam01'\n")
     assert main(["assemble", "--session", str(root)]) == 0
 
     s = load_session(root)

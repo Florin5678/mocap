@@ -2,14 +2,20 @@ from pathlib import Path
 
 import pytest
 
-from mocapapp.core.session import CalibVideo, Camera, Session, VideoRef
+from mocapapp.core.session import CalibVideo, Camera, CameraLayout, LayoutCamera, Session, VideoRef
 from mocapapp.core.validate import check_output_root, map_by_digit, validate
 
 
 def make_session(dirs, n_trials=2):
+    cams = [Camera(id=f"cam{i + 1:02d}", source_dir=str(d)) for i, d in enumerate(dirs)]
     return Session.model_validate({
-        "n_trials": n_trials, "trials": [{"label": str(i + 1), "code": f"C{i}"} for i in range(n_trials)],
-        "cameras": [Camera(name=f"cam{i + 1:02d}", source_dir=str(d)) for i, d in enumerate(dirs)]})
+        "n_trials": n_trials, "cameras": cams,
+        "layouts": [CameraLayout(id="L1", name="Layout 1", cameras=[LayoutCamera(camera=c.id) for c in cams])],
+        "trials": [{"label": str(i + 1), "code": f"C{i}", "layout": "L1"} for i in range(n_trials)]})
+
+
+def video_of(s, cam, label):
+    return s.trial(label).videos[cam]
 
 
 def levels(report, level):
@@ -22,7 +28,7 @@ def test_digit_mapping_happy_path(camera_dirs):
     assert r.ok, [str(i) for i in r.issues]
     assert r.mapping_method == "digit" and not r.needs_mapping_review
     assert [t.label for t in s.trials] == ["1", "2"]
-    assert Path(s.cameras[0].trial_files["2"]).name == "take_2.mp4"
+    assert Path(video_of(s, "cam01", "2")).name == "take_2.mp4"
     assert Path(s.cameras[1].intrinsic.file).name == "intrinsic.mp4"
 
 
@@ -43,7 +49,7 @@ def test_chronological_uses_creation_time(camera_dirs, tmp_path):
         make_video(d / "GX010012.mp4", creation_time="2026-01-01T11:00:00Z")
     s = make_session(dirs)
     validate(s)
-    assert Path(s.cameras[0].trial_files["1"]).name == "GX010022.mp4"
+    assert Path(video_of(s, "cam01", "1")).name == "GX010022.mp4"
 
 
 def test_map_by_digit_requires_same_digits_everywhere():
@@ -56,9 +62,9 @@ def test_missing_extrinsic_needs_manual_pick(camera_dirs, video, tmp_path):
     (dirs[1] / "extrinsic.mp4").unlink()
     s = make_session(dirs)
     r = validate(s)
-    assert not r.ok and any(i.where == "cam02 extrinsic" for i in levels(r, "action"))
+    assert not r.ok and any(i.where == "Layout 1 cam02 extrinsic" for i in levels(r, "action"))
     other = video(tmp_path / "elsewhere" / "cam2_ext.mp4", seconds=0.77)
-    s.cameras[1].extrinsic = VideoRef(file=str(other), origin="manual")
+    s.layouts[0].cameras[1].extrinsic = VideoRef(file=str(other), origin="manual")
     assert validate(s).ok
 
 
@@ -66,7 +72,7 @@ def test_same_file_for_both_roles_rejected(camera_dirs):
     dirs = camera_dirs()
     s = make_session(dirs)
     s.cameras[0].intrinsic = CalibVideo(file=str(dirs[0] / "extrinsic.mp4"), origin="manual")
-    assert any("same file" in i.what for i in levels(validate(s), "error"))
+    assert any("Same recording" in i.what for i in levels(validate(s), "error"))
 
 
 def test_calibration_video_shared_between_cameras_rejected(camera_dirs):
@@ -92,7 +98,7 @@ def test_more_takes_than_trials_matched_by_number(camera_dirs):
     r = validate(s)
     assert r.ok, [str(i) for i in r.issues]
     assert r.mapping_method == "name" and [t.mapping_method for t in s.trials] == ["name", "name"]
-    assert [Path(s.cameras[0].trial_files[lb]).name for lb in ("1", "2")] == ["01.mp4", "trial_02.mp4"]
+    assert [Path(video_of(s, "cam01", lb)).name for lb in ("1", "2")] == ["01.mp4", "trial_02.mp4"]
     unused = [i.what for i in levels(r, "info") if "Not used" in i.what]
     assert len(unused) == 3 and "03.mp4" in unused[0] and "extrinsic bw 03-04.mp4" in unused[0]
 
@@ -103,15 +109,18 @@ def test_autofill_chooses_what_the_names_make_obvious(camera_dirs):
     assert [name_number(Path(n)) for n in ("01.mp4", "trial_01.mp4", "Trial 12.mov", "take.mp4")] == [1, 1, 12, None]
     s = make_session(camera_dirs(trial_names=("trial01", "trial02", "trial07")))
     for cam in s.cameras:
-        cam.intrinsic = cam.extrinsic = None
-        cam.trial_files = {}
+        cam.intrinsic = None
+    for lc in s.layouts[0].cameras:
+        lc.extrinsic = None
+    for tr in s.trials:
+        tr.videos = {}
     chosen = autofill(s)  # no video is read: a quick look at the names when the Trials page opens
-    assert len(chosen) == 3 * 4 and all(c.intrinsic and c.extrinsic for c in s.cameras)
-    assert [Path(f).name for f in s.cameras[1].trial_files.values()] == ["trial01.mp4", "trial02.mp4"]
-    s.cameras[0].trial_files["2"] = s.cameras[0].trial_files["1"]  # a choice made by hand stays
-    s.cameras[0].trial_files.pop("1")
+    assert len(chosen) == 3 * 4 and all(c.intrinsic for c in s.cameras)
+    assert all(lc.extrinsic for lc in s.layouts[0].cameras)
+    assert [Path(video_of(s, "cam02", lb)).name for lb in ("1", "2")] == ["trial01.mp4", "trial02.mp4"]
+    s.trial("2").videos["cam01"] = s.trial("1").videos.pop("cam01")  # a choice made by hand stays
     autofill(s)
-    assert Path(s.cameras[0].trial_files["2"]).name == "trial01.mp4" and "1" not in s.cameras[0].trial_files
+    assert Path(video_of(s, "cam01", "2")).name == "trial01.mp4" and "cam01" not in s.trial("1").videos
 
 
 def test_nested_dirs_rejected(camera_dirs):

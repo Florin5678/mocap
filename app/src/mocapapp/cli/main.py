@@ -209,29 +209,17 @@ def _cmd_session_remove_trial(args: argparse.Namespace) -> int:
 
 
 def _print_mapping(session, report) -> None:
-    print(f"\nTrial mapping ({report.mapping_method}):")
-    width = max([len(Path(f).name) for c in session.cameras for f in c.trial_files.values()] + [8])
-    print("  trial  pseudonym       " + "  ".join(f"{c.name:<{width}}" for c in session.cameras))
+    print(f"\nTrial videos ({report.mapping_method}):")
     for t in session.trials:
+        lay = session.trial_layout(t.label)
         cells = []
-        for c in session.cameras:
-            name = Path(c.trial_files.get(t.label, "-")).name
-            flag = "?" if (c.name, t.label) in report.low_confidence else " "
-            cells.append(f"{name + flag:<{width}}")
-        print(f"  {t.label:<6} {t.code:<15} " + "  ".join(cells))
+        for cid in (lay.camera_ids() if lay else []):
+            name = Path(t.videos.get(cid, "-")).name
+            flag = "?" if (cid, t.label) in report.low_confidence else ""
+            cells.append(f"{cid}={name}{flag}")
+        print(f"  trial {t.label:<4} {t.code:<15} {lay.name if lay else '(no layout)'}: " + "  ".join(cells))
     if report.needs_mapping_review:
         print("  Check this table. Fix it with: mocapapp map --session <dir> --set cam01:<trial>=<file> ...")
-
-
-def _frozen(session) -> bool:
-    from mocapapp.core.workflow import SetupError, ensure_not_frozen
-
-    try:
-        ensure_not_frozen(session)
-    except SetupError as exc:
-        print(exc)
-        return True
-    return False
 
 
 def _imported(session) -> bool:
@@ -249,8 +237,6 @@ def _cmd_validate(args: argparse.Namespace) -> int:
 
     root = Path(args.session)
     session = load_session(root)
-    if _frozen(session):
-        return 1
     if _imported(session):
         return 0
     report = validate(session, root)
@@ -268,20 +254,21 @@ def _cmd_map(args: argparse.Namespace) -> int:
 
     root = Path(args.session)
     session = load_session(root)
-    if _frozen(session):
-        return 1
     if _imported(session):
         return 0
+    from mocapapp.core.workflow import SetupError, set_mapping
+
+    table = {}
     for item in args.set:
         left, sep, file = item.partition("=")
         cam, sep2, label = left.partition(":")
         if not (sep and sep2):
             raise SystemExit(f"--set expects cam01:<trial>=<file>, got '{item}'.")
-        if not Path(file).is_file():
-            raise SystemExit(f"{file} does not exist.")
-        session.camera(cam).trial_files[label] = str(Path(file).resolve())
-    for t in session.trials:
-        t.mapping_method = "manual"
+        table[(cam, label)] = Path(file)
+    try:
+        set_mapping(session, table, root)
+    except (SetupError, KeyError) as exc:
+        raise SystemExit(str(exc).strip("'\"")) from exc
     save_session(session, root)
     print("Mapping saved as manual. Run `mocapapp validate` again.")
     return 0
@@ -294,9 +281,9 @@ def _cmd_pick(args: argparse.Namespace) -> int:
     root = Path(args.session)
     session = load_session(root)
     try:
-        pick_video(session, args.camera, args.role, Path(args.file))
-    except SetupError as exc:
-        raise SystemExit(str(exc)) from exc
+        pick_video(session, args.camera, args.role, Path(args.file), root, layout=args.layout)
+    except (SetupError, KeyError) as exc:
+        raise SystemExit(str(exc).strip("'\"")) from exc
     save_session(session, root)
     print(f"{args.camera} {args.role} = {Path(args.file).resolve()}. Run `mocapapp validate` again.")
     return 0
@@ -309,8 +296,6 @@ def _cmd_assemble(args: argparse.Namespace) -> int:
 
     root = Path(args.session)
     session = load_session(root)
-    if _frozen(session):
-        return 1
     if _imported(session):
         return 0
     report = validate(session, root)
@@ -336,36 +321,60 @@ def _print_issues(issues) -> bool:
     return not any(i.level in ("error", "action") for i in issues)
 
 
+def _layout_arg(session, layout: str | None, camera: str | None = None) -> str:
+    """--layout, or the only layout (with this camera)."""
+    if layout:
+        session.layout(layout)
+        return layout
+    layouts = session.layouts_with_camera(camera) if camera else session.layouts
+    if len(layouts) != 1:
+        where = f" with {camera}" if camera else ""
+        raise ValueError(f"There are {len(layouts)} layouts{where}: say which one with --layout "
+                         f"({', '.join(x.id for x in layouts) or 'none yet'}).")
+    return layouts[0].id
+
+
 def _cmd_scene(args: argparse.Namespace) -> int:
     from mocapapp.core.calibration import scene_points as sp
-    from mocapapp.core.calibration.service import get_scene, set_scene
+    from mocapapp.core.calibration.service import (
+        CalibrationStepError,
+        layout_scene,
+        set_layout_points,
+        write_calibration,
+    )
+    from mocapapp.core.session import load_session, save_session
 
     root = Path(args.session)
-    if args.scene_command == "set":
-        try:
-            scene = get_scene(root)
-        except Exception:
-            scene = sp.Scene()
-        if args.unit:
-            scene.unit = args.unit
-        if args.csv:
-            scene.points = sp.from_csv(Path(args.csv).read_text(encoding="utf-8-sig"), scene.unit)
-        if args.snippet:
-            scene.points = sp.from_snippet(Path(args.snippet).read_text(encoding="utf-8"))
-        if args.origin is not None:
-            scene.origin_text = args.origin
-        if args.x_axis is not None:
-            scene.x_axis_text = args.x_axis
-        if args.y_note is not None:
-            scene.y_axis_note = args.y_note
-        from mocapapp.core.session import load_session, save_session
-
-        session = load_session(root)
-        for line in set_scene(root, scene, session):
-            print(line)
-        save_session(session, root)
-        print(f"{len(scene.points)} reference points saved.")
-    scene = get_scene(root)
+    session = load_session(root)
+    try:
+        layout = _layout_arg(session, args.layout)
+        if args.scene_command == "set":
+            try:
+                scene = layout_scene(session, layout)
+            except CalibrationStepError:
+                scene = sp.Scene()
+            if args.unit:
+                scene.unit = args.unit
+            if args.csv:
+                scene.points = sp.from_csv(Path(args.csv).read_text(encoding="utf-8-sig"), scene.unit)
+            if args.snippet:
+                scene.points = sp.from_snippet(Path(args.snippet).read_text(encoding="utf-8"))
+            if args.origin is not None:
+                scene.origin_text = args.origin
+            if args.x_axis is not None:
+                scene.x_axis_text = args.x_axis
+            if args.y_note is not None:
+                scene.y_axis_note = args.y_note
+            for line in set_layout_points(session, root, layout, scene):
+                print(line)
+            if session.calibration_source == "app":  # recomputed positions: rewrite the trials' calibration
+                write_calibration(session, root)
+            save_session(session, root)
+            print(f"{len(scene.points)} reference points saved for {session.layout(layout).name}.")
+        scene = layout_scene(session, layout)
+    except (CalibrationStepError, ValueError, KeyError) as exc:
+        print(str(exc).strip("'\""))
+        return 1
     if args.scene_command == "show":
         print(sp.axes_description(scene))
         print()
@@ -392,13 +401,14 @@ def _cmd_calibrate(args: argparse.Namespace) -> int:
                 for a in r.advice:
                     print(f"    -> {a}")
         elif args.calib_command == "frame":
-            print(service.export_frame(root, args.camera, args.frame, args.position))
+            layout = _layout_arg(session, args.layout, args.camera)
+            print(service.export_frame(root, layout, args.camera, args.frame))
             print("Measure the pixel position (u = from left, v = from top) of each visible reference point and "
                   "write label,u,v lines to a CSV ('hidden' for points this camera cannot see).")
         elif args.calib_command == "extrinsics":
+            layout = _layout_arg(session, args.layout, args.camera)
             clicks = ex.read_clicks_csv(Path(args.points).read_text(encoding="utf-8-sig"))
-            r = service.run_extrinsics(session, root, args.camera, clicks, args.frame, args.override,
-                                       position=args.position)
+            r = service.run_extrinsics(session, root, layout, args.camera, clicks, args.frame, args.override)
             pos = ", ".join(f"{v:.2f}" for v in r.camera_position)
             print(f"{r.camera}: {r.rms_px:.2f} px = {r.rms_cm:.2f} cm from {r.n_points} points; camera at ({pos}) m "
                   f"-> {r.status.upper()}{' (overridden)' if r.overridden else ''}")
@@ -408,22 +418,20 @@ def _cmd_calibrate(args: argparse.Namespace) -> int:
                 print(f"    Above {ex.WARN_CM} cm this camera blocks the run. "
                       "Fix the points, or accept with --override.")
         elif args.calib_command == "status":
-            for cam, state in service.calibration_state(session, root).items():
-                print(f"{cam}: {state}")
             for cam in session.cameras:
-                for role in ("intrinsic", "extrinsic"):
-                    for p in cam.extras(role):
-                        print(f"{cam.name} {role} video {p.key} ({Path(p.file).name}) is used by trial(s) "
-                              f"{', '.join(p.trials) or 'none'}")
+                print(f"{service.camera_title(session, cam.id)}: {service._intrinsic_state(root, cam)}")
+            for lay in session.layouts:
+                for what, state in service.layout_state(session, root, lay.id).items():
+                    print(f"{what}: {state}")
             return 0
-        elif args.calib_command == "position":
-            return _calibrate_position(args, session, root)
-        elif args.calib_command == "video":
-            return _calibrate_video(args, session, root)
+        elif args.calib_command in ("position", "video"):
+            print("Moved cameras and further calibration videos are now separate camera layouts (and duplicated "
+                  "cameras): each trial uses one layout. See PROJECT.md §16.5 for the layout and camera commands.")
+            return 1
         if args.calib_command in ("intrinsics", "extrinsics"):
-            state = service.calibration_state(session, root)
-            if all(s == "ready" for s in state.values()):
-                print(f"All cameras calibrated: {service.write_calibration(session, root)}")
+            written = service.write_calibration(session, root)
+            if written:
+                print(f"Calibration written for {len(written)} trial(s).")
     except (service.CalibrationStepError, ex.ExtrinsicsError, ValueError) as exc:
         print(exc)
         return 1
@@ -435,83 +443,9 @@ def _cmd_calibrate(args: argparse.Namespace) -> int:
     return 0
 
 
-def _calibrate_position(args: argparse.Namespace, session, root: Path) -> int:
-    """A camera moved between trials (0.1.0rc13): another extrinsic video for some trials."""
-    from mocapapp.core.workflow import (
-        SetupError,
-        add_camera_position,
-        prepare_position,
-        remove_camera_position,
-        set_position_trials,
-    )
-
-    trials = [t.strip() for t in (args.position_trials or "").split(",") if t.strip()]
-    try:
-        if args.add:
-            pos = add_camera_position(session, root, args.camera, Path(args.add), trials)
-            prepare_position(session, root, args.camera, pos.key)
-            print(f"{args.camera} position {pos.key} added for trial(s) {', '.join(pos.trials)}.")
-            print(f"Next: mocapapp calibrate frame --session \"{root}\" --camera {args.camera} --position {pos.key}, "
-                  f"then calibrate extrinsics with --position {pos.key}.")
-        elif not args.position:
-            print("Give --add FILE for a new position, or --position KEY with --trials or --remove.")
-            return 1
-        elif args.remove:
-            remove_camera_position(session, root, args.camera, args.position)
-            print(f"{args.camera} position {args.position} removed; its trials use the main position again.")
-        else:
-            set_position_trials(session, root, args.camera, args.position, trials)
-            print(f"{args.camera} position {args.position} is used by trial(s) {', '.join(trials)}.")
-    except (SetupError, OSError) as exc:
-        print(exc)
-        return 1
-    return 0
-
-
-def _calibrate_video(args: argparse.Namespace, session, root: Path) -> int:
-    """Further calibration videos of a camera, assigned per trial (0.1.0rc17)."""
-    from mocapapp.core.workflow import (
-        SetupError,
-        add_calib_videos,
-        prepare_calib_video,
-        remove_calib_video,
-        set_calib_assignment,
-    )
-
-    trials = [t.strip() for t in (args.video_trials or "").split(",") if t.strip()]
-    role, cam = args.role, args.camera
-    try:
-        key = args.key
-        if args.add:
-            key = add_calib_videos(session, root, cam, role, [Path(args.add)])[0]
-            if key:
-                prepare_calib_video(session, root, cam, role, key)
-            print(f"{cam} {role} video {key or '(main)'} added: {Path(args.add).name}.")
-        if key is None:
-            print("Give --add FILE for a new video, or --key KEY with --trials or --remove.")
-            return 1
-        if args.remove:
-            remove_calib_video(session, root, cam, role, key)
-            print(f"{cam} {role} video {key} removed; its trials use the main one again.")
-        elif trials:
-            set_calib_assignment(session, root, cam, role, {t: key for t in trials})
-            print(f"{cam} {role} video {key or '(main)'} is used by trial(s) {', '.join(trials)}.")
-        if role == "intrinsic" and (args.add or trials):
-            print(f"Next: mocapapp calibrate intrinsics --session \"{root}\" --camera {cam}")
-    except (SetupError, OSError, KeyError) as exc:
-        print(str(exc).strip("'\""))
-        return 1
-    return 0
-
-
 def _cmd_confirm(args: argparse.Namespace) -> int:
-    from mocapapp.core.session import load_session, save_session
-
-    root = Path(args.session)
-    session = load_session(root)
-    session.sync_cue_confirmed = bool(args.sync_cue)
-    save_session(session, root)
-    print("Sync cue confirmed for every trial." if args.sync_cue else "Nothing confirmed.")
+    print("A sync-cue confirmation is no longer needed. Remember to record a sync cue (for example a clap) at the "
+          "start of every trial video.")
     return 0
 
 
@@ -990,6 +924,7 @@ def build_parser() -> argparse.ArgumentParser:
         if name == "show":
             p.add_argument("--format", choices=["toml", "csv"], default="toml")
     for p in scsub.choices.values():
+        p.add_argument("--layout", help="the layout (default: the only one)")
         p.set_defaults(func=_cmd_scene)
 
     cal = sub.add_parser("calibrate", help="lens (intrinsic) and position (extrinsic) calibration")
@@ -1007,8 +942,7 @@ def build_parser() -> argparse.ArgumentParser:
     ce.add_argument("--frame", type=int, default=0)
     ce.add_argument("--override", action="store_true", help="accept an error above 2.5 cm (recorded in the session)")
     for p in (cf, ce):
-        p.add_argument("--position", default="", help="a later position of a camera that was moved (see "
-                                                       "calibrate position)")
+        p.add_argument("--layout", help="the layout (default: the only one with this camera)")
     cp = csub.add_parser("position", help="only if a camera was moved between trials: another extrinsic video "
                                           "for the trials recorded after the move")
     cp.add_argument("--camera", required=True)
@@ -1032,7 +966,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     conf = sub.add_parser("confirm", help="pre-run confirmations")
     conf.add_argument("--session", required=True)
-    conf.add_argument("--sync-cue", action="store_true", help="I recorded a sync cue at the start of every trial")
+    conf.add_argument("--sync-cue", action="store_true", help="no longer needed (kept so old scripts still work)")
     conf.set_defaults(func=_cmd_confirm)
 
     cons = sub.add_parser("consent", help="record that signed consent was received for a trial's participant")
@@ -1098,6 +1032,7 @@ def build_parser() -> argparse.ArgumentParser:
     pick.add_argument("--camera", required=True)
     pick.add_argument("--role", choices=["intrinsic", "extrinsic"], required=True)
     pick.add_argument("--file", required=True)
+    pick.add_argument("--layout", help="for an extrinsic video: the layout (default: the only one with this camera)")
     pick.set_defaults(func=_cmd_pick)
 
     asm = sub.add_parser("assemble", help="convert videos and build one Pose2Sim project per trial")

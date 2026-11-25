@@ -1,4 +1,4 @@
-"""Session-level steps shared by the CLI and the GUI (the GUI must not hold logic of its own)."""
+"""Project-level steps shared by the CLI and the GUI (the GUI must not hold logic of its own)."""
 
 from __future__ import annotations
 
@@ -15,9 +15,10 @@ from mocapapp.core.privacy import make_code, normalise_study
 from mocapapp.core.session import (
     CalibVideo,
     Camera,
-    CameraPosition,
+    CameraLayout,
     DetailField,
     Layout,
+    LayoutCamera,
     Participant,
     Session,
     Trial,
@@ -127,18 +128,22 @@ def create_session(spec: NewSession) -> tuple[Path, Session]:
         codes.append(make_code(study, taken | set(codes)))
     heights = [parse_height(h) for h in spec.heights] if spec.heights else [None] * spec.n_participants
     k = spec.trials_per_participant
-    cameras = []
+    cameras, lay_cams = [], []
     for i, d in enumerate(spec.camera_dirs, 1):
         name = f"cam{i:02d}"
         intr, extr = spec.picks.get((name, "intrinsic")), spec.picks.get((name, "extrinsic"))
         cameras.append(Camera(
-            name=name, source_dir=str(Path(d).resolve()),
-            intrinsic=CalibVideo(file=str(Path(intr).resolve()), origin="manual") if intr else None,
-            extrinsic=VideoRef(file=str(Path(extr).resolve()), origin="manual") if extr else None))
-    session = Session(study_code=study, n_trials=spec.n_trials, cameras=cameras, trials_per_participant=k,
+            id=name, source_dir=str(Path(d).resolve()),
+            intrinsic=CalibVideo(file=str(Path(intr).resolve()), origin="manual") if intr else None))
+        lay_cams.append(LayoutCamera(
+            camera=name, extrinsic=VideoRef(file=str(Path(extr).resolve()), origin="manual") if extr else None))
+    lay = CameraLayout(id="L1", name="Layout 1", cameras=lay_cams)
+    session = Session(study_code=study, n_trials=spec.n_trials, cameras=cameras, layouts=[lay],
+                      trials_per_participant=k,
                       participants=[Participant(label=str(i + 1), code=c, height_m=h)
                                     for i, (c, h) in enumerate(zip(codes, heights, strict=True))],
-                      trials=[Trial(label=str(i + 1), participant=str(i // k + 1)) for i in range(spec.n_trials)])
+                      trials=[Trial(label=str(i + 1), participant=str(i // k + 1), layout="L1")
+                              for i in range(spec.n_trials)])
     fill_versions(session)
     save_session(session, root)
     return root, session
@@ -167,17 +172,16 @@ def _next_label(labels) -> str:
 
 
 def add_participant(session: Session, root: Path, height: str | float | None = None) -> Participant:
-    """A participant added after the session was created: a new pseudonym and trials_per_participant trials."""
-    ensure_not_frozen(session)
-    if len(session.trials) + session.trials_per_participant > MAX_TRIALS:
-        raise SetupError(f"A session holds at most {MAX_TRIALS} trials. Start a second session for more "
-                         "participants.")
+    """A participant added later: a new pseudonym and trials_per_participant trials (with the last trial's
+    layout)."""
+    layout = session.trials[-1].layout if session.trials else ""
     taken = existing_codes(Path(root).parent) | {p.code for p in session.participants}
     person = Participant(label=_next_label(p.label for p in session.participants),
                          code=make_code(session.study_code, taken), height_m=parse_height(height))
     session.participants.append(person)
     for _ in range(session.trials_per_participant):
-        session.trials.append(Trial(label=_next_label(t.label for t in session.trials), participant=person.label))
+        session.trials.append(Trial(label=_next_label(t.label for t in session.trials), participant=person.label,
+                                    layout=layout))
     session.link()
     save_session(session, root)
     return person
@@ -196,10 +200,8 @@ def remove_participant(session: Session, root: Path, label: str) -> None:
     gone = {t.label for t in session.trials_of(label)}
     session.trials = [t for t in session.trials if t.label not in gone]
     session.participants = [p for p in session.participants if p.label != label]
-    for cam in session.cameras:
-        cam.trial_files = {k: v for k, v in cam.trial_files.items() if k not in gone}
-        for k in gone:
-            _drop_input(layout.inputs(cam.name) / f"trial_{k}.mp4")
+    for k in gone:
+        shutil.rmtree(layout.trial_input(k, "x").parent, ignore_errors=True)
     session.link()
     save_session(session, root)
 
@@ -404,14 +406,16 @@ def copy_details(session: Session, trial: Trial) -> None:
 
 # ---------- adding and removing trials (0.1.0rc13) ----------
 
-def add_trial(session: Session, root: Path, participant: str | None = None) -> Trial:
-    """Another trial, for a new participant with a random pseudonym (participant None, the Trials step) or for an
-    existing one, for example recorded later: its details are then copied from their earlier trial. Its videos are
-    chosen in the mapping table of the Trials step."""
-    ensure_not_frozen(session)
+def add_trial(session: Session, root: Path, participant: str | None = None, layout: str | None = None,
+              like: str | None = None, name: str = "", date: str | None = None) -> Trial:
+    """Another trial (R10). participant None: a new participant with a random pseudonym; 'previous': the default
+    of R10 (the previous trial's participant while they have fewer trials than 'trials per participant'). like: a
+    trial to copy the layout (and, with participant 'previous', the participant) from; default the last trial.
+    Its details are copied from the participant's earlier trial; its videos are chosen afterwards."""
+    model = session.trial(like) if like else (session.trials[-1] if session.trials else None)
+    if participant == "previous":
+        participant = default_participant(session, model.label) if model else None
     if participant is None:
-        if len(session.trials) >= MAX_TRIALS:
-            raise SetupError(f"A session holds at most {MAX_TRIALS} trials. Start a second session for more.")
         taken = existing_codes(Path(root).parent) | {p.code for p in session.participants}
         person = Participant(label=_next_label(p.label for p in session.participants),
                              code=make_code(session.study_code, taken))
@@ -420,10 +424,12 @@ def add_trial(session: Session, root: Path, participant: str | None = None) -> T
     person = session.participant(participant)
     if person.withdrawn_at:
         raise SetupError(f"Participant {participant} withdrew; no trials can be added for them.")
-    if len(session.trials) >= MAX_TRIALS:
-        raise SetupError(f"A session holds at most {MAX_TRIALS} trials. Start a second session for more.")
+    if layout is None:
+        layout = model.layout if model else (session.layouts[0].id if session.layouts else "")
+    if layout:
+        session.layout(layout)
     trial = Trial(label=_next_label(t.label for t in session.trials), participant=participant,
-                  mapping_method="manual")
+                  mapping_method="manual", layout=layout, name=name.strip(), date=check_date(date))
     session.trials.append(trial)
     session.link()
     copy_details(session, trial)
@@ -431,26 +437,29 @@ def add_trial(session: Session, root: Path, participant: str | None = None) -> T
     return trial
 
 
-def trial_has_data(session: Session, root: Path, label: str) -> bool:
-    from mocapapp.core.session import Layout
+def duplicate_trial(session: Session, root: Path, label: str) -> Trial:
+    """R9: a new trial like this one: same participant, layout, name and details; its own videos."""
+    src = session.trial(label)
+    trial = add_trial(session, root, participant=src.participant, layout=src.layout, like=label, name=src.name,
+                      date=src.date)
+    trial.details = dict(src.details)
+    save_session(session, root)
+    return trial
 
+
+def trial_has_data(session: Session, root: Path, label: str) -> bool:
     layout = Layout(root)
+    folder = layout.trial_input(label, "x").parent
     return (layout.trial(label).exists() or label in session.run_state.trial_status
-            or any((layout.inputs(c.name) / f"trial_{label}.mp4").exists() for c in session.cameras))
+            or (folder.is_dir() and any(folder.iterdir())))
 
 
 def drop_trial(session: Session, root: Path, label: str) -> None:
     """Forget a trial in session.json (its files are handled by the caller)."""
-    from mocapapp.core.session import Layout
-
     rs = session.run_state
     for table in (rs.stage_done, rs.trial_status, rs.sync, rs.errors, rs.stage_settings, rs.keypoints_removed):
         table.pop(label, None)
-    for cam in session.cameras:
-        cam.trial_files.pop(label, None)
-        for pos in cam.positions + cam.lenses:
-            pos.trials = [t for t in pos.trials if t != label]
-        _drop_input(Layout(root).inputs(cam.name) / f"trial_{label}.mp4")
+    shutil.rmtree(Layout(root).trial_input(label, "x").parent, ignore_errors=True)
     Layout(root).trial_calib(label).unlink(missing_ok=True)
     session.trials = [t for t in session.trials if t.label != label]
     session.link()
@@ -461,7 +470,7 @@ def remove_empty_trial(session: Session, root: Path, label: str) -> None:
     """Remove a trial that has no videos or results yet (for example added by mistake)."""
     session.trial(label)
     if len(session.trials) == 1:
-        raise SetupError("A session needs at least one trial.")
+        raise SetupError("A project needs at least one trial.")
     if trial_has_data(session, root, label):
         raise SetupError(f"Trial {label} already has videos or results. Delete it with its data instead "
                          "(you will be asked to type the pseudonym).")
@@ -501,18 +510,17 @@ def set_trial_code(session: Session, root: Path, label: str, code: str, confirme
     return "renamed"
 
 
-# ---------- further calibration videos, assigned per trial (0.1.0rc13 extrinsic, 0.1.0rc17 both) ----------
+# ---------- project pieces: cameras, layouts, trial layouts (PROJECT.md §16) ----------
 
-def _refresh_calibration(session: Session, root: Path) -> None:
-    """Rewrite the calibration files when every camera and video in use is ready; otherwise remove stale copies."""
+def _refresh_calibration(session: Session, root: Path, labels: list[str] | None = None) -> None:
+    """Rewrite the calibration files of trials whose layout is ready (stale copies were removed already)."""
     from mocapapp.core.calibration import service
 
     if session.calibration_source != "app":
         return
-    try:
-        service.write_calibration(session, root)
-    except service.CalibrationStepError:
-        service._invalidate_calib(root)
+    service.write_calibration(session, root, None)
+    if labels:
+        _mark_stale(session, labels)
 
 
 def _mark_stale(session: Session, labels) -> None:
@@ -524,176 +532,272 @@ def _mark_stale(session: Session, labels) -> None:
             rs.trial_status[label] = "partial"
 
 
-def _check_role(role: str) -> None:
-    if role not in ("intrinsic", "extrinsic"):
-        raise SetupError("A calibration video is 'intrinsic' or 'extrinsic'.")
-
-
-def _new_calib_file(session: Session, camera: str, file: Path) -> Path:
-    if session.calibration_source != "app":
-        raise SetupError("This session uses an imported calibration; its calibration videos cannot change.")
-    ensure_not_frozen(session)
+def _video_file(file: Path) -> Path:
     path = Path(file).resolve()
     if not path.is_file():
         raise SetupError(f"{path} does not exist.")
-    cam = session.camera(camera)
-    used = [f for role in ("intrinsic", "extrinsic") for _, f in cam.calib_videos(role)]
-    if any(Path(u).resolve() == path for u in used):
-        raise SetupError(f"{path.name} is already a calibration video of {camera}.")
     return path
 
 
-def _forget_video(session: Session, root: Path | None, camera: str, role: str, key: str) -> None:
-    """Results computed from a calibration video that was replaced or removed; its copy in the session."""
+def _app_calibration(session: Session) -> None:
+    if session.calibration_source != "app":
+        raise SetupError("This project uses an imported calibration (sample data); its calibration cannot change.")
+
+
+CAMERA_FIELDS = ("name", "source_dir", "resolution", "zoom", "focus", "stabilisation", "fps", "notes")
+
+
+def add_camera(session: Session, root: Path | None, intrinsic: Path | None = None, **fields) -> Camera:
+    """A new camera (R5): id and name camNN; optional organisation fields; its intrinsic video if known."""
+    unknown = set(fields) - set(CAMERA_FIELDS)
+    if unknown:
+        raise SetupError(f"Unknown camera field(s): {', '.join(sorted(unknown))}.")
+    cam = Camera(id=session.new_id("cam"), **{k: str(v) for k, v in fields.items() if v is not None})
+    if cam.source_dir:
+        cam.source_dir = str(Path(cam.source_dir).resolve())
+    if intrinsic is not None:
+        cam.intrinsic = CalibVideo(file=str(_video_file(intrinsic)), origin="manual")
+    session.cameras.append(cam)
+    if root is not None:
+        save_session(session, root)
+    return cam
+
+
+def edit_camera(session: Session, root: Path | None, camera: str, **fields) -> Camera:
+    """Name, folder and the optional fields of a camera (its intrinsic video: set_intrinsic_video)."""
+    cam = session.camera(camera)
+    for key, value in fields.items():
+        if key not in CAMERA_FIELDS:
+            raise SetupError(f"Unknown camera field: {key}.")
+        value = "" if value is None else str(value).strip()
+        if key == "name" and not value:
+            value = cam.id
+        if key == "source_dir" and value:
+            value = str(Path(value).resolve())
+        setattr(cam, key, value)
+    if root is not None:
+        save_session(session, root)
+    return cam
+
+
+def duplicate_camera(session: Session, root: Path | None, camera: str) -> Camera:
+    """A copy of a camera, with its intrinsic video and lens calibration (R5/R6: to recalibrate a camera already
+    used, duplicate it and give the copy another intrinsic video)."""
+    from mocapapp.core.calibration import intrinsics
+
+    src = session.camera(camera)
+    cam = src.model_copy(deep=True)
+    cam.id = session.new_id("cam")
+    cam.name = f"{src.name} (copy)"
+    session.cameras.append(cam)
+    if root is not None:
+        layout = Layout(root)
+        old = intrinsics.result_path(layout.cameras_work, src.id)
+        if old.is_file():
+            data = json.loads(old.read_text(encoding="utf-8"))
+            data["camera"] = cam.id
+            atomic_write_text(intrinsics.result_path(layout.cameras_work, cam.id), json.dumps(data, indent=2) + "\n")
+        if layout.camera_input(src.id).is_file():
+            layout.camera_input(cam.id).parent.mkdir(parents=True, exist_ok=True)
+            for a, b in ((layout.camera_input(src.id), layout.camera_input(cam.id)),):
+                shutil.copy2(a, b)
+                stamp = a.with_name(a.name + ".source")
+                if stamp.is_file():
+                    shutil.copy2(stamp, b.with_name(b.name + ".source"))
+        save_session(session, root)
+    return cam
+
+
+def delete_camera(session: Session, root: Path | None, camera: str) -> None:
+    cam = session.camera(camera)
+    users = [lay.name for lay in session.layouts_with_camera(camera)]
+    if users:
+        raise SetupError(f"{cam.name} is part of {', '.join(users)}. Remove it from the layout(s) first.")
+    session.cameras = [c for c in session.cameras if c.id != camera]
+    if root is not None:
+        from mocapapp.core.calibration import intrinsics
+
+        layout = Layout(root)
+        _drop_input(layout.camera_input(camera))
+        intrinsics.result_path(layout.cameras_work, camera).unlink(missing_ok=True)
+        save_session(session, root)
+
+
+def set_intrinsic_video(session: Session, root: Path | None, camera: str, file: Path) -> None:
+    """D3: a camera's intrinsic video, from any folder. Not for a camera already used (R6)."""
     from mocapapp.core.calibration import intrinsics, service
 
-    if root is None:
-        return
-    layout = Layout(root)
-    work = layout.calibration_work
-    _drop_input(layout.inputs(camera) / service.input_name(role, key))
-    for f in list(work.glob(f"extrinsics_{camera}*.json")) if work.is_dir() else []:
-        m = service.EXTRINSICS_FILE_RE.fullmatch(f.stem)
-        if m and m.group("cam") == camera and (m.group("lens" if role == "intrinsic" else "pos") or "") == key:
-            f.unlink()
-    if role == "intrinsic":
-        intrinsics.result_path(work, camera, key).unlink(missing_ok=True)
-    else:
-        service.review_image(root, camera, key).unlink(missing_ok=True)
-    field_ = "lens" if role == "intrinsic" else "position"
-    session.extrinsics = [e for e in session.extrinsics
-                          if not (e.get("camera") == camera and e.get(field_, "") == key)]
-    service._invalidate_calib(root)
-
-
-def add_calib_videos(session: Session, root: Path | None, camera: str, role: str, files: list[Path]) -> list[str]:
-    """More calibration videos for a camera. Without a main video the first becomes it; the others are further
-    videos, used by no trial until assigned (set_calib_assignment). Returns their keys ("" = main)."""
-    _check_role(role)
+    _app_calibration(session)
+    service.ensure_recalibratable(session, camera)
+    path = _video_file(file)
     cam = session.camera(camera)
-    keys = []
-    for file in files:
-        path = _new_calib_file(session, camera, file)
-        if getattr(cam, role) is None:
-            setattr(cam, role, (CalibVideo if role == "intrinsic" else VideoRef)(file=str(path), origin="manual"))
-            keys.append("")
-            continue
-        extra = CameraPosition(key=_next_label(["1"] + [p.key for p in cam.extras(role)]), file=str(path))
-        cam.extras(role).append(extra)
-        keys.append(extra.key)
-    if root is not None:
-        save_session(session, root)
-    return keys
-
-
-def replace_calib_video(session: Session, root: Path | None, camera: str, role: str, key: str, file: Path) -> None:
-    """Another file for a calibration video; the trials using it stay with it. Its results are computed again."""
-    _check_role(role)
-    if not key:
-        pick_video(session, camera, role, Path(file), root)
-    else:
-        extra = session.camera(camera).extra(role, key)
-        extra.file = str(_new_calib_file(session, camera, file))
-        _forget_video(session, root, camera, role, key)
-        _mark_stale(session, extra.trials)
+    old = cam.intrinsic
+    cam.intrinsic = CalibVideo(file=str(path), origin="manual")
+    if root is not None and (old is None or Path(old.file).resolve() != path):
+        layout = Layout(root)
+        _drop_input(layout.camera_input(camera))
+        intrinsics.result_path(layout.cameras_work, camera).unlink(missing_ok=True)
+        for lay in session.layouts_with_camera(camera):  # positions are solved again once the lens is calibrated
+            service._invalidate_trials(session, root, [t.label for t in session.trials_with_layout(lay.id)])
     if root is not None:
         save_session(session, root)
 
 
-def remove_calib_video(session: Session, root: Path, camera: str, role: str, key: str) -> None:
-    """Remove a further calibration video; its trials use the camera's main video again."""
-    _check_role(role)
-    if not key:
-        raise SetupError("The main calibration video cannot be removed; choose another file for it instead.")
-    cam = session.camera(camera)
-    extra = cam.extra(role, key)
-    if role == "intrinsic":
-        cam.lenses = [p for p in cam.lenses if p.key != key]
-    else:
-        cam.positions = [p for p in cam.positions if p.key != key]
-    _forget_video(session, root, camera, role, key)
-    _mark_stale(session, extra.trials)
-    _resolve(session, root, camera)
-    save_session(session, root)
+def add_layout(session: Session, root: Path | None, name: str, cameras: list[str], preset: str = "",
+               date: str | None = None) -> CameraLayout:
+    """A new layout (R7): its cameras in calibration order, reference points copied from a preset."""
+    for c in cameras:
+        session.camera(c)
+    if len(set(cameras)) != len(cameras):
+        raise SetupError("A camera can only be once in a layout.")
+    lay = CameraLayout(id=session.new_id("L"), name=name.strip() or f"Layout {len(session.layouts) + 1}",
+                       date=check_date(date), cameras=[LayoutCamera(camera=c) for c in cameras])
+    if preset:
+        lay.points, lay.preset = dict(session.preset(preset).points), preset
+    session.layouts.append(lay)
+    if root is not None:
+        save_session(session, root)
+    return lay
 
 
-def set_calib_assignment(session: Session, root: Path, camera: str, role: str, choice: dict[str, str]) -> None:
-    """Which calibration video each trial uses with this camera: trial label -> key ("" = the main video)."""
-    _check_role(role)
-    cam = session.camera(camera)
-    before = {t.label: cam.video_for(role, t.label) for t in session.trials}
-    keys = {""} | {p.key for p in cam.extras(role)}
-    for label, key in choice.items():
-        session.trial(label)
-        if key not in keys:
-            raise SetupError(f"{camera} has no {role} video {key}.")
-        if key != before.get(label) and not session.trial(label).raw_present:
-            raise SetupError(f"Trial {label}: its raw footage was deleted, so it cannot be computed again with "
-                             "another calibration video.")
-    for extra in cam.extras(role):
-        kept = [t for t in extra.trials if t not in choice]
-        extra.trials = sorted(set(kept) | {t for t, k in choice.items() if k == extra.key},
-                              key=lambda x: int(x) if x.isdigit() else 0)
-    changed = [t.label for t in session.trials if cam.video_for(role, t.label) != before[t.label]]
-    _mark_stale(session, changed)
-    _resolve(session, root, camera)
-    save_session(session, root)
+def duplicate_layout(session: Session, root: Path | None, layout: str) -> CameraLayout:
+    """Same cameras and reference points, without extrinsic videos (the cameras were set up again)."""
+    src = session.layout(layout)
+    lay = add_layout(session, None, f"{src.name} (copy)", src.camera_ids())
+    if src.points:
+        lay.points, lay.preset = dict(src.points), src.preset
+    if root is not None:
+        save_session(session, root)
+    return lay
 
 
-def _resolve(session: Session, root: Path, camera: str) -> None:
-    """Camera positions for the pairs of videos now in use, from saved clicks; then the calibration files."""
-    from mocapapp.core.calibration import service
+def _started(session: Session, layout: str) -> list[str]:
+    return [t.label for t in session.trials_with_layout(layout) if session.run_state.stage_done.get(t.label)]
 
-    if session.calibration_source != "app":
+
+def edit_layout(session: Session, root: Path | None, layout: str, name: str | None = None,
+                date: str | None = None, cameras: list[str] | None = None) -> CameraLayout:
+    lay = session.layout(layout)
+    if name is not None:
+        lay.name = name.strip() or lay.name
+    if date is not None:
+        lay.date = check_date(date) if date else None
+    if cameras is not None and cameras != lay.camera_ids():
+        started = _started(session, layout)
+        if started:
+            raise SetupError(f"Trial(s) {', '.join(started)} already ran with {lay.name}; its cameras cannot change. "
+                             "Duplicate the layout instead.")
+        for c in cameras:
+            session.camera(c)
+        if len(set(cameras)) != len(cameras):
+            raise SetupError("A camera can only be once in a layout.")
+        keep = {lc.camera: lc for lc in lay.cameras}
+        lay.cameras = [keep.get(c) or LayoutCamera(camera=c) for c in cameras]
+        if root is not None:
+            from mocapapp.core.calibration import service
+
+            service._invalidate_trials(session, root, [t.label for t in session.trials_with_layout(layout)])
+    if root is not None:
+        save_session(session, root)
+    return lay
+
+
+def delete_layout(session: Session, root: Path | None, layout: str) -> None:
+    lay = session.layout(layout)
+    users = [t.label for t in session.trials_with_layout(layout)]
+    if users:
+        raise SetupError(f"Trial(s) {', '.join(users)} use {lay.name}. Give them another layout first.")
+    session.layouts = [x for x in session.layouts if x.id != layout]
+    if root is not None:
+        shutil.rmtree(Layout(root).layout_work(layout), ignore_errors=True)
+        shutil.rmtree(Layout(root).layout_input(layout, "x").parent, ignore_errors=True)
+        save_session(session, root)
+
+
+def set_extrinsic_video(session: Session, root: Path | None, layout: str, camera: str, file: Path) -> None:
+    """D3: a camera's extrinsic video in a layout, from any folder. Trials that ran with the old one are marked
+    out of date."""
+    from mocapapp.core.calibration import extrinsics, service
+
+    _app_calibration(session)
+    path = _video_file(file)
+    lay = session.layout(layout)
+    lc = lay.entry(camera)
+    old = lc.extrinsic
+    lc.extrinsic = VideoRef(file=str(path), origin="manual")
+    if root is not None and (old is None or Path(old.file).resolve() != path):
+        rlayout = Layout(root)
+        _drop_input(rlayout.layout_input(layout, camera))
+        extrinsics.result_path(rlayout.layout_work(layout), camera).unlink(missing_ok=True)
+        service.review_image(root, layout, camera).unlink(missing_ok=True)
+        lc.result = None
+        labels = [t.label for t in session.trials_with_layout(layout)]
+        service._invalidate_trials(session, root, labels)
+        _mark_stale(session, labels)
+    if root is not None:
+        save_session(session, root)
+
+
+def check_date(value: str | None) -> str | None:
+    """YYYY-MM-DD, or None."""
+    from datetime import date
+
+    if value in (None, ""):
+        return None
+    try:
+        return date.fromisoformat(str(value).strip()).isoformat()
+    except ValueError:
+        raise SetupError(f"Date '{value}' is not a date like 2026-11-25.") from None
+
+
+def set_trial_layout(session: Session, root: Path | None, label: str, layout: str) -> None:
+    """The layout a trial was recorded with (R7). Its videos for cameras not in the new layout are forgotten."""
+    trial = ensure_open(session, label)
+    lay = session.layout(layout)
+    if trial.layout == layout:
         return
-    service.resolve_extrinsics(session, root, camera)
-    _refresh_calibration(session, root)
+    if session.run_state.stage_done.get(label):
+        raise SetupError(f"Trial {label} already ran with another layout. Remove its results first, or add a new "
+                         "trial for it.")
+    trial.layout = layout
+    trial.layout_override = False
+    trial.videos = {c: f for c, f in trial.videos.items() if c in lay.camera_ids()}
+    if root is not None:
+        from mocapapp.core.calibration import service
+
+        service._invalidate_trials(session, root, [label])
+        save_session(session, root)
 
 
-def prepare_calib_video(session: Session, root: Path, camera: str, role: str, key: str) -> Path:
-    """Copy (or convert) a further calibration video into the session, like the other calibration videos."""
-    from mocapapp.core import media
-    from mocapapp.core.calibration.service import input_name
-
-    src = Path(session.camera(camera).extra(role, key).file)
-    dst = Layout(root).inputs(camera) / input_name(role, key)
-    stamp = dst.with_name(dst.name + ".source")
-    mark = json.dumps({"source": str(src.resolve()), "size": src.stat().st_size, "mtime": int(src.stat().st_mtime)})
-    if not (dst.is_file() and stamp.is_file() and stamp.read_text(encoding="utf-8") == mark):
-        media.normalise(src, dst)
-        stamp.write_text(mark, encoding="utf-8")
-    return dst
+def accept_layout(session: Session, root: Path | None, label: str, accept: bool = True) -> None:
+    """R8: use the layout although it was recorded on another day (recorded with the trial)."""
+    session.trial(label).layout_override = accept
+    if root is not None:
+        save_session(session, root)
 
 
-# older names, kept for the CLI's `calibrate position` (a camera moved between trials)
-
-def add_camera_position(session: Session, root: Path, camera: str, file: Path, trials: list[str]) -> CameraPosition:
-    """The camera was moved between trials: a further extrinsic video for it, used by `trials`."""
-    if not session.camera(camera).extrinsic:
-        raise SetupError(f"{camera} has no extrinsic video yet; choose that first.")
-    if not trials:
-        raise SetupError("Choose at least one trial for this camera position.")
-    key = add_calib_videos(session, root, camera, "extrinsic", [Path(file)])[0]
-    set_position_trials(session, root, camera, key, trials)
-    return session.camera(camera).position(key)
+def set_trial_info(session: Session, root: Path | None, label: str, name: str | None = None,
+                   date: str | None = None) -> None:
+    trial = session.trial(label)
+    if name is not None:
+        trial.name = name.strip()
+    if date is not None:
+        trial.date = check_date(date)
+    if root is not None:
+        save_session(session, root)
 
 
-def set_position_trials(session: Session, root: Path, camera: str, key: str, trials: list[str]) -> None:
-    """Which trials use this further extrinsic video (the others keep theirs)."""
-    extra = session.camera(camera).position(key)
-    if not trials:
-        raise SetupError("Choose at least one trial for this camera position.")
-    choice = {t: "" for t in extra.trials if t not in trials}
-    choice.update({t: key for t in trials})
-    set_calib_assignment(session, root, camera, "extrinsic", choice)
-
-
-def remove_camera_position(session: Session, root: Path, camera: str, key: str) -> None:
-    remove_calib_video(session, root, camera, "extrinsic", key)
-
-
-def prepare_position(session: Session, root: Path, camera: str, key: str) -> Path:
-    return prepare_calib_video(session, root, camera, "extrinsic", key)
+def default_participant(session: Session, previous: str | None = None) -> str | None:
+    """R10: the previous trial's participant while they have fewer trials than 'trials per participant';
+    otherwise None (a new participant)."""
+    if previous is None:
+        if not session.trials:
+            return None
+        previous = session.trials[-1].label
+    person = session.participant(session.trial(previous).participant)
+    if person.withdrawn_at:
+        return None
+    return person.label if len(session.trials_of(person.label)) < session.trials_per_participant else None
 
 
 # ---------- moving a session to another output folder ----------
@@ -834,16 +938,19 @@ def _rebase_paths(src: Path, dest: Path) -> None:
 
     for cam in session.cameras:
         cam.source_dir = moved(cam.source_dir)
-        for ref in (cam.intrinsic, cam.extrinsic, *cam.positions, *cam.lenses):
-            if ref is not None:
-                ref.file = moved(ref.file)
-        cam.trial_files = {label: moved(f) for label, f in cam.trial_files.items()}
+        if cam.intrinsic is not None:
+            cam.intrinsic.file = moved(cam.intrinsic.file)
+    for lay in session.layouts:
+        for lc in lay.cameras:
+            if lc.extrinsic is not None:
+                lc.extrinsic.file = moved(lc.extrinsic.file)
+    for t in session.trials:
+        t.videos = {c: moved(f) for c, f in t.videos.items()}
     save_session(session, dest)
 
 
 def set_trial_participants(session: Session, table: dict[str, str]) -> None:
-    """Which participant each trial belongs to (trial label -> participant label), from the Trials step."""
-    ensure_not_frozen(session)
+    """Which participant each trial belongs to (trial label -> participant label)."""
     known = {p.label for p in session.active_participants}
     for trial_label, person in table.items():
         trial = session.trial(trial_label)
@@ -860,28 +967,32 @@ def set_trial_participants(session: Session, table: dict[str, str]) -> None:
         copy_details(session, session.trial(lbl))
 
 
-def ensure_not_frozen(session: Session) -> None:
-    """After any raw-footage deletion the session's videos are fixed: no re-validation, re-mapping or re-copying."""
-    if session.frozen:
-        gone = ", ".join(f"trial {t.label} ({t.code})" for t in session.trials if not t.raw_present)
-        raise SetupError(f"Raw footage was deleted in this session ({gone}), so its videos can no longer be checked, "
-                         "changed or prepared again. Start a new session for new recordings.")
+def ensure_open(session: Session, label: str) -> Trial:
+    """R20: a trial whose raw footage was deleted keeps its results, but its videos and layout cannot change."""
+    trial = session.trial(label)
+    if trial.frozen:
+        why = ("the participant withdrew" if trial.withdrawn_at
+               else f"its raw footage was deleted on {trial.raw_deleted_at}")
+        raise SetupError(f"Trial {label} ({trial.code}): {why}, so its videos and layout can no longer change. Add a "
+                         "new trial for new recordings.")
+    return trial
 
 
-def pick_video(session: Session, camera: str, role: str, file: Path, root: Path | None = None) -> None:
-    """D3: choose a calibration video from any folder. With `root`, results computed from the old video are
-    removed (a new intrinsic video also means a new camera position)."""
-    ensure_not_frozen(session)
-    path = Path(file).resolve()
-    if not path.is_file():
-        raise SetupError(f"{path} does not exist.")
-    cls = CalibVideo if role == "intrinsic" else VideoRef
-    cam = session.camera(camera)
-    old = getattr(cam, role)
-    setattr(cam, role, cls(file=str(path), origin="manual"))
-    if root is not None and (old is None or Path(old.file).resolve() != path):
-        _forget_video(session, root, camera, role, "")
-        _mark_stale(session, [t.label for t in session.trials if not cam.video_for(role, t.label)])
+def pick_video(session: Session, camera: str, role: str, file: Path, root: Path | None = None,
+               layout: str | None = None) -> None:
+    """D3: choose a calibration video from any folder: a camera's intrinsic video, or its extrinsic video in a
+    layout (default: the only layout with this camera)."""
+    if role == "intrinsic":
+        set_intrinsic_video(session, root, camera, file)
+        return
+    if role != "extrinsic":
+        raise SetupError("A calibration video is 'intrinsic' or 'extrinsic'.")
+    if layout is None:
+        layouts = session.layouts_with_camera(camera)
+        if len(layouts) != 1:
+            raise SetupError(f"{camera} is in {len(layouts)} layouts: say which layout this extrinsic video is for.")
+        layout = layouts[0].id
+    set_extrinsic_video(session, root, layout, camera, file)
 
 
 def _drop_input(path: Path) -> None:
@@ -891,20 +1002,21 @@ def _drop_input(path: Path) -> None:
 
 
 def set_mapping(session: Session, table: dict[tuple[str, str], Path], root: Path | None = None) -> None:
-    """Manual trial mapping (tier 3): (camera, trial label) -> file. With `root`, copies of files that changed are
+    """Trial videos chosen by hand: (camera id, trial label) -> file. With `root`, copies of files that changed are
     removed from inputs/ and the trial folder, so they are prepared again."""
-    from mocapapp.core.session import Layout
-
-    ensure_not_frozen(session)
     for (cam, label), file in table.items():
+        trial = ensure_open(session, label)
+        lay = session.trial_layout(label)
+        if lay is None or cam not in lay.camera_ids():
+            raise SetupError(f"Trial {label}: camera {cam} is not in its layout.")
         if not Path(file).is_file():
             raise SetupError(f"{file} does not exist.")
         new = str(Path(file).resolve())
-        old = session.camera(cam).trial_files.get(label)
-        session.camera(cam).trial_files[label] = new
+        old = trial.videos.get(cam)
+        trial.videos[cam] = new
         if root is not None and (old is None or Path(old).resolve() != Path(new)):
-            _drop_input(Layout(root).inputs(cam) / f"trial_{label}.mp4")
-            (Layout(root).trial(label) / "videos" / f"{cam}.mp4").unlink(missing_ok=True)
+            _drop_input(Layout(root).trial_input(label, cam))
+            (Layout(root).trial(label) / "videos" / f"{lay.slot(cam)}.mp4").unlink(missing_ok=True)
     for t in session.trials:
         t.mapping_method = "manual"
 
@@ -919,7 +1031,7 @@ def run_ready(session: Session, root: Path) -> list[Issue]:
     if session.calibration_source == "app":
         for cam, state in calibration_state(session, root).items():
             if state != "ready":
-                issues.append(Issue("error", cam, f"Calibration: {state}.", "Finish the calibration steps."))
+                issues.append(Issue("error", cam, f"Calibration: {state}.", "Finish the cameras and layouts."))
     elif not Layout(root).calib_file.is_file():
         issues.append(Issue("error", "calibration", "The imported calibration file is missing.", ""))
     return issues + runner.preflight(session, root, [t.label for t in session.active_trials])
@@ -927,21 +1039,27 @@ def run_ready(session: Session, root: Path) -> list[Issue]:
 
 def inputs_ready(session: Session, root: Path) -> bool:
     """Every video has been copied/normalised into inputs/ and the trial folders exist."""
-    from mocapapp.core.session import Layout
 
-    layout = Layout(root)
     # deleted footage is gone on purpose; finished trials no longer need their copies
     trials = [t for t in session.trials if t.raw_present and session.run_state.trial_status.get(t.label) != "done"]
-    for cam in session.cameras:
-        names = [f"trial_{t.label}.mp4" for t in trials]
-        if session.calibration_source == "app":
-            names += ["intrinsic.mp4", "extrinsic.mp4"] + [f"extrinsic_{p.key}.mp4" for p in cam.positions] + [
-                f"intrinsic_{p.key}.mp4" for p in cam.lenses]
-        if not all((layout.inputs(cam.name) / n).is_file() for n in names):
-            return False
-    return all((layout.trial(t.label) / "Config.toml").is_file() and
-               all((layout.trial(t.label) / "videos" / f"{c.name}.mp4").is_file() for c in session.cameras)
-               for t in trials)
+    return all(trial_inputs_ready(session, root, t.label) for t in trials)
+
+
+def trial_inputs_ready(session: Session, root: Path, label: str) -> bool:
+    """A trial's videos (and its layout's calibration videos) are copied in and its folder is assembled."""
+    layout = Layout(root)
+    cams = session.trial_cameras(label)
+    if not cams:
+        return False
+    if session.calibration_source == "app":
+        for _slot, cam, _lc in cams:
+            if not layout.camera_input(cam.id).is_file():
+                return False
+            if not layout.layout_input(session.trial(label).layout, cam.id).is_file():
+                return False
+    return ((layout.trial(label) / "Config.toml").is_file()
+            and all(layout.trial_input(label, cam.id).is_file() for _s, cam, _lc in cams)
+            and all((layout.trial(label) / "videos" / f"{slot}.mp4").is_file() for slot, _c, _lc in cams))
 
 
 def prepare_session(session: Session, root: Path, progress=print, dry_run: bool = False):
@@ -950,7 +1068,6 @@ def prepare_session(session: Session, root: Path, progress=print, dry_run: bool 
     from mocapapp.core.assemble import assemble_trials, plan_inputs, prepare_inputs
     from mocapapp.core.validate import validate
 
-    ensure_not_frozen(session)
     report = validate(session, root)
     save_session(session, root)
     if not report.ok:

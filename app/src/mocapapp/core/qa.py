@@ -124,7 +124,7 @@ def trial_qa(session: Session, root: Path, label: str) -> TrialQA:
     qa = TrialQA(label, trial.code, status, "grey")
     if label in session.run_state.errors:
         qa.warnings.append(session.run_state.errors[label])
-    n_cams = len(session.cameras)
+    n_cams = len(session.trial_cameras(label))
 
     # synchronisation
     sync = parse_sync(_log(tdir, "synchronization"))

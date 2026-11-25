@@ -20,8 +20,8 @@ def test_round_trip(tmp_path):
                 trials=[Trial(label="1", participant="1")], cameras=[])
     save_session(s, tmp_path)
     loaded = load_session(tmp_path)
-    assert loaded.trials[0].height_m == 1.8 and loaded.schema_ == 1
-    assert '"schema": 1' in (tmp_path / "session.json").read_text()
+    assert loaded.trials[0].height_m == 1.8 and loaded.schema_ == 2
+    assert '"schema": 2' in (tmp_path / "session.json").read_text()
 
 
 def test_existing_codes_scans_sessions(tmp_path):

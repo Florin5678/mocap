@@ -100,8 +100,7 @@ def test_add_and_remove_trials(tmp_path):
     remove_empty_trial(session, tmp_path, "3")
     assert [t.label for t in load_session(tmp_path).trials] == ["1", "2"]
     session.trials[0].raw_deleted_at = "2026-11-19T10:00:00"
-    with pytest.raises(SetupError, match="deleted"):
-        add_trial(session, tmp_path, "2")
+    assert add_trial(session, tmp_path, "2").label == "3"  # R20: a deletion locks only its own trial
 
 
 def test_delete_one_trial_with_its_data(tmp_path, monkeypatch):
@@ -113,7 +112,7 @@ def test_delete_one_trial_with_its_data(tmp_path, monkeypatch):
 
     plan = deletion.plan_trial(session, root, "1")
     paths = {i.path for i in plan.items}
-    assert layout.trial("1") in paths and layout.inputs("cam01") / "trial_1.mp4" in paths
+    assert layout.trial("1") in paths and layout.trial_input("1", "cam01") in paths
     assert not any("trial2" in p.name or p == layout.trial("2") for p in paths)
     assert plan.confirm_text == session.trial("1").code and not plan.blockers
     with pytest.raises(deletion.DeletionError, match="type the pseudonym"):
@@ -147,8 +146,8 @@ def test_trials_run_one_at_a_time_across_reopening(tmp_path, fake):
     later = add_trial(reopened, tmp_path, "1")  # recorded on another day
     layout = Layout(tmp_path)
     for cam in reopened.cameras:
-        layout.inputs(cam.name).mkdir(parents=True, exist_ok=True)
-        (layout.inputs(cam.name) / f"trial_{later.label}.mp4").write_bytes(b"video")
+        layout.trial_input(later.label, cam.id).parent.mkdir(parents=True, exist_ok=True)
+        layout.trial_input(later.label, cam.id).write_bytes(b"video")
     # finished trials without copies (removed to save space, or never made in this fake) are left as they are
     assert assemble_trials(reopened, tmp_path, progress=lambda m: None) == [layout.trial(later.label)]
     assert assemble_trials(reopened, tmp_path, progress=lambda m: None, labels=[later.label]) == [
@@ -170,7 +169,7 @@ def _camera_folders(root, labels):
 def test_processed_trials_keep_their_labels(tmp_path):
     session = make_session(tmp_path)
     for cam in session.cameras:
-        cam.source_dir = str(tmp_path / "raw" / cam.name)
+        cam.source_dir = str(tmp_path / "raw" / cam.id)
     _camera_folders(tmp_path, ["1", "2"])
     report = validate(session, do_probe=False)
     assert report.ok and report.mapping_method == "digit"
@@ -183,12 +182,12 @@ def test_processed_trials_keep_their_labels(tmp_path):
     assert {i.where for i in report.issues if i.level == "action"} == {"cam01 trial 3", "cam02 trial 3"}
 
     _camera_folders(tmp_path, ["3"])
-    set_mapping(session, {(c.name, new.label): tmp_path / "raw" / c.name / "trial3.mp4" for c in session.cameras})
+    set_mapping(session, {(c.id, new.label): tmp_path / "raw" / c.id / "trial3.mp4" for c in session.cameras})
     (tmp_path / "raw" / "cam01" / "trial1.mp4").unlink()  # the original of the finished trial was removed later
     report = validate(session, do_probe=False)
     assert report.ok, report.issues
     assert any(i.level == "info" and "trial 1" in i.where for i in report.issues)
-    assert session.camera("cam01").trial_files["1"].endswith("trial1.mp4")  # never renumbered
+    assert session.trial("1").videos["cam01"].endswith("trial1.mp4")  # never renumbered
 
 
 # ---------- CLI ----------
