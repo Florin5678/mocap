@@ -50,7 +50,8 @@ def _new_project(win, tmp_path):
     return win.root, win.session
 
 
-def _raw(tmp_path):
+def _raw(tmp_path, trials: int = 0):
+    """Each camera's folder: board video, extrinsic video and `trials` trial videos named walk1, walk2, ..."""
     raw = tmp_path / "raw"
     for i, cam in enumerate(CAMS, 1):
         d = raw / cam
@@ -58,6 +59,8 @@ def _raw(tmp_path):
         frames = board_views(n=24)
         write_video(frames[i:] + frames[:i], d / "intrinsic.mp4")
         make_video(d / "extrinsic.mp4", seconds=0.3 + 0.05 * i, size="1280x720", pattern="smptebars")
+        for n in range(1, trials + 1):
+            make_video(d / f"walk{n}.mp4", seconds=0.5 + 0.05 * i, size="1280x720")
     return raw
 
 
@@ -117,8 +120,10 @@ def test_session_settings(win, tmp_path, monkeypatch):
     assert not load_session(root).participants[0].delete_raw  # consent decides again
 
 
-def test_calibrate_cameras_and_layout_in_the_window(win, tmp_path, qtbot, monkeypatch):
-    raw = _raw(tmp_path)
+def calibrate_in_window(win, tmp_path, qtbot, monkeypatch, trials: int = 0):
+    """A new project; two cameras added and calibrated in Cameras, layout 'Hall' made and calibrated in Layouts.
+    Returns (raw folder, project folder, session)."""
+    raw = _raw(tmp_path, trials)
     root, ses = _new_project(win, tmp_path)
 
     # Cameras: add two from their folders (the 'intrinsic' video is found by name), then calibrate them
@@ -206,6 +211,12 @@ def test_calibrate_cameras_and_layout_in_the_window(win, tmp_path, qtbot, monkey
         qtbot.waitUntil(lambda c=cam: service.position_result(root, "L1", c) is not None, timeout=120000)
         qtbot.waitUntil(lambda: not win.busy, timeout=10000)
     assert service.layout_state(ses, root, "L1") == {"Hall: cam01": "ready", "Hall: cam02": "ready"}
+    return raw, root, ses
+
+
+def test_calibrate_cameras_and_layout_in_the_window(win, tmp_path, qtbot, monkeypatch):
+    _raw_dir, root, ses = calibrate_in_window(win, tmp_path, qtbot, monkeypatch)
+    lays = win.section("layouts")
     assert lays.table.item(0, 5).text() in ("PASS", "CHECK (usable)")
     assert "Ready" in lays.state.text()
     assert win.badges()["layouts"] == TICK and "Layouts    " + TICK in win.sidebar.item(3).text()

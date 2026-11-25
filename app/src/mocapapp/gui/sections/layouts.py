@@ -45,11 +45,11 @@ from mocapapp.gui.common import (
     note,
     open_path,
     readonly,
+    scroll,
     selected_rows,
 )
 from mocapapp.gui.main_window import Section
 from mocapapp.gui.sections.cameras import CAL_ERRORS, choose_video, table
-from mocapapp.gui.sections.session import scroll
 
 ERRORS = (*CAL_ERRORS, ex.ExtrinsicsError)
 

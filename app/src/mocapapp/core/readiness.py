@@ -88,11 +88,13 @@ def section_todo(session: Session, root: Path) -> dict[str, int | None]:
     cams = [c for c in session.cameras]
     people = session.active_participants
     trials = session.active_trials
+    imported = session.calibration_source == "imported"  # sample data: calibration comes with it
     return {
         "session": sum(1 for t in trials if trial_status(session, root, t.label) == "not ready") if trials else None,
         "participants": sum(1 for p in people if not p.consent.attested or p.height_m is None) if people else None,
-        "cameras": sum(1 for c in cams if service.lens_result(root, c.id) is None) if cams else None,
-        "layouts": sum(1 for x in session.layouts if not _layout_ready(session, root, x.id))
+        "cameras": (0 if imported else sum(1 for c in cams if service.lens_result(root, c.id) is None))
+        if cams else None,
+        "layouts": (0 if imported else sum(1 for x in session.layouts if not _layout_ready(session, root, x.id)))
         if session.layouts else None,
         "results": None,
     }
@@ -109,14 +111,15 @@ def checklist(session: Session, root: Path) -> list[tuple[str, str, bool]]:
     """An empty project's first steps: (section, what to do, done)."""
     from mocapapp.core.calibration import service
 
-    has_points = bool(session.presets) or any(x.points for x in session.layouts)
+    imported = session.calibration_source == "imported"  # sample data: calibration comes with it
+    has_points = imported or bool(session.presets) or any(x.points for x in session.layouts)
     return [
         ("cameras", "Add the cameras", bool(session.cameras)),
         ("cameras", "Calibrate their lenses (intrinsic videos of the board)",
-         bool(session.cameras) and all(service.lens_result(root, c.id) for c in session.cameras)),
+         bool(session.cameras) and (imported or all(service.lens_result(root, c.id) for c in session.cameras))),
         ("layouts", "Enter the measured reference points", has_points),
         ("layouts", "Make a layout and click the points in each camera's extrinsic video",
-         any(_layout_ready(session, root, x.id) for x in session.layouts)),
+         imported or any(_layout_ready(session, root, x.id) for x in session.layouts)),
         ("participants", "Add participants: pseudonym, height, consent",
          any(p.consent.attested and p.height_m for p in session.active_participants)),
         ("session", "Add the first trial and choose its videos", bool(session.trials)),

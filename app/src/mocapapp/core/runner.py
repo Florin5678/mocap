@@ -210,7 +210,7 @@ def check_outputs(trial_dir: Path, stage: str, cameras: list[str], session: Sess
         log = trial_dir / LOG_DIR / "filtering.log"
         if log.is_file() and "critical frequencies" in log.read_text(encoding="utf-8", errors="replace"):
             return ("The smoothing cut-off is too high for this video's frame rate: it must be below half the frame "
-                    "rate. Lower 'Smoothing cut-off' under Advanced and press Run all again.")
+                    "rate. Lower 'Smoothing cut-off' in Session settings and run the trial again.")
         return "Filtering produced no file."
     if stage == "markerAugmentation":
         return None if list(p3d.glob("*_LSTM.trc")) else "Marker augmentation failed (it needs hips, knees, " \
@@ -322,7 +322,7 @@ def preflight(session: Session, root: Path, labels: list[str]) -> list[Issue]:
         if flt.type.startswith("butterworth") and fps > 0 and flt.cutoff_hz >= fps / 2:
             issues.append(Issue("error", where, f"The smoothing cut-off ({flt.cutoff_hz:g} Hz) is too high for videos "
                                 f"at {fps:g} frames per second: it must be below half the frame rate ({fps / 2:g} Hz).",
-                                f"Set 'Smoothing cut-off' under Advanced to {max_cutoff_hz(fps)} Hz or less "
+                                f"Set 'Smoothing cut-off' in Session settings to {max_cutoff_hz(fps)} Hz or less "
                                 "(6 Hz suits walking)."))
     need = space_needed(session, root, labels)
     if need:
@@ -334,7 +334,7 @@ def preflight(session: Session, root: Path, labels: list[str]) -> list[Issue]:
                                 f"The run may need about {need / 1e9:.0f} GB for working files, and "
                                 f"{free / 1e9:.0f} GB are free. A full drive stops the run half-way.{kept}",
                                 "Free some space, run a few trials at a time, or move the session to a larger drive "
-                                "(Session step > Change output folder)."))
+                                "(Session settings > Change output folder)."))
     return issues
 
 

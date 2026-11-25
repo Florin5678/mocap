@@ -434,7 +434,7 @@ def _participant(args: argparse.Namespace) -> int:
             print(f"{p.label}  {p.code}  height {format_height(p.height_m) if p.height_m else 'missing'}  "
                   f"consent: {state}  trials {trials}")
         if not s.participants:
-            print("No participants yet: they are added with their first trial (mocapapp trial add).")
+            print("No participants yet: mocapapp participant add, or with a new trial (mocapapp trial add).")
     elif cmd == "set":
         person = s.participant(args.participant)
         if args.random:

@@ -31,9 +31,18 @@ from mocapapp.core.calibration import service
 from mocapapp.core.session import Camera
 from mocapapp.core.texts import s
 from mocapapp.core.workflow import SetupError
-from mocapapp.gui.common import Background, clear_table, confirm, error_box, for_each, note, readonly, selected_rows
+from mocapapp.gui.common import (
+    Background,
+    clear_table,
+    confirm,
+    error_box,
+    for_each,
+    note,
+    readonly,
+    scroll,
+    selected_rows,
+)
 from mocapapp.gui.main_window import Section
-from mocapapp.gui.sections.session import scroll
 
 VIDEO_FILTER = "Videos (*.mp4 *.mov *.avi *.mkv *.m4v *.MP4 *.MOV *.AVI *.MKV *.M4V);;All files (*)"
 OPTIONAL = (("resolution", "Resolution", "e.g. 1920x1080"), ("zoom", "Zoom", "e.g. wide, 1x"),

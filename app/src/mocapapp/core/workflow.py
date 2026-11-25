@@ -173,8 +173,8 @@ def _next_label(labels) -> str:
 
 def add_participant(session: Session, root: Path, height: str | float | None = None) -> Participant:
     """A participant added later: a new pseudonym and trials_per_participant trials (with the last trial's
-    layout)."""
-    layout = session.trials[-1].layout if session.trials else ""
+    layout, or the newest layout)."""
+    layout = session.trials[-1].layout if session.trials else (session.layouts[-1].id if session.layouts else "")
     taken = existing_codes(Path(root).parent) | {p.code for p in session.participants}
     person = Participant(label=_next_label(p.label for p in session.participants),
                          code=make_code(session.study_code, taken), height_m=parse_height(height))
@@ -414,7 +414,7 @@ def add_trial(session: Session, root: Path, participant: str | None = None, layo
     Its details are copied from the participant's earlier trial; its videos are chosen afterwards."""
     model = session.trial(like) if like else (session.trials[-1] if session.trials else None)
     if participant == "previous":
-        participant = default_participant(session, model.label) if model else None
+        participant = default_participant(session, model.label if model else None)
     if participant is None:
         taken = existing_codes(Path(root).parent) | {p.code for p in session.participants}
         person = Participant(label=_next_label(p.label for p in session.participants),
@@ -468,16 +468,13 @@ def drop_trial(session: Session, root: Path, label: str) -> None:
 
 
 def remove_empty_trial(session: Session, root: Path, label: str) -> None:
-    """Remove a trial that has no videos or results yet (for example added by mistake)."""
+    """Remove a trial that has no videos or results yet (for example added by mistake). A project may have none;
+    its participant stays (participants have their own section since 0.2.0)."""
     session.trial(label)
-    if len(session.trials) == 1:
-        raise SetupError("A project needs at least one trial.")
     if trial_has_data(session, root, label):
         raise SetupError(f"Trial {label} already has videos or results. Delete it with its data instead "
                          "(you will be asked to type the pseudonym).")
     drop_trial(session, root, label)
-    if drop_unused_participants(session):  # a participant left without trials goes with it
-        save_session(session, root)
 
 
 def drop_unused_participants(session: Session) -> list[str]:
@@ -490,9 +487,9 @@ def drop_unused_participants(session: Session) -> list[str]:
 
 
 def assign_trial(session: Session, root: Path, label: str, participant: str) -> None:
-    """The Trials table: a trial belongs to another (existing) participant. One left without trials is removed."""
+    """A trial belongs to another (existing) participant. The first one stays, also without trials."""
+    ensure_open(session, label)
     set_trial_participants(session, {label: participant})
-    drop_unused_participants(session)
     save_session(session, root)
 
 
@@ -812,15 +809,15 @@ def set_trial_info(session: Session, root: Path | None, label: str, name: str | 
 
 def default_participant(session: Session, previous: str | None = None) -> str | None:
     """R10: the previous trial's participant while they have fewer trials than 'trials per participant';
-    otherwise None (a new participant)."""
-    if previous is None:
-        if not session.trials:
-            return None
+    otherwise the first participant without trials yet (added in Participants beforehand); otherwise None (a new
+    participant)."""
+    if previous is None and session.trials:
         previous = session.trials[-1].label
-    person = session.participant(session.trial(previous).participant)
-    if person.withdrawn_at:
-        return None
-    return person.label if len(session.trials_of(person.label)) < session.trials_per_participant else None
+    if previous is not None:
+        person = session.participant(session.trial(previous).participant)
+        if not person.withdrawn_at and len(session.trials_of(person.label)) < session.trials_per_participant:
+            return person.label
+    return next((p.label for p in session.active_participants if not session.trials_of(p.label)), None)
 
 
 # ---------- moving a session to another output folder ----------
@@ -1209,6 +1206,20 @@ def check_trials(session: Session, root: Path, labels: list[str], progress=print
         assemble_trials(session, root, progress, labels=labels)
         save_session(session, root)
     return report, plan
+
+
+def check_each_trial(session: Session, root: Path, labels: list[str], progress=print) -> dict[str, tuple]:
+    """Check and copy the videos of each trial on its own: a trial with a problem never holds the others back
+    (§16.4). Per label: (report, plan, error); plan None = not copied (see the report or the error)."""
+    out = {}
+    for label in labels:
+        progress(f"Trial {label}: checking and copying its videos ...")
+        try:
+            report, plan = check_trials(session, root, [label], progress)
+            out[label] = (report, plan, "")
+        except (SetupError, KeyError, OSError) as exc:  # a frozen trial, a full disk, a file that went away
+            out[label] = (None, None, str(exc).strip("'\""))
+    return out
 
 
 def prepare_calibration(session: Session, root: Path, cameras: list[str] | None = None,

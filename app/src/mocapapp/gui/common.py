@@ -9,7 +9,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, QSettings, QThread, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import QComboBox, QFrame, QLabel, QMessageBox, QTextBrowser, QWidget
+from PySide6.QtWidgets import QComboBox, QFrame, QLabel, QMessageBox, QScrollArea, QTextBrowser, QWidget
 
 ORG, APP = "mocapapp", "mocapapp"
 MAX_RECENT = 8
@@ -19,7 +19,8 @@ LEVEL_TEXT = {"error": "Problem", "action": "To do", "warning": "Check", "info":
 LEVEL_COLOR = {"error": "#c62828", "action": "#1565c0", "warning": "#b26a00", "info": "#555", "ok": "#2e7d32"}
 STATUS_LEVEL = {"ok": "ok", "ready": "ok", "done": "ok", "warn": "warning", "fail": "error", "failed": "error",
                 "pending": "info", "missing": "action", "needs_sync_fix": "action", "cancelled": "warning",
-                "running": "info", "partial": "warning"}
+                "running": "info", "partial": "warning", "not ready": "action", "needs sync fix": "action",
+                "out of date": "warning", "footage deleted": "info", "withdrawn": "info"}
 
 
 def settings() -> QSettings:
@@ -255,6 +256,14 @@ def for_each(parent: QWidget | None, title: str, items: list, action: Callable,
     if failed:
         error_box(parent, title, "\n\n".join(failed))
     return done
+
+
+def scroll(widget: QWidget) -> QScrollArea:
+    """A section's page in a scroll area (a long page never forces the window taller than the screen)."""
+    area = QScrollArea()
+    area.setWidgetResizable(True)
+    area.setWidget(widget)
+    return area
 
 
 def selected_rows(view) -> list[int]:

@@ -33,10 +33,10 @@ from mocapapp.gui.common import (
     for_each,
     note,
     readonly,
+    scroll,
     selected_rows,
 )
 from mocapapp.gui.main_window import Section
-from mocapapp.gui.sections.session import scroll
 
 
 def footage_text(session, person) -> str:
