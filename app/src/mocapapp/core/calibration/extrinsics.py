@@ -211,19 +211,21 @@ def mirror_hint(objp, imgp, K, D, rms: float | None) -> str | None:
             "Re-check the reference point coordinates.")
 
 
-def result_path(work_dir: Path, camera: str, position: str = "") -> Path:
-    """position "" = the camera's main extrinsic video; "2", "3", ... = a later position (camera moved)."""
-    return work_dir / (f"extrinsics_{camera}_pos{position}.json" if position else f"extrinsics_{camera}.json")
+def result_path(work_dir: Path, camera: str, position: str = "", lens: str = "") -> Path:
+    """position "" = the camera's main extrinsic video; "2", "3", ... = a further one (the camera was moved).
+    lens = the intrinsic video it is computed with ("" = the main one; 0.1.0rc17)."""
+    return work_dir / (f"extrinsics_{camera}" + (f"_pos{position}" if position else "")
+                       + (f"_lens{lens}" if lens else "") + ".json")
 
 
-def save_result(result: ExtrinsicsResult, work_dir: Path, position: str = "") -> Path:
-    path = result_path(work_dir, result.camera, position)
+def save_result(result: ExtrinsicsResult, work_dir: Path, position: str = "", lens: str = "") -> Path:
+    path = result_path(work_dir, result.camera, position, lens)
     atomic_write_text(path, result.to_json() + "\n")
     return path
 
 
-def load_result(work_dir: Path, camera: str, position: str = "") -> ExtrinsicsResult | None:
-    path = result_path(work_dir, camera, position)
+def load_result(work_dir: Path, camera: str, position: str = "", lens: str = "") -> ExtrinsicsResult | None:
+    path = result_path(work_dir, camera, position, lens)
     return ExtrinsicsResult.from_json(path.read_text(encoding="utf-8")) if path.is_file() else None
 
 

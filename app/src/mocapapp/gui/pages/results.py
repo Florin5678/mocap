@@ -1,4 +1,4 @@
-"""Step 7: completion - QA traffic lights, 3D preview, export (§6.7, FR-4.8)."""
+"""Step 6: completion - QA traffic lights, 3D preview, export (§6.7, FR-4.8)."""
 
 from __future__ import annotations
 

@@ -124,14 +124,14 @@ def test_save_and_open_project_at_its_step(qtbot, tmp_path, monkeypatch):
     qtbot.addWidget(win)
     win.open_session(root)
     assert win.current_page().key == "results"  # a finished session resumes on Results, not the Viewer
-    win.go(7)
+    win.go(6)
     assert win.current_page().key == "viewer"
     asked = []
     monkeypatch.setattr(QFileDialog, "getSaveFileName",
                         lambda *a, **k: (asked.append(a[2]), (str(tmp_path / "study"), ""))[1])
     assert win.save_project() == (tmp_path / "study.mocapproj").resolve()
     assert asked == [str(tmp_path / "S.mocapproj")] and "Project: study" in win.session_label.text()
-    win.go(5)
+    win.go(4)
     win.save_project()  # second time: no dialog, same file
     assert len(asked) == 1 and load_project(tmp_path / "study.mocapproj").step == "run"
 
@@ -139,7 +139,7 @@ def test_save_and_open_project_at_its_step(qtbot, tmp_path, monkeypatch):
     qtbot.addWidget(other)
     other.open_path(tmp_path / "study.mocapproj")
     assert other.root == root.resolve() and other.current_page().key == "run" and other.project
-    other.go(7)
+    other.go(6)
     other.close()  # closing keeps the project at the step the researcher was on
     assert load_project(tmp_path / "study.mocapproj").step == "viewer"
     other.new_session()
@@ -156,8 +156,8 @@ def test_viewer_shows_and_compares_trials(qtbot, tmp_path, monkeypatch):
     win = MainWindow()
     qtbot.addWidget(win)
     win.open_session(root)
-    win.go(7)
-    v = win.pages[7]
+    win.go(6)
+    v = win.pages[6]
     assert [v.trial_box.itemText(i) for i in range(2)] == ["Trial 1 (T1-ABCDEF1)", "Trial 2 (T1-ABCDEF2)"]
     assert v.source_box.currentText() == "smoothed + LSTM" and v.slider.maximum() == 19
     v.slider.setValue(10)

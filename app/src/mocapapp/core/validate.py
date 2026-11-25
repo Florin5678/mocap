@@ -158,10 +158,31 @@ def map_by_number(per_cam: dict[str, list[Path]], labels: list[str]) -> dict[str
     return result if labels else None
 
 
-def autofill(session: Session) -> list[str]:
+def suggest_trials(session: Session) -> dict[tuple[str, str], Path]:
+    """(camera, trial label) -> the video named with the trial's number, for trials without a video yet on that
+    camera (exactly one such file; the Trials page shows these until 'Save this mapping', 0.1.0rc17)."""
+    found = {}
+    for cam in session.cameras:
+        try:
+            scan = scan_dir(Path(cam.source_dir))
+        except OSError:
+            continue
+        taken = {str(Path(f)) for f in cam.trial_files.values()}
+        for trial in session.trials:
+            if not trial.raw_present or trial.withdrawn_at or cam.trial_files.get(trial.label):
+                continue
+            hit = match_by_number(scan.trials, trial.label, taken)
+            if hit is not None:
+                found[(cam.name, trial.label)] = hit
+                taken.add(str(hit))
+    return found
+
+
+def autofill(session: Session, trials: bool = True) -> list[str]:
     """Choose what the names make obvious, without reading any video: a missing calibration video when the folder
     has exactly one file named 'intrinsic' or 'extrinsic', and a trial's missing video when exactly one file is named
-    with its number. Nothing chosen before is changed. Returns what was chosen (empty: nothing)."""
+    with its number (trials=False: calibration videos only). Nothing chosen before is changed. Returns what was
+    chosen (empty: nothing)."""
     chosen = []
     for cam in session.cameras:
         try:
@@ -172,16 +193,11 @@ def autofill(session: Session) -> list[str]:
             if getattr(cam, role) is None and len(scan.calib[role]) == 1:
                 setattr(cam, role, _ref(role, str(scan.calib[role][0]), "found"))
                 chosen.append(f"{cam.name} {role}: {scan.calib[role][0].name}")
-        taken = {str(Path(f)) for f in cam.trial_files.values()}
-        for trial in session.trials:
-            if not trial.raw_present or trial.withdrawn_at or cam.trial_files.get(trial.label):
-                continue
-            hit = match_by_number(scan.trials, trial.label, taken)
-            if hit is not None:
-                cam.trial_files[trial.label] = str(hit)
-                taken.add(str(hit))
-                chosen.append(f"{cam.name} trial {trial.label}: {hit.name}")
+    for (camera, label), hit in (suggest_trials(session).items() if trials else []):
+        session.camera(camera).trial_files[label] = str(hit)
+        chosen.append(f"{camera} trial {label}: {hit.name}")
     return chosen
+
 
 def map_by_digit(per_cam: dict[str, list[Path]], n_trials: int) -> dict[str, dict[str, Path]] | None:
     """Tier 1: the last character of the stem is the trial digit; same digit set on every camera."""
@@ -290,6 +306,12 @@ def validate(session: Session, session_root: Path | None = None, do_probe: bool 
                 report.add("action", f"{cam.name} {role}",
                            f"{why} '{role}.*' in {cam.source_dir}.",
                            f"Choose the {role} calibration video for {cam.name} (any folder).")
+        for role in ROLES:  # further calibration videos (0.1.0rc13 extrinsic, 0.1.0rc17 intrinsic)
+            for extra in cam.extras(role):
+                if not Path(extra.file).is_file():
+                    report.add("error", f"{cam.name} {role} video {extra.key}",
+                               f"The chosen file {extra.file} no longer exists.",
+                               "Choose another file for it, or remove it (Trials, calibration videos).")
         trials = list(scan.trials)
         for p in trials:
             low = p.stem.lower()
@@ -318,7 +340,8 @@ def validate(session: Session, session_root: Path | None = None, do_probe: bool 
 
     # Rule 6: probe everything
     if do_probe:
-        files = [Path(getattr(c, r).file) for c in session.cameras for r in ROLES if getattr(c, r)]
+        files = [Path(f) for c in session.cameras for r in ROLES for _, f in c.calib_videos(r)
+                 if Path(f).is_file()]
         files += [p for ps in per_cam_trials.values() for p in ps]
         for f in files:
             try:
@@ -443,10 +466,11 @@ def _check_media(session: Session, report: Report, labels: list[str]) -> None:
                            "constant frame rate.")
             if info.rotation:
                 report.add("info", where, f"Stored rotated by {info.rotation} degrees; it will be turned upright.")
-        intr = cam.intrinsic
-        if intr and str(Path(intr.file)) in infos:
-            isize = infos[str(Path(intr.file))].display_size
-            for f in cam.trial_files.values():
+        lens_files = dict(cam.calib_videos("intrinsic"))
+        for label, f in cam.trial_files.items():
+            intr = lens_files.get(cam.lens_for(label))
+            if intr and str(Path(intr)) in infos:
+                isize = infos[str(Path(intr))].display_size
                 if f in infos and infos[f].display_size != isize:
                     report.add("error", f"{cam.name} {Path(f).name}",
                                f"Resolution {infos[f].display_size} differs from the intrinsic video {isize}. "

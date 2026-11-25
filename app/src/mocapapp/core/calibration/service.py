@@ -1,7 +1,14 @@
-"""Calibration steps on a session: intrinsics per camera, scene, extrinsics per camera, Calib_scene.toml."""
+"""Calibration steps on a session: intrinsics per camera, scene, extrinsics per camera, Calib_scene.toml.
+
+A camera can have several intrinsic and extrinsic videos (0.1.0rc13: a camera moved between trials; 0.1.0rc17: any
+of the two, assigned per trial). Each trial uses one of each per camera; its camera position is computed with the
+lens calibration that trial uses, so an extrinsic video used with two intrinsic videos gives two results (the same
+clicks, solved with each lens).
+"""
 
 from __future__ import annotations
 
+import re
 import shutil
 from pathlib import Path
 
@@ -9,21 +16,53 @@ import cv2
 
 from mocapapp.core.calibration import calibfile, extrinsics, intrinsics
 from mocapapp.core.calibration.scene_points import Scene, check_scene, load_scene, save_scene
-from mocapapp.core.session import Layout, Session
+from mocapapp.core.session import Camera, Layout, Session
 
 Progress = intrinsics.Progress
+EXTRINSICS_FILE_RE = re.compile(r"extrinsics_(?P<cam>.+?)(?:_pos(?P<pos>\d+))?(?:_lens(?P<lens>\d+))?")
 
 
 class CalibrationStepError(Exception):
     pass
 
 
-def input_video(root: Path, camera: str, role: str, position: str = "") -> Path:
+def input_video(root: Path, camera: str, role: str, key: str = "") -> Path:
     """Normalised copy (upright, constant frame rate) - the same orientation the trials will have."""
-    path = Layout(root).inputs(camera) / (f"{role}_{position}.mp4" if position else f"{role}.mp4")
+    path = Layout(root).inputs(camera) / input_name(role, key)
     if not path.is_file():
         raise CalibrationStepError(f"{path} is missing. Prepare the videos first: mocapapp prepare --session {root}")
     return path
+
+
+def input_name(role: str, key: str = "") -> str:
+    return f"{role}_{key}.mp4" if key else f"{role}.mp4"
+
+
+# ---------- which videos are used together ----------
+
+def video_title(cam: Camera, role: str, key: str) -> str:
+    """'cam01' for the main videos, 'cam01 extrinsic video 2' for a further one."""
+    return cam.name + (f" {role} video {key}" if key else "")
+
+
+def pair_title(cam: Camera, lens: str, position: str) -> str:
+    return video_title(cam, "extrinsic", position) + (f" (with intrinsic video {lens})" if lens else "")
+
+
+def needed_pairs(session: Session, cam: Camera) -> list[tuple[str, str]]:
+    """(intrinsic key, extrinsic key) used together by some trial that can still run, the main pair always."""
+    pairs = {("", "")} | {(cam.lens_for(t.label), cam.position_for(t.label)) for t in session.trials
+                          if t.raw_present}
+    return sorted(pairs, key=lambda p: (p[0] != "", p[0], p[1] != "", p[1]))
+
+
+def needed_lenses(session: Session, cam: Camera) -> list[str]:
+    return sorted({lens for lens, _ in needed_pairs(session, cam)}, key=lambda k: (k != "", k))
+
+
+def lenses_for_position(session: Session, cam: Camera, position: str) -> list[str]:
+    """The intrinsic videos an extrinsic video is solved with (the main one when no trial uses it yet)."""
+    return [lens for lens, pos in needed_pairs(session, cam) if pos == position] or [""]
 
 
 # ---------- intrinsics ----------
@@ -36,21 +75,21 @@ def run_intrinsics(session: Session, root: Path, cameras: list[str] | None = Non
     for cam in session.cameras:
         if cameras and cam.name not in cameras:
             continue
-        video = input_video(root, cam.name, "intrinsic")
-        result = None if force else intrinsics.load_result(layout.calibration_work, cam.name, video)
-        if result is None:
-            progress(f"{cam.name}: detecting the board in {video.name} ...")
-            result = intrinsics.calibrate_video(cam.name, video, spec, every_n_sec,
-                                                debug_dir=layout.calibration_work / "debug", progress=lambda _m: None)
-            intrinsics.save_result(result, layout.calibration_work)
-            _invalidate_calib(root)  # new lens model: the camera position must be recomputed with it
-            extrinsics.result_path(layout.calibration_work, cam.name).unlink(missing_ok=True)
-            for pos in cam.positions:
-                extrinsics.result_path(layout.calibration_work, cam.name, pos.key).unlink(missing_ok=True)
-        if cam.intrinsic is not None:
-            cam.intrinsic.rms_px = result.rms_px
-            cam.intrinsic.status = result.status
-        results.append(result)
+        for key, _file in cam.calib_videos("intrinsic"):
+            video = input_video(root, cam.name, "intrinsic", key)
+            result = None if force else intrinsics.load_result(layout.calibration_work, cam.name, video, key)
+            if result is None:
+                progress(f"{video_title(cam, 'intrinsic', key)}: detecting the board in {video.name} ...")
+                result = intrinsics.calibrate_video(cam.name, video, spec, every_n_sec,
+                                                    debug_dir=layout.calibration_work / "debug",
+                                                    progress=lambda _m: None)
+                intrinsics.save_result(result, layout.calibration_work, key)
+                # new lens model: the camera positions computed with it are solved again from their clicks
+                resolve_extrinsics(session, root, cam.name, lens=key)
+            if not key and cam.intrinsic is not None:
+                cam.intrinsic.rms_px = result.rms_px
+                cam.intrinsic.status = result.status
+            results.append(result)
     return results
 
 
@@ -73,13 +112,15 @@ def set_scene(root: Path, scene: Scene, session: Session | None = None) -> list[
     labels = set(scene.labels())
     for f in sorted(layout.calibration_work.glob("extrinsics_*.json")):
         result = extrinsics.ExtrinsicsResult.from_json(f.read_text(encoding="utf-8"))
-        position = f.stem.removeprefix(f"extrinsics_{result.camera}").removeprefix("_pos")
-        where = result.camera + (f" position {position}" if position else "")
+        m = EXTRINSICS_FILE_RE.fullmatch(f.stem)
+        position, lens = (m.group("pos") or "", m.group("lens") or "") if m else ("", "")
+        where = result.camera + (f" extrinsic video {position}" if position else "") + (
+            f" (with intrinsic video {lens})" if lens else "")
         if session is not None:
             clicks = [extrinsics.Click(**c) for c in result.clicks if c.get("label") in labels]
             try:
-                new = run_extrinsics(session, root, result.camera, clicks, result.frame_index,
-                                     override=result.overridden, position=position)
+                new = _solve(session, root, result.camera, clicks, result.frame_index, result.overridden, position,
+                             lens)
                 notes.append(f"{where}: camera position recomputed from your clicks (error {new.rms_cm:.1f} cm, "
                              f"{new.status}).")
                 continue
@@ -89,13 +130,12 @@ def set_scene(root: Path, scene: Scene, session: Session | None = None) -> list[
             notes.append(f"{where}: removed. Click the points again.")
         f.unlink()
         if session is not None:
-            session.extrinsics = [e for e in session.extrinsics
-                                  if (e.get("camera"), e.get("position", "")) != (result.camera, position)]
+            _forget_entry(session, result.camera, position, lens)
     if session is not None and session.calibration_source == "app":
         try:
             write_calibration(session, root)
         except CalibrationStepError:
-            pass  # not every camera is ready: written once step 5 is complete
+            pass  # not every camera is ready: written once the extrinsic step is complete
     return notes
 
 
@@ -125,38 +165,119 @@ def review_image(root: Path, camera: str, position: str = "") -> Path:
     return Layout(root).calibration_work / f"extrinsic_{camera}{_pos(position)}_review.jpg"
 
 
-def run_extrinsics(session: Session, root: Path, camera: str, clicks: list[extrinsics.Click], frame_index: int = 0,
-                   override: bool = False, position: str = "") -> extrinsics.ExtrinsicsResult:
+def lens_result(root: Path, camera: str, lens: str = "") -> intrinsics.IntrinsicsResult | None:
+    """The lens calibration of an intrinsic video, if computed from the video now in the session."""
+    work = Layout(root).calibration_work
+    try:
+        video = input_video(root, camera, "intrinsic", lens)
+    except CalibrationStepError:
+        return intrinsics.load_result(work, camera, lens=lens)
+    return intrinsics.load_result(work, camera, video, lens)
+
+
+def _forget_entry(session: Session, camera: str, position: str, lens: str) -> None:
+    session.extrinsics = [e for e in session.extrinsics
+                          if (e.get("camera"), e.get("position", ""), e.get("lens", "")) != (camera, position, lens)]
+
+
+def _solve(session: Session, root: Path, camera: str, clicks: list[extrinsics.Click], frame_index: int,
+           override: bool, position: str, lens: str) -> extrinsics.ExtrinsicsResult:
+    """One camera position from clicks, with one lens calibration; saved with its session entry."""
     layout = Layout(root)
     scene = get_scene(root)
     blocking = [i for i in check_scene(scene) if i.level == "error"]
     if blocking:
         raise CalibrationStepError("Fix the reference points first:\n" + "\n".join(str(i) for i in blocking))
-    intr = intrinsics.load_result(layout.calibration_work, camera, input_video(root, camera, "intrinsic"))
+    cam = session.camera(camera)
+    if position:
+        cam.position(position)  # KeyError for an unknown video
+    intr = lens_result(root, camera, lens)
     if intr is None:
-        raise CalibrationStepError(f"{camera}: compute the intrinsics first (mocapapp calibrate intrinsics).")
+        raise CalibrationStepError(f"{video_title(cam, 'intrinsic', lens)}: compute the intrinsics first "
+                                   "(mocapapp calibrate intrinsics).")
     result = extrinsics.solve_camera(camera, scene, clicks, intr.matrix, intr.distortions, frame_index)
     result.overridden = override and result.status == "fail"
-    if position:
-        session.camera(camera).position(position)  # KeyError for an unknown position
-    extrinsics.save_result(result, layout.calibration_work, position)
-    frame = extrinsics.read_frame(input_video(root, camera, "extrinsic", position), frame_index)
-    cv2.imwrite(str(review_image(root, camera, position)), extrinsics.draw_review(frame, result))
+    extrinsics.save_result(result, layout.calibration_work, position, lens)
     entry = {"camera": camera, "frame_index": frame_index, "n_points": result.n_points, "error_cm": result.rms_cm,
              "error_px": result.rms_px, "status": result.status, "overridden": result.overridden}
     if position:
         entry["position"] = position
-    session.extrinsics = [e for e in session.extrinsics
-                          if (e.get("camera"), e.get("position", "")) != (camera, position)] + [entry]
-    session.extrinsics.sort(key=lambda e: (e["camera"], e.get("position", "")))
-    _invalidate_calib(root)
+    if lens:
+        entry["lens"] = lens
+    _forget_entry(session, camera, position, lens)
+    session.extrinsics.append(entry)
+    session.extrinsics.sort(key=lambda e: (e["camera"], e.get("position", ""), e.get("lens", "")))
     return result
+
+
+def run_extrinsics(session: Session, root: Path, camera: str, clicks: list[extrinsics.Click], frame_index: int = 0,
+                   override: bool = False, position: str = "") -> extrinsics.ExtrinsicsResult:
+    """The camera position seen in an extrinsic video, solved with every lens calibration used together with it.
+    Returns the result for the first of them (shown to the researcher)."""
+    cam = session.camera(camera)
+    results = [_solve(session, root, camera, clicks, frame_index, override, position, lens)
+               for lens in lenses_for_position(session, cam, position)]
+    frame = extrinsics.read_frame(input_video(root, camera, "extrinsic", position), frame_index)
+    cv2.imwrite(str(review_image(root, camera, position)), extrinsics.draw_review(frame, results[0]))
+    _invalidate_calib(root)
+    return results[0]
+
+
+def position_result(root: Path, session: Session, camera: str, position: str = "") -> \
+        extrinsics.ExtrinsicsResult | None:
+    """The result shown for an extrinsic video: with the first lens calibration it is used with."""
+    lens = lenses_for_position(session, session.camera(camera), position)[0]
+    work = Layout(root).calibration_work
+    return extrinsics.load_result(work, camera, position, lens) or extrinsics.load_result(work, camera, position)
+
+
+def saved_clicks(root: Path, camera: str, position: str) -> extrinsics.ExtrinsicsResult | None:
+    """Any saved result of this extrinsic video (they all hold the same clicks)."""
+    work = Layout(root).calibration_work
+    for f in sorted(work.glob(f"extrinsics_{camera}*.json")):
+        m = EXTRINSICS_FILE_RE.fullmatch(f.stem)
+        if m and m.group("cam") == camera and (m.group("pos") or "") == position:
+            return extrinsics.ExtrinsicsResult.from_json(f.read_text(encoding="utf-8"))
+    return None
+
+
+def resolve_extrinsics(session: Session, root: Path, camera: str, lens: str | None = None,
+                       position: str | None = None) -> None:
+    """Solve camera positions again from their saved clicks (after a new lens calibration, or when trials now use
+    an extrinsic video with another lens). Results no longer needed are removed; a position without clicks stays
+    to be clicked."""
+    work = Layout(root).calibration_work
+    cam = session.camera(camera)
+    clicks = {pos: saved_clicks(root, camera, pos) for pos in [""] + [p.key for p in cam.positions]}
+    needed = set()
+    for pos in clicks:
+        for ln in lenses_for_position(session, cam, pos):
+            needed.add((ln, pos))
+    for f in sorted(work.glob(f"extrinsics_{camera}*.json")):  # results with a lens or video no longer used
+        m = EXTRINSICS_FILE_RE.fullmatch(f.stem)
+        if m and m.group("cam") == camera and ((m.group("lens") or ""), (m.group("pos") or "")) not in needed:
+            f.unlink()
+            _forget_entry(session, camera, m.group("pos") or "", m.group("lens") or "")
+    for ln, pos in sorted(needed):
+        if (lens is not None and ln != lens) or (position is not None and pos != position):
+            if extrinsics.result_path(work, camera, pos, ln).is_file():
+                continue
+        src = clicks.get(pos)
+        if src is None:
+            continue
+        try:
+            _solve(session, root, camera, [extrinsics.Click(**c) for c in src.clicks], src.frame_index,
+                   src.overridden, pos, ln)
+        except Exception:  # anything: this position has to be clicked again
+            extrinsics.result_path(work, camera, pos, ln).unlink(missing_ok=True)
+            _forget_entry(session, camera, pos, ln)
+    _invalidate_calib(root)
 
 
 # ---------- calibration file ----------
 
-def _extrinsic_state(work: Path, camera: str, position: str = "") -> str:
-    e = extrinsics.load_result(work, camera, position)
+def _extrinsic_state(work: Path, camera: str, position: str = "", lens: str = "") -> str:
+    e = extrinsics.load_result(work, camera, position, lens)
     if e is None:
         return "extrinsics missing"
     if e.status == "fail" and not e.overridden:
@@ -164,24 +285,34 @@ def _extrinsic_state(work: Path, camera: str, position: str = "") -> str:
     return "ready"
 
 
+def _intrinsic_state(work: Path, camera: str, lens: str = "") -> str:
+    i = intrinsics.load_result(work, camera, lens=lens)
+    if i is None:
+        return "intrinsics missing"
+    if i.status == "fail":
+        return f"intrinsics failed ({i.rms_px:.2f} px)"
+    return "ready"
+
+
 def calibration_state(session: Session, root: Path) -> dict[str, str]:
-    """Per camera (and per further camera position): 'ready', or what is still missing/blocking."""
+    """Per camera (and per further calibration video in use): 'ready', or what is still missing/blocking."""
     work = Layout(root).calibration_work
     if session.calibration_source == "imported":
         ok = Layout(root).calib_file.is_file()
         return {c.name: "ready" if ok else "imported calibration file missing" for c in session.cameras}
     state = {}
     for cam in session.cameras:
-        i = intrinsics.load_result(work, cam.name)
-        if i is None:
-            state[cam.name] = "intrinsics missing"
-        elif i.status == "fail":
-            state[cam.name] = f"intrinsics failed ({i.rms_px:.2f} px)"
-        else:
-            state[cam.name] = _extrinsic_state(work, cam.name)
-        for pos in cam.positions:
-            state[f"{cam.name} position {pos.key}"] = (_extrinsic_state(work, cam.name, pos.key)
-                                                       if state[cam.name] == "ready" else state[cam.name])
+        lens_state = {lens: _intrinsic_state(work, cam.name, lens) for lens in needed_lenses(session, cam)}
+        for lens, value in lens_state.items():
+            if lens and value != "ready":
+                state[video_title(cam, "intrinsic", lens)] = value
+        for lens, pos in needed_pairs(session, cam):
+            title = pair_title(cam, lens, pos)
+            if lens_state[lens] != "ready":
+                if not lens:
+                    state[title] = lens_state[lens]
+                continue
+            state[title] = _extrinsic_state(work, cam.name, pos, lens)
     return state
 
 
@@ -198,11 +329,14 @@ def write_calibration(session: Session, root: Path) -> Path:
     path = calibfile.write_calib(layout.calib_file, intr, extr)
     for old in work.glob("Calib_scene_trial_*.toml"):
         old.unlink()
-    for trial in session.trials:  # trials recorded after a camera moved: that camera's later position
-        keys = [c.position_for(trial.label) for c in session.cameras]
-        if any(keys):
-            moved = [extrinsics.load_result(work, c.name, k) for c, k in zip(session.cameras, keys, strict=True)]
-            calibfile.write_calib(layout.trial_calib(trial.label), intr, moved)
+    for trial in session.trials:  # trials using further calibration videos of some camera
+        keys = [(c.lens_for(trial.label), c.position_for(trial.label)) for c in session.cameras]
+        if trial.raw_present and any(lens or pos for lens, pos in keys):
+            own_intr = [intrinsics.load_result(work, c.name, lens=lens)
+                        for c, (lens, _) in zip(session.cameras, keys, strict=True)]
+            own_extr = [extrinsics.load_result(work, c.name, pos, lens)
+                        for c, (lens, pos) in zip(session.cameras, keys, strict=True)]
+            calibfile.write_calib(layout.trial_calib(trial.label), own_intr, own_extr)
     # keep already assembled trials in step: exactly one .toml per trial calibration folder
     for tdir in sorted(layout.trials.glob("trial_*")) if layout.trials.is_dir() else []:
         cdir = tdir / "calibration"

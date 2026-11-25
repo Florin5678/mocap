@@ -49,8 +49,8 @@ def test_results_page_deletes_marked_footage_after_export(qtbot, tmp_path, monke
     win = MainWindow()
     qtbot.addWidget(win)
     win.set_session(root, session)
-    win.go(6)
-    results = win.pages[6]
+    win.go(5)
+    results = win.pages[5]
     assert win.current_page() is results and results.delete_now.isEnabled()
     assert "still stored" in results.deletion.text() and "kept with consent" in results.deletion.text()
     shown = auto_delete(monkeypatch)
@@ -60,7 +60,7 @@ def test_results_page_deletes_marked_footage_after_export(qtbot, tmp_path, monke
     assert not (Layout(root).inputs("cam01") / "trial_1.mp4").exists()
     assert (Layout(root).inputs("cam01") / "trial_2.mp4").exists()
     assert "deleted on" in results.deletion.text() and not results.delete_now.isEnabled()
-    assert win.pages[5].is_complete()  # Run stays complete
+    assert win.pages[4].is_complete()  # Run stays complete
     videos = win.pages[1]
     videos.refresh()
     assert not videos.check_button.isEnabled() and "Start a new session" in videos.status.text()

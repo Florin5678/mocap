@@ -127,20 +127,23 @@ def test_full_wizard(qtbot, tmp_path, monkeypatch):
     setup.create_button.click()
     assert win.session is not None and win.session.trials[0].height_m is None  # entered per trial in step 2
     root = win.root
-    people = setup.people
-    people.cellWidget(0, 1).setChecked(True)  # signed consent received
-    assert load_session(root).trials[0].consent.attested
-    people.cellWidget(0, 2).setChecked(True)  # storage consent -> delete unticked by default
-    assert not people.cellWidget(0, 3).isChecked()
     shot(win, "11_setup_existing")
     assert win.next_button.isEnabled()
     win.next_button.click()
 
-    # 2. videos
+    # 2. trials: one table of trials, participants, details and consent (0.1.0rc17)
     videos = win.pages[1]
     assert win.current_page() is videos and not win.next_button.isEnabled() and videos.title == "Trials"
-    height = videos.details_table.cellWidget(0, 1)  # trials and participant details: height by default
-    assert videos.details_table.horizontalHeaderItem(1).text() == "Height (m)"
+    table = videos.table
+    assert [table.horizontalHeaderItem(c).text() for c in range(3)] == [
+        "Participant ID", "Height (m)", "Signed consent\nreceived"]
+    table.cellWidget(0, 2).setChecked(True)  # signed consent received
+    qtbot.wait(10)
+    assert load_session(root).trials[0].consent.attested
+    videos.table.cellWidget(0, 3).setChecked(True)  # storage consent -> delete unticked by default
+    qtbot.wait(10)
+    assert not videos.table.cellWidget(0, 4).isChecked()
+    height = videos.table.cellWidget(0, 1)
     height.setText("178")
     height.editingFinished.emit()
     assert height.text() == "1.78" and load_session(root).trials[0].height_m == 1.78
@@ -154,8 +157,9 @@ def test_full_wizard(qtbot, tmp_path, monkeypatch):
     assert videos.is_complete() and win.next_button.isEnabled()
     win.next_button.click()
 
-    # 3. lens calibration
+    # 3. intrinsic calibration
     lens = win.pages[2]
+    assert lens.title == "Intrinsic calibration" and lens.choose.text() == "Change intrinsic video(s) ..."
     lens.every.setValue(0.5)
     lens.calibrate(None, False)
     wait_idle(qtbot, win, 300000)
@@ -179,18 +183,17 @@ def test_full_wizard(qtbot, tmp_path, monkeypatch):
     from mocapapp.core.calibration.service import set_scene
 
     set_scene(root, dlg.scene())
-    win.pages[3].refresh()
-    win.pages[3].completeChanged.emit()  # what SceneDialog's OK does via ScenePage.edit
-    assert win.pages[3].is_complete()
-    win.next_button.click()
-    assert win.current_page() is win.pages[4]
+    ext_page = win.pages[3]  # reference points and camera positions: one step since 0.1.0rc17
+    assert win.current_page() is ext_page and ext_page.title == "Extrinsic calibration"
+    ext_page.refresh()
+    ext_page.completeChanged.emit()  # what SceneDialog's OK does via ExtrinsicsPage.edit
+    assert ext_page._scene_ok() and not ext_page.is_complete()
 
-    # 5. camera positions: click the true projections in the dialog
+    # 4b. camera positions: click the true projections in the dialog
     from mocapapp.core.calibration import intrinsics as intr
     from mocapapp.core.calibration.service import input_video
     from mocapapp.gui.extrinsic_dialog import ExtrinsicDialog
 
-    ext_page = win.pages[4]
     work = Layout(root).calibration_work
     for cam, pos in CAMS.items():
         r, t = look_at(np.array(pos), [1.5, 1.0, 0.6])
@@ -221,8 +224,8 @@ def test_full_wizard(qtbot, tmp_path, monkeypatch):
     assert ext_page.is_complete() and Layout(root).calib_file.is_file()
     win.next_button.click()
 
-    # 6. run (fake stages)
-    run = win.pages[5]
+    # 5. run (fake stages)
+    run = win.pages[4]
     assert win.current_page() is run
     assert not run.run_button.isEnabled()  # sync cue not confirmed yet
     run.sync_box.setChecked(True)
@@ -234,12 +237,12 @@ def test_full_wizard(qtbot, tmp_path, monkeypatch):
     assert run.is_complete(), load_session(root).run_state
     win.next_button.click()
 
-    # 7. results and export
-    res = win.pages[6]
+    # 6. results and export
+    res = win.pages[5]
     assert win.current_page() is res and len(res.results) == 1
     assert "Trial 1" in res.qa.toPlainText()
     assert win.next_button.text() == "Next >" and win.next_button.isEnabled()  # the Viewer needs no export
-    assert win.reachable(7)
+    assert win.reachable(6)
     assert not res.boxes["bvh"].isChecked() and res.boxes["mot"].isChecked()
     res.boxes["bvh"].setChecked(True)
     res.do_export()
@@ -251,8 +254,8 @@ def test_full_wizard(qtbot, tmp_path, monkeypatch):
     assert "Exported to" in res.export_state.text()
     win.next_button.click()
 
-    # 8. viewer
-    viewer = win.pages[7]
+    # 7. viewer
+    viewer = win.pages[6]
     assert win.current_page() is viewer and viewer.trial_box.count() == 1
     assert viewer.source_box.currentText() == "smoothed + LSTM" and viewer.markers is not None
     viewer.tabs.setCurrentIndex(1)
@@ -287,7 +290,7 @@ def test_sync_gate_buttons(qtbot, tmp_path, monkeypatch):
     win = MainWindow()
     qtbot.addWidget(win)
     win.open_session(tmp_path)
-    run = win.pages[5]
+    run = win.pages[4]
     run.refresh()
     run.start()
     wait_idle(qtbot, win)
@@ -296,17 +299,17 @@ def test_sync_gate_buttons(qtbot, tmp_path, monkeypatch):
     # while the sync player is open, the trial says so and no other player or run can start
     started, background = [], pages.run.Background
     monkeypatch.setattr(pages.run, "Background", lambda *a, **k: started.append(a[1]))
-    run.trials.cellWidget(0, 3).click()
+    run.trials.cellWidget(0, 4).click()
     assert started == [runner.fix_sync]
-    state = run.trials.cellWidget(0, 2).text()
+    state = run.trials.cellWidget(0, 3).text()
     assert "running" in state and "sync player open" in state
-    assert not any(run.trials.cellWidget(1, c).isEnabled() for c in (3, 4, 5)) and not run.run_button.isEnabled()
+    assert not any(run.trials.cellWidget(1, c).isEnabled() for c in (4, 5, 6)) and not run.run_button.isEnabled()
     run._finished(None)
-    assert "needs sync fix" in run.trials.cellWidget(0, 2).text() and run.trials.cellWidget(1, 3).isEnabled()
+    assert "needs sync fix" in run.trials.cellWidget(0, 3).text() and run.trials.cellWidget(1, 4).isEnabled()
     monkeypatch.setattr(pages.run, "Background", background)
 
-    accept = run.trials.cellWidget(0, 4)
-    assert accept.isEnabled() and run.trials.cellWidget(0, 3).isEnabled()
+    accept = run.trials.cellWidget(0, 5)
+    assert accept.isEnabled() and run.trials.cellWidget(0, 4).isEnabled()
     accept.click()
     wait_idle(qtbot, win)
     assert win.session.run_state.trial_status["1"] == "done"
@@ -335,7 +338,7 @@ def test_changing_a_setting_after_a_run_repeats_only_later_stages(qtbot, tmp_pat
     win = MainWindow()
     qtbot.addWidget(win)
     win.open_session(tmp_path)
-    run = win.pages[5]
+    run = win.pages[4]
     run.refresh()
     run.start()
     wait_idle(qtbot, win)
@@ -379,12 +382,13 @@ def test_sample_data_in_gui(qtbot, tmp_path, monkeypatch):
     qtbot.addWidget(win)
     win.show()
     win.open_session(root)
-    run = win.pages[5]
-    assert win.current_page() is run  # videos and calibration steps are skipped for the sample
-    assert all(win.pages[i].skipped() for i in (1, 2, 3, 4))
+    run = win.pages[4]
+    assert win.current_page() is run  # calibration steps are skipped for the sample
+    assert all(win.pages[i].skipped() for i in (2, 3)) and win.pages[1].is_complete()
     assert "consent" in run.issues.toPlainText().lower() and not run.run_button.isEnabled()
-    win.go(0)
-    win.pages[0].people.cellWidget(0, 1).setChecked(True)  # signed consent received
+    win.go(1)  # the Trials step holds consent; its video sections are hidden for the sample
+    assert not win.pages[1].mapping_box.isVisibleTo(win.pages[1])
+    win.pages[1].table.cellWidget(0, 2).setChecked(True)  # signed consent received
     win.next_button.click()
     assert win.current_page() is run
     run.sync_box.setChecked(True)
@@ -394,7 +398,7 @@ def test_sample_data_in_gui(qtbot, tmp_path, monkeypatch):
     wait_idle(qtbot, win, 1200000)
     assert run.is_complete(), win.session.run_state
     win.next_button.click()
-    res = win.pages[6]
+    res = win.pages[5]
     assert res.results[0].light in ("green", "amber")
     res.do_export()
     wait_idle(qtbot, win)
@@ -411,7 +415,7 @@ def test_viewer_step_never_ticked(qtbot, tmp_path):
     win.set_session(tmp_path, make_session(tmp_path, n_trials=1))
     win.update_nav()
     texts = [win.steps.item(k).text() for k in range(win.steps.count())]
-    assert texts[-1].strip() == "8. Viewer" and not texts[5].startswith("✓")  # nothing run yet, nothing ticked there
+    assert texts[-1].strip() == "7. Viewer" and not texts[4].startswith("✓")  # nothing run yet, nothing ticked there
 
 
 def test_scene_dialog_unit(qtbot):

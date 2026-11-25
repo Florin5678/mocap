@@ -176,42 +176,40 @@ def no_boxes(monkeypatch):
 
 
 def test_setup_page_participants(qtbot, tmp_path, monkeypatch, no_boxes):
+    """Participants are entered in the Trials table (0.1.0rc17); the Session step only sizes a new session."""
     from mocapapp.gui.main_window import MainWindow
 
     win = MainWindow()
     qtbot.addWidget(win)
     setup = win.pages[0]
-    assert not hasattr(setup, "height_table")  # heights are entered per trial in step 2 (Trials)
+    assert not hasattr(setup, "height_table") and not hasattr(setup, "people")
     setup.people_spin.setValue(2)
     setup.trials_spin.setValue(2)
     assert setup.spec().n_participants == 2 and setup.spec().n_trials == 4
 
     session = make_session(tmp_path, n_trials=1, ready=False)
     win.set_session(tmp_path, session)
-    assert setup.people.horizontalHeaderItem(0).text() == "Participant"
-    assert setup.people.verticalHeaderItem(0).text() == "Participant 1"
-    assert not setup.remove_person_button.isEnabled()
-    assert not [b for b in setup.findChildren(type(setup.add_person_button)) if "deletion" in b.text()]
-    setup.add_person()
-    assert setup.people.rowCount() == 2 and len(load_session(tmp_path).participants) == 2
-    setup.people.selectRow(1)
-    setup.remove_person()
-    assert setup.people.rowCount() == 1 and len(load_session(tmp_path).participants) == 1
-
-    edit, dice = setup.name_cells["1"]
-    edit.setText("P01")
-    edit.editingFinished.emit()
+    videos = win.pages[1]
+    monkeypatch.setattr(videos, "check", lambda: None)
+    videos.refresh()
+    box = videos.table.cellWidget(0, 0)
+    assert videos.table.horizontalHeaderItem(0).text() == "Participant ID"
+    assert box.currentText() == session.participant("1").code  # the ID alone, no "Participant 1 (...)"
+    box.lineEdit().setText("P01")
+    box.lineEdit().editingFinished.emit()
+    qtbot.wait(10)
     assert load_session(tmp_path).participant("1").code == "P01"
-    dice.click()
-    assert edit.text() == session.participant("1").code != "P01"
-    setup.people.cellWidget(0, 1).setChecked(True)  # signed consent received: still editable, after confirming
-    assert not edit.isReadOnly() and dice.isEnabled()
-    import mocapapp.gui.pages.setup as setup_module
+
+    videos.table.cellWidget(0, 2).setChecked(True)  # signed consent received: still editable, after confirming
+    qtbot.wait(10)
+    import mocapapp.gui.pages.videos as videos_module
 
     asked = []
-    monkeypatch.setattr(setup_module, "confirm", lambda _p, _t, text, _ok: asked.append(text) or True)
-    edit.setText("P01B")
-    edit.editingFinished.emit()
+    monkeypatch.setattr(videos_module, "confirm", lambda _p, _t, text, _ok: asked.append(text) or True)
+    box = videos.table.cellWidget(0, 0)
+    box.lineEdit().setText("P01B")
+    box.lineEdit().editingFinished.emit()
+    qtbot.wait(10)
     assert "signed consent form" in asked[0] and load_session(tmp_path).participant("1").code == "P01B"
 
 
@@ -240,7 +238,7 @@ def test_consent_dialog_keeps_the_study_details(qtbot, tmp_path, monkeypatch, no
     win.save_consent_pdf("T1-ABCDEF1")
     win.save_consent_pdf("T1-ABCDEF2")
     assert seen == [("T1-ABCDEF1", "", 1), ("T1-ABCDEF2", "Gait 2026", 2)]
-    win.pages[0].all_forms_button.click()
+    win.pages[1].all_forms_button.click()
     assert seen[-1][1:] == ("Gait 2026", 2) and saved[-1]["codes"] == ["T1-ABCDEF1", "T1-ABCDEF2"]
     assert saved[1]["code"] == "T1-ABCDEF2" and saved[1]["info"].study_name == "Gait 2026"
     assert load_session(tmp_path).study_info.researchers == [("A. First", ""), ("B. Second", "b@x")]
@@ -267,12 +265,15 @@ def test_videos_page_maps_trials_to_participants(qtbot, tmp_path, monkeypatch, n
     videos = win.pages[1]
     monkeypatch.setattr(videos, "check", lambda: None)
     videos.refresh()
-    table, grid = videos.details_table, videos.grid  # two tables: trials + participant details, trial mapping
-    assert [table.horizontalHeaderItem(c).text() for c in range(table.columnCount())] == ["Participant", "Height (m)"]
+    table, grid = videos.table, videos.grid  # two tables: trials and participants, trial mapping
+    headers = [table.horizontalHeaderItem(c).text() for c in range(table.columnCount())]
+    assert headers[:2] == ["Participant ID", "Height (m)"]
     assert [grid.horizontalHeaderItem(c).text() for c in range(grid.columnCount())] == ["cam01", "cam02"]
     assert table.verticalHeaderItem(0).text() == grid.verticalHeaderItem(0).text() == "Trial 1"
-    assert table.cellWidget(1, 0).currentData() == "1"
-    table.cellWidget(1, 0).setCurrentIndex(table.cellWidget(1, 0).findData("2"))  # saved straight away
+    box = table.cellWidget(1, 0)
+    assert box.currentData() == "1"
+    box.activated.emit(box.findData("2"))  # saved straight away
+    qtbot.wait(10)
     assert [t.participant for t in load_session(tmp_path).trials] == ["1", "2"]
     videos.save_mapping()
     assert [t.participant for t in load_session(tmp_path).trials] == ["1", "2"]

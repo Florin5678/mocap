@@ -63,7 +63,9 @@ def test_camera_moved_between_trials(tmp_path, capsys):
     assert "cam01 position 2 added for trial(s) 2" in capsys.readouterr().out
     assert (Layout(root).inputs("cam01") / "extrinsic_2.mp4").is_file()
     assert main(["calibrate", "status", "--session", s]) == 0
-    assert "cam01 position 2: extrinsics missing" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "cam01 extrinsic video 2: extrinsics missing" in out
+    assert "cam01 extrinsic video 2 (cam01_after.mp4) is used by trial(s) 2" in out
     assert not calib.exists()  # not every position is calibrated: no run until it is
 
     assert main(["calibrate", "frame", "--session", s, "--camera", "cam01", "--position", "2"]) == 0
@@ -113,3 +115,30 @@ def test_camera_moved_between_trials(tmp_path, capsys):
     session = load_session(root)
     assert service.get_scene(root).unit == "cm" and len(session.extrinsics) == len(CAMS)
     assert calib.is_file() and service.calibration_state(session, root) == {c: "ready" for c in CAMS}
+
+    # 0.1.0rc17: a second intrinsic video for cam02, used by trial 2 (its zoom was changed, say). Trial 2's camera
+    # position is solved with that lens from the clicks already made: nothing is clicked again
+    lens2 = tmp_path / "moved" / "cam02_zoom.mp4"
+    frames = board_views(n=24)
+    write_video(frames[5:] + frames[:5], lens2)
+    capsys.readouterr()
+    assert main(["calibrate", "video", "--session", s, "--camera", "cam02", "--role", "intrinsic", "--add",
+                 str(lens2), "--trials", "2"]) == 0
+    assert "cam02 intrinsic video 2 is used by trial(s) 2" in capsys.readouterr().out
+    session = load_session(root)
+    assert session.camera("cam02").lens_for("2") == "2" and session.camera("cam02").lens_for("1") == ""
+    assert service.calibration_state(session, root)["cam02 intrinsic video 2"] == "intrinsics missing"
+    assert not calib.exists()
+    assert main(["calibrate", "intrinsics", "--session", s, "--camera", "cam02", "--every", "0.5"]) == 0
+    session = load_session(root)
+    assert service.calibration_state(session, root) == {
+        **{c: "ready" for c in CAMS}, "cam02 (with intrinsic video 2)": "ready"}
+    assert load_result(work, "cam02", "", "2") is not None and calib.is_file()
+    t2 = Layout(root).trial_calib("2").read_text()
+    assert t2 != calib.read_text() and (Layout(root).trial("2") / "calibration" / "Calib_scene.toml").read_text() == t2
+    assert "cam02::2:" in runner.stage_inputs(session, "triangulation", "2")
+    assert main(["calibrate", "video", "--session", s, "--camera", "cam02", "--role", "intrinsic", "--key", "2",
+                 "--remove"]) == 0
+    session = load_session(root)
+    assert session.camera("cam02").lenses == [] and load_result(work, "cam02", "", "2") is None
+    assert not Layout(root).trial_calib("2").exists() and calib.is_file()

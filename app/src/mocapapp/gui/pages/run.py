@@ -1,4 +1,4 @@
-"""Step 6: pre-Run summary (§6.2 last paragraph) and the run itself (§6.6): progress, cancel, resume, Fix sync."""
+"""Step 5: pre-Run summary (§6.2 last paragraph) and the run itself (§6.6): progress, cancel, resume, Fix sync."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QPlainTextEdit,
     QProgressBar,
@@ -64,6 +65,7 @@ class RunPage(Page):
         self.bridge.event.connect(self._on_event)
         self.n_labels = 1
         self.done_labels: list[str] = []
+        self.chosen: set[str] = set()  # trials ticked in the Trials table (0.1.0rc17): Run selected
 
         inner = QWidget()
         layout = QVBoxLayout(inner)
@@ -133,7 +135,7 @@ class RunPage(Page):
         self.run_button.setMinimumHeight(40)
         self.cancel_button = QPushButton("Stop")
         self.restart_box = QCheckBox("Start over (ignore finished stages)")
-        self.run_button.clicked.connect(self.start)
+        self.run_button.clicked.connect(self.run_clicked)
         self.cancel_button.clicked.connect(self.stop)
         self.cancel_button.setEnabled(False)
         row.addWidget(self.run_button)
@@ -157,10 +159,13 @@ class RunPage(Page):
 
         res = QGroupBox("Trials")
         rl = QVBoxLayout(res)
-        self.trials = QTableWidget(0, 6)
-        self.trials.setHorizontalHeaderLabels(["Trial", "Pseudonym", "State", "", "", ""])
+        self.trials = QTableWidget(0, 7)
+        self.trials.setHorizontalHeaderLabels(["", "Trial", "Pseudonym", "State", "", "", ""])
+        self.trials.verticalHeader().setVisible(False)
         self.trials.horizontalHeader().setStretchLastSection(False)
         rl.addWidget(self.trials)
+        rl.addWidget(note("Tick trials to run only those (<i>Run selected</i>); with none or all ticked the button "
+                          "runs every trial."))
         rl.addWidget(note("If a trial's synchronisation looks unreliable it stops before 3D positions are computed. "
                           "'Check sync' opens Pose2Sim's player where you can correct the offsets; 'Accept as is' "
                           "continues with the automatic result."))
@@ -244,7 +249,8 @@ class RunPage(Page):
         issues = run_ready(self.session, self.root)
         # a missing trial folder is fixed by Run itself (it rebuilds the trial configs first)
         issues = [i for i in issues if "assemble" not in (i.fix or "")]
-        gui_fix = {"sync cue": "Tick the box above.", "consent": "Tick 'Signed consent received' in step 1."}
+        gui_fix = {"sync cue": "Tick the box above.",
+                   "consent": "Tick 'Signed consent received' in step 2 (Trials)."}
         for i in issues:
             if (i.fix or "").startswith("mocapapp "):  # CLI hints mean nothing in the window
                 i.fix = gui_fix["sync cue"] if i.where == "sync cue" else gui_fix["consent"]
@@ -252,6 +258,25 @@ class RunPage(Page):
         blocking = any(i.level in ("error", "action") for i in issues)
         self.run_button.setEnabled(not blocking and not self.win.busy)
         return issues
+
+    def selected_labels(self) -> list[str]:
+        """The ticked trials, when some but not all are ticked; otherwise empty (= every trial)."""
+        labels = [t.label for t in self.session.trials]
+        chosen = [lb for lb in labels if lb in self.chosen]
+        return chosen if 0 < len(chosen) < len(labels) else []
+
+    def _update_run_button(self) -> None:
+        self.run_button.setText("Run selected" if self.selected_labels() else "Run all")
+
+    def _ticked(self, label: str, on: bool) -> None:
+        if on:
+            self.chosen.add(label)
+        else:
+            self.chosen.discard(label)
+        self._update_run_button()
+
+    def run_clicked(self) -> None:
+        self.start(self.selected_labels() or None)
 
     def _sync_toggled(self, on: bool) -> None:
         if self.session is None or self._loading:
@@ -291,6 +316,7 @@ class RunPage(Page):
         rs = self.session.run_state
         clear_table(self.trials)
         self.trials.setRowCount(len(self.session.trials))
+        self.chosen &= {t.label for t in self.session.trials}
         for r, t in enumerate(self.session.trials):
             status = rs.trial_status.get(t.label, "pending")
             if t.withdrawn_at:
@@ -300,16 +326,26 @@ class RunPage(Page):
             msg = rs.errors.get(t.label) or "; ".join(rs.sync.get(t.label, {}).get("issues", []))
             if self.win.busy and t.label in self.activity:
                 status, msg = "running", self.activity[t.label]
-            self.trials.setItem(r, 0, readonly(t.label))
-            self.trials.setItem(r, 1, readonly(t.code))
+            tick = QCheckBox()
+            tick.setChecked(t.label in self.chosen)
+            tick.setEnabled(t.raw_present and not t.withdrawn_at)
+            tick.setToolTip(f"Tick to run trial {t.label} with 'Run selected'.")
+            tick.toggled.connect(lambda on, lb=t.label: self._ticked(lb, on))
+            cell = QWidget()
+            cl = QHBoxLayout(cell)
+            cl.setContentsMargins(6, 0, 6, 0)
+            cl.addWidget(tick)
+            self.trials.setCellWidget(r, 0, cell)
+            self.trials.setItem(r, 1, readonly(t.label))
+            self.trials.setItem(r, 2, readonly(t.code))
             label = QLabel(status_badge(status) + (f" - {html.escape(msg)}" if msg and status != "done" else ""))
             label.setWordWrap(True)
-            self.trials.setCellWidget(r, 2, label)
+            self.trials.setCellWidget(r, 3, label)
             fix = QPushButton("Check sync ...")
             accept = QPushButton("Accept as is")
             fix.clicked.connect(lambda _=False, lb=t.label: self.fix_sync(lb))
             accept.clicked.connect(lambda _=False, lb=t.label: self.start([lb], accept_sync=True))
-            for col, b in ((3, fix), (4, accept)):
+            for col, b in ((4, fix), (5, accept)):
                 b.setEnabled(status == "needs_sync_fix" and not self.win.busy)
                 self.trials.setCellWidget(r, col, b)
             one = QPushButton("Run this trial")
@@ -317,10 +353,12 @@ class RunPage(Page):
                            "are not touched.")
             one.clicked.connect(lambda _=False, lb=t.label: self.start([lb]))
             one.setEnabled(t.raw_present and not t.withdrawn_at and not self.win.busy)
-            self.trials.setCellWidget(r, 5, one)
-        self.trials.resizeColumnsToContents()
+            self.trials.setCellWidget(r, 6, one)
+        header = self.trials.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)  # the state takes the free width
         fit_rows(self.trials)
-        self.trials.horizontalHeader().setStretchLastSection(False)
+        self._update_run_button()
 
     def is_complete(self) -> bool:
         if self.session is None:
@@ -409,7 +447,8 @@ class RunPage(Page):
         self.win.set_busy(False)
         self.cancel_button.setEnabled(False)
         if self.cancel.is_set():
-            self.stage.setText("Stopped. Press Run all (or Run this trial) to continue where it stopped.")
+            self.stage.setText("Stopped. Press Run all (or Run selected, or Run this trial) to continue where it "
+                               "stopped.")
         else:
             error_box(self, "Run stopped", msg, details)
         self.win.save()

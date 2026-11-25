@@ -1,6 +1,7 @@
 """Participant details per trial, adding and deleting trials, running one trial at a time (0.1.0rc13)."""
 
 import json
+from pathlib import Path
 
 import pytest
 import tomlkit
@@ -55,7 +56,7 @@ def test_details_asked_per_trial(tmp_path):
     with pytest.raises(SetupError, match="built in"):
         remove_detail(session, tmp_path, "weight")
 
-    assert detail_value(session.detail("height"), "180 cm") == "1.8"
+    assert detail_value(session.detail("height"), "180 cm") == "1.80"  # two decimals at least (0.1.0rc17)
     assert detail_value(session.detail("weight"), "70,5") == "70.5"
     assert detail_value(session.detail("handedness"), "LEFT") == "left"
     assert detail_value(session.detail("leg_length"), "92 cm") == "92"
@@ -235,9 +236,24 @@ def test_export_of_one_trial_keeps_the_others(tmp_path, monkeypatch):
 
 # ---------- GUI ----------
 
-def test_gui_details_and_trials(qtbot, tmp_path, monkeypatch):
-    from PySide6.QtWidgets import QInputDialog, QLineEdit
+def _wheel(widget) -> None:
+    """Scroll the mouse wheel over a widget (one notch down)."""
+    from PySide6.QtCore import QPoint, QPointF, Qt
+    from PySide6.QtGui import QWheelEvent
+    from PySide6.QtWidgets import QApplication
 
+    pos = QPointF(5, 5)
+    event = QWheelEvent(pos, QPointF(widget.mapToGlobal(QPoint(5, 5))), QPoint(0, 0), QPoint(0, -120),
+                        Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier, Qt.ScrollPhase.NoScrollPhase, False)
+    QApplication.sendEvent(widget, event)
+
+
+def test_gui_trials_table(qtbot, tmp_path, monkeypatch):
+    """0.1.0rc17: trials and participants in one table; columns chosen in a dialog; no change by mouse wheel."""
+    from PySide6.QtWidgets import QLineEdit
+
+    from mocapapp.gui.columns_dialog import ColumnsDialog
+    from mocapapp.gui.common import NoWheelCombo
     from mocapapp.gui.main_window import MainWindow
 
     session = make_session(tmp_path)
@@ -245,52 +261,191 @@ def test_gui_details_and_trials(qtbot, tmp_path, monkeypatch):
     win = MainWindow()
     qtbot.addWidget(win)
     win.set_session(tmp_path, session)
-    setup = win.pages[0]
-    assert set(setup.detail_boxes) == {"height", "weight", "handedness", "age", "sex"}
-    setup.detail_boxes["weight"].setChecked(True)
-    assert [d.key for d in load_session(tmp_path).asked_details] == ["height", "weight"]
-
+    assert not hasattr(win.pages[0], "people") and not hasattr(win.pages[0], "detail_boxes")
     videos = win.pages[1]
     monkeypatch.setattr(videos, "check", lambda: None)
+    import mocapapp.gui.pages.videos as videos_module
+
+    asked = []
+    monkeypatch.setattr(videos_module, "confirm", lambda _p, _t, text, _ok: asked.append(text) or True)
+
+    def no_error(_parent, title, text, *_a):
+        raise AssertionError(f"{title}: {text}")
+
+    monkeypatch.setattr(videos_module, "error_box", no_error)
     videos.refresh()
-    table = videos.details_table
+
+    dlg = ColumnsDialog(videos, session, tmp_path)
+    qtbot.addWidget(dlg)
+    assert set(dlg.boxes) == {"weight", "handedness", "age", "sex"}  # height is always a column
+    assert dlg.boxes["sex"].text() == "Gender"
+    dlg.boxes["weight"].setChecked(True)
+    assert [d.key for d in load_session(tmp_path).asked_details] == ["height", "weight"]
+    videos._fill_people()
+    table = videos.table
     headers = [table.horizontalHeaderItem(c).text() for c in range(table.columnCount())]
-    assert headers == ["Participant", "Height (m)", "Weight (kg)"]
-    assert [videos.grid.horizontalHeaderItem(c).text() for c in range(videos.grid.columnCount())] == ["cam01", "cam02"]
+    assert headers[:3] == ["Participant ID", "Height (m)", "Weight (kg)"] and "Consent\nform" in headers
+    assert table.verticalHeaderItem(0).text() == "Trial 1"
     cell = table.cellWidget(0, 2)
     assert isinstance(cell, QLineEdit)
     cell.setText("70,5")
     cell.editingFinished.emit()
     assert load_session(tmp_path).trial("1").details == {"weight": "70.5"} and cell.text() == "70.5"
-    assert table.cellWidget(0, 1).placeholderText() == "1.75"
+    height = table.cellWidget(0, 1)
+    assert height.placeholderText() == "1.75"  # the participant's height, two decimals
+    height.setText("1.7")
+    height.editingFinished.emit()
+    assert height.text() == "1.70" and load_session(tmp_path).trial("1").details["height"] == "1.70"
 
-    monkeypatch.setattr(QInputDialog, "getItem", lambda *a, **k: (a[3][0], True))
+    # a new trial gets a new participant with a random pseudonym
     videos.add_trial()
-    assert [t.label for t in win.session.trials] == ["1", "2", "3"]
-    assert win.session.trial("3").details == {"weight": "70.5"}
     videos = win.pages[1]
-    assert videos.details_table.rowCount() == videos.grid.rowCount() == 3
+    s = win.session
+    assert [t.label for t in s.trials] == ["1", "2", "3"] and len(s.participants) == 3
+    new = s.trial("3")
+    assert new.participant == "3" and new.code not in ("T1-ABCDEF1", "T1-ABCDEF2") and new.details == {}
+    box = videos.table.cellWidget(2, 0)
+    assert isinstance(box, NoWheelCombo) and box.isEditable() and box.currentText() == new.code
 
-    win.go(5)
-    run = win.pages[5]
-    assert run.trials.cellWidget(0, 5).text() == "Run this trial" and run.run_button.text() == "Run all"
+    # the arrow: the trial belongs to participant 1 after all; the participant made for it is gone
+    box.activated.emit(box.findData("1"))
+    qtbot.wait(10)
+    s = win.session
+    assert s.trial("3").participant == "1" and [p.label for p in s.participants] == ["1", "2"]
+    assert s.trial("3").details == {"weight": "70.5", "height": "1.70"}  # copied from their first trial
+    assert load_session(tmp_path).trial("3").participant == "1"
+
+    # typing: a new pseudonym renames the participant (both of their trials)
+    box = videos.table.cellWidget(0, 0)
+    box.lineEdit().setText("Q07")
+    box.lineEdit().editingFinished.emit()
+    qtbot.wait(10)
+    assert win.session.trial("1").code == win.session.trial("3").code == "Q07"
+    assert "signed consent form" in asked[0]  # consent was received: the change was confirmed first
+    assert videos.table.cellWidget(2, 0).currentText() == "Q07"
+
+    # consent ticked in one row shows in the participant's other rows
+    first = 2 + len([d for d in win.session.asked_details if d.key != "height"])
+    videos.table.cellWidget(0, first).setChecked(False)
+    qtbot.wait(10)
+    assert not videos.table.cellWidget(2, first).isChecked()
+
+    # the mouse wheel never changes a drop-down in the tables
+    box = videos.table.cellWidget(1, 0)
+    before = box.currentIndex()
+    _wheel(box)
+    assert box.currentIndex() == before and win.session.trial("2").participant == "2"
+    assert all(isinstance(videos.grid.cellWidget(0, c), NoWheelCombo) for c in range(videos.grid.columnCount()))
+
+    # the Run step: tick trials to run only those
+    win.go(4)
+    run = win.pages[4]
+    assert run.trials.horizontalHeaderItem(1).text() == "Trial" and run.trials.verticalHeader().isHidden()
+    assert run.trials.cellWidget(0, 6).text() == "Run this trial" and run.run_button.text() == "Run all"
+    from PySide6.QtWidgets import QCheckBox
+
+    tick = run.trials.cellWidget(1, 0).findChild(QCheckBox)
+    tick.setChecked(True)
+    assert run.run_button.text() == "Run selected" and run.selected_labels() == ["2"]
+    started = []
+    monkeypatch.setattr(run, "start", lambda labels=None, accept_sync=False: started.append(labels))
+    run.run_clicked()
+    assert started == [["2"]]
+    for r in (0, 2):
+        run.trials.cellWidget(r, 0).findChild(QCheckBox).setChecked(True)
+    assert run.run_button.text() == "Run all" and run.selected_labels() == []
 
 
-def test_gui_camera_position_rows(qtbot, tmp_path):
-    from mocapapp.core.session import CameraPosition
+def test_trial_videos_suggested_by_name(qtbot, tmp_path, monkeypatch):
+    """0.1.0rc17: trial videos named 01, trial02 are filled in the mapping table, saved only with the button."""
     from mocapapp.gui.main_window import MainWindow
-    from mocapapp.gui.pages.calibration import ExtrinsicsPage, PositionDialog
 
     session = make_session(tmp_path)
-    session.camera("cam01").positions.append(CameraPosition(key="2", file=str(tmp_path / "moved.mp4"),
-                                                            trials=["2"]))
+    for cam in session.cameras:
+        cam.source_dir = str(tmp_path / cam.name)
+        Path(cam.source_dir).mkdir()
+        for name in ("01.mp4", "trial02.mp4", "intrinsic.mp4", "extrinsic.mp4"):
+            (Path(cam.source_dir) / name).write_bytes(b"x")
     save_session(session, tmp_path)
     win = MainWindow()
     qtbot.addWidget(win)
     win.set_session(tmp_path, session)
+    videos = win.pages[1]
+    videos.refresh()
+    grid = videos.grid
+    assert [grid.cellWidget(r, 0).currentText() for r in range(2)] == ["01.mp4", "trial02.mp4"]
+    assert "Save this mapping" in videos.mapping_note.text() and not videos.mapping_note.isHidden()
+    assert load_session(tmp_path).camera("cam01").trial_files == {}  # not saved until the button
+    assert load_session(tmp_path).camera("cam01").intrinsic.file.endswith("intrinsic.mp4")  # calibration: saved
+    checked = []
+    monkeypatch.setattr(videos, "check", lambda: checked.append(True))
+    videos.save_mapping()
+    files = load_session(tmp_path).camera("cam02").trial_files
+    assert checked and Path(files["1"]).name == "01.mp4" and Path(files["2"]).name == "trial02.mp4"
+
+
+def test_gui_calibration_videos(qtbot, tmp_path, monkeypatch):
+    """0.1.0rc17: several calibration videos per camera, assigned per trial in a dialog."""
+    from mocapapp.core.session import CameraPosition, VideoRef
+    from mocapapp.gui.calib_dialog import MULTIPLE_TIP, CalibDialog
+    from mocapapp.gui.main_window import MainWindow
+    from mocapapp.gui.pages.calibration import ExtrinsicsPage, IntrinsicsPage
+
+    session = make_session(tmp_path)
+    for name in ("extrinsic.mp4", "moved.mp4", "intrinsic.mp4"):
+        (tmp_path / name).write_bytes(b"x")
+    cam = session.camera("cam01")
+    cam.extrinsic = VideoRef(file=str(tmp_path / "extrinsic.mp4"))
+    cam.positions.append(CameraPosition(key="2", file=str(tmp_path / "moved.mp4"), trials=["2"]))
+    save_session(session, tmp_path)
+    win = MainWindow()
+    qtbot.addWidget(win)
+    win.set_session(tmp_path, session)
+    assert [p.title for p in win.pages[2:4]] == ["Intrinsic calibration", "Extrinsic calibration"]
     page = next(p for p in win.pages if isinstance(p, ExtrinsicsPage))
     page.refresh()
-    assert page.table.rowCount() == 3 and "moved" in page.table.item(1, 0).text()
-    assert page.moved_button.isVisibleTo(page) and page.moved_button.isFlat()
-    dlg = PositionDialog(page, session, "cam01", ["2"])
-    assert dlg.values() == ("cam01", "", ["2"])
+    assert page.table.rowCount() == 3 and "moved.mp4" in page.table.item(1, 0).text()
+    assert "trials 2" in page.table.item(1, 0).text() and not hasattr(page, "moved_button")
+    lens = next(p for p in win.pages if isinstance(p, IntrinsicsPage))
+    assert lens.choose.text() == "Change intrinsic video(s) ..."
+    assert not [b for b in lens.findChildren(type(lens.choose)) if "PDF" in b.text()]
+
+    videos = win.pages[1]
+    monkeypatch.setattr(videos, "check", lambda: None)
+    videos.refresh()
+    warn = videos.warn_buttons[("cam01", "extrinsic")]
+    assert warn.toolTip() == MULTIPLE_TIP and ("cam01", "intrinsic") not in videos.warn_buttons
+
+    dlg = CalibDialog(videos, session, tmp_path, "cam01", "extrinsic")
+    qtbot.addWidget(dlg)
+    assert dlg.windowTitle() == "Extrinsic calibration for cam01"
+    assert (dlg.table.rowCount(), dlg.table.columnCount()) == (2, 2)
+    assert dlg.choice() == {"1": "", "2": "2"}
+    dlg.groups["1"].button(1).setChecked(True)  # exactly one per trial: ticking another unticks the first
+    assert not dlg.groups["1"].button(0).isChecked() and dlg.choice() == {"1": "2", "2": "2"}
+    dlg.save()
+    assert load_session(tmp_path).camera("cam01").position("2").trials == ["1", "2"]
+
+    from mocapapp.gui import calib_dialog
+
+    more = tmp_path / "zoomed.mp4"
+    more.write_bytes(b"x")
+    monkeypatch.setattr(calib_dialog, "pick_videos", lambda *a, **k: [more])
+    monkeypatch.setattr(calib_dialog, "confirm", lambda *a, **k: True)
+    dlg = CalibDialog(videos, session, tmp_path, "cam01", "intrinsic")
+    qtbot.addWidget(dlg)
+    assert dlg.windowTitle() == "Intrinsic calibration for cam01" and dlg.table.columnCount() == 0
+    dlg.add_videos()  # no intrinsic video yet: the first one added is the main one
+    assert dlg.files_changed and dlg.table.columnCount() == 1
+    assert Path(session.camera("cam01").intrinsic.file).name == "zoomed.mp4"
+    more = tmp_path / "intrinsic.mp4"
+    monkeypatch.setattr(calib_dialog, "pick_videos", lambda *a, **k: [more])
+    dlg.add_videos()
+    assert dlg.table.columnCount() == 2 and session.camera("cam01").lenses[0].trials == []
+    dlg.groups["2"].button(1).setChecked(True)
+    dlg.save()
+    assert load_session(tmp_path).camera("cam01").lens_for("2") == "2"
+    dlg = CalibDialog(videos, session, tmp_path, "cam01", "intrinsic")
+    qtbot.addWidget(dlg)
+    dlg.remove_video("2")
+    assert session.camera("cam01").lenses == [] and dlg.table.columnCount() == 1

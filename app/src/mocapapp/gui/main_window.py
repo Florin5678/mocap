@@ -36,7 +36,7 @@ from mocapapp.gui.common import (
     settings,
 )
 
-TUTORIAL_PAGE = {"setup": 0, "videos": 3, "intrinsics": 3, "scene": 4, "extrinsics": 3, "run": 5, "results": 0,
+TUTORIAL_PAGE = {"setup": 0, "videos": 3, "intrinsics": 3, "extrinsics": 4, "run": 5, "results": 0,
                  "viewer": 0}
 
 
@@ -90,7 +90,7 @@ class Page(QWidget):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        from mocapapp.gui.pages.calibration import ExtrinsicsPage, IntrinsicsPage, ScenePage
+        from mocapapp.gui.pages.calibration import ExtrinsicsPage, IntrinsicsPage
         from mocapapp.gui.pages.results import ResultsPage
         from mocapapp.gui.pages.run import RunPage
         from mocapapp.gui.pages.setup import SetupPage
@@ -107,8 +107,8 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(s("app_name"))
         self.resize(1180, 780)
 
-        self.pages: list[Page] = [SetupPage(self), VideosPage(self), IntrinsicsPage(self), ScenePage(self),
-                                  ExtrinsicsPage(self), RunPage(self), ResultsPage(self), ViewerPage(self)]
+        self.pages: list[Page] = [SetupPage(self), VideosPage(self), IntrinsicsPage(self), ExtrinsicsPage(self),
+                                  RunPage(self), ResultsPage(self), ViewerPage(self)]
         self.steps = QListWidget()
         self.steps.setFixedWidth(230)
         self.steps.currentRowChanged.connect(self._step_clicked)
@@ -299,7 +299,8 @@ class MainWindow(QMainWindow):
         settings().setValue("last_project", str(project.path))
         self._show_name()
         keys = [p.key for p in self.pages]
-        index = keys.index(project.step) if project.step in keys else 0
+        step = {"scene": "extrinsics"}.get(project.step, project.step)  # one step since 0.1.0rc17
+        index = keys.index(step) if step in keys else 0
         if self.reachable(index):  # otherwise stay at the first unfinished step (files changed since saving)
             self.go(index)
 

@@ -57,8 +57,10 @@ def plan_inputs(session: Session, root: Path, report: Report) -> Plan:
     for cam in session.cameras:
         sources.append((Path(cam.intrinsic.file), layout.inputs(cam.name) / "intrinsic.mp4"))
         sources.append((Path(cam.extrinsic.file), layout.inputs(cam.name) / "extrinsic.mp4"))
-        for pos in cam.positions:  # the camera was moved between trials (0.1.0rc13)
+        for pos in cam.positions:  # further extrinsic videos (0.1.0rc13), intrinsic ones (0.1.0rc17)
             sources.append((Path(pos.file), layout.inputs(cam.name) / f"extrinsic_{pos.key}.mp4"))
+        for lens in cam.lenses:
+            sources.append((Path(lens.file), layout.inputs(cam.name) / f"intrinsic_{lens.key}.mp4"))
         for label, f in cam.trial_files.items():
             if not session.trial(label).raw_present:
                 continue

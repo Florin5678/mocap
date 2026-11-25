@@ -9,7 +9,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, QSettings, QThread, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import QFrame, QLabel, QMessageBox, QTextBrowser, QWidget
+from PySide6.QtWidgets import QComboBox, QFrame, QLabel, QMessageBox, QTextBrowser, QWidget
 
 ORG, APP = "mocapapp", "mocapapp"
 MAX_RECENT = 8
@@ -204,13 +204,29 @@ def readonly(text: str):
     return item
 
 
-def fit_rows(table, min_rows: int = 1) -> None:
-    """Size a small table to its rows (no large empty area below them)."""
+def fit_rows(table, min_rows: int = 1, max_rows: int | None = None) -> None:
+    """Size a small table to its rows (no large empty area below them). With max_rows, a longer table scrolls
+    below its heading row (0.1.0rc17)."""
     table.resizeRowsToContents()
-    rows = sum(table.rowHeight(r) for r in range(table.rowCount()))
+    shown = table.rowCount() if max_rows is None else min(table.rowCount(), max_rows)
+    rows = sum(table.rowHeight(r) for r in range(shown))
     rows = max(rows, min_rows * table.verticalHeader().defaultSectionSize())
     scroll = table.horizontalScrollBar().sizeHint().height()
     table.setFixedHeight(table.horizontalHeader().sizeHint().height() + rows + 2 * table.frameWidth() + scroll)
+
+
+class NoWheelCombo(QComboBox):
+    """A drop-down that ignores the mouse wheel: scrolling a page or table over it must never change it by accident
+    (0.1.0rc17). It changes only by clicking it and choosing, or with the keyboard once it has the focus."""
+
+    def __init__(self, parent: QWidget | None = None):
+        from PySide6.QtCore import Qt
+
+        super().__init__(parent)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+    def wheelEvent(self, event) -> None:  # noqa: N802 (Qt name)
+        event.ignore()  # the table or page around it scrolls instead
 
 
 def para(text: str):

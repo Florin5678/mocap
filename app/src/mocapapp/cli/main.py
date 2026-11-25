@@ -411,11 +411,15 @@ def _cmd_calibrate(args: argparse.Namespace) -> int:
             for cam, state in service.calibration_state(session, root).items():
                 print(f"{cam}: {state}")
             for cam in session.cameras:
-                for p in cam.positions:
-                    print(f"{cam.name} position {p.key} (camera moved) is used by trial(s) {', '.join(p.trials)}")
+                for role in ("intrinsic", "extrinsic"):
+                    for p in cam.extras(role):
+                        print(f"{cam.name} {role} video {p.key} ({Path(p.file).name}) is used by trial(s) "
+                              f"{', '.join(p.trials) or 'none'}")
             return 0
         elif args.calib_command == "position":
             return _calibrate_position(args, session, root)
+        elif args.calib_command == "video":
+            return _calibrate_video(args, session, root)
         if args.calib_command in ("intrinsics", "extrinsics"):
             state = service.calibration_state(session, root)
             if all(s == "ready" for s in state.values()):
@@ -460,6 +464,42 @@ def _calibrate_position(args: argparse.Namespace, session, root: Path) -> int:
             print(f"{args.camera} position {args.position} is used by trial(s) {', '.join(trials)}.")
     except (SetupError, OSError) as exc:
         print(exc)
+        return 1
+    return 0
+
+
+def _calibrate_video(args: argparse.Namespace, session, root: Path) -> int:
+    """Further calibration videos of a camera, assigned per trial (0.1.0rc17)."""
+    from mocapapp.core.workflow import (
+        SetupError,
+        add_calib_videos,
+        prepare_calib_video,
+        remove_calib_video,
+        set_calib_assignment,
+    )
+
+    trials = [t.strip() for t in (args.video_trials or "").split(",") if t.strip()]
+    role, cam = args.role, args.camera
+    try:
+        key = args.key
+        if args.add:
+            key = add_calib_videos(session, root, cam, role, [Path(args.add)])[0]
+            if key:
+                prepare_calib_video(session, root, cam, role, key)
+            print(f"{cam} {role} video {key or '(main)'} added: {Path(args.add).name}.")
+        if key is None:
+            print("Give --add FILE for a new video, or --key KEY with --trials or --remove.")
+            return 1
+        if args.remove:
+            remove_calib_video(session, root, cam, role, key)
+            print(f"{cam} {role} video {key} removed; its trials use the main one again.")
+        elif trials:
+            set_calib_assignment(session, root, cam, role, {t: key for t in trials})
+            print(f"{cam} {role} video {key or '(main)'} is used by trial(s) {', '.join(trials)}.")
+        if role == "intrinsic" and (args.add or trials):
+            print(f"Next: mocapapp calibrate intrinsics --session \"{root}\" --camera {cam}")
+    except (SetupError, OSError, KeyError) as exc:
+        print(str(exc).strip("'\""))
         return 1
     return 0
 
@@ -977,8 +1017,16 @@ def build_parser() -> argparse.ArgumentParser:
     cp.add_argument("--trials", dest="position_trials",
                     help="comma list of the trials recorded in this position, e.g. 3,4")
     cp.add_argument("--remove", action="store_true", help="remove --position (its trials use the main one again)")
+    cv = csub.add_parser("video", help="further intrinsic or extrinsic videos of a camera, each used by the trials "
+                                       "you choose (the others use the camera's main video)")
+    cv.add_argument("--camera", required=True)
+    cv.add_argument("--role", choices=["intrinsic", "extrinsic"], required=True)
+    cv.add_argument("--add", metavar="FILE", help="another calibration video for this camera")
+    cv.add_argument("--key", help="an existing further video (2, 3, ...); '' is the main one")
+    cv.add_argument("--trials", dest="video_trials", help="comma list of the trials that use it, e.g. 3,4")
+    cv.add_argument("--remove", action="store_true", help="remove --key (its trials use the main video again)")
     cs = csub.add_parser("status", help="what is calibrated and what is missing")
-    for p in (ci, cf, ce, cp, cs):
+    for p in (ci, cf, ce, cp, cv, cs):
         p.add_argument("--session", required=True)
         p.set_defaults(func=_cmd_calibrate)
 

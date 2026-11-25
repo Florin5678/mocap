@@ -1,15 +1,11 @@
-"""Step 1: session setup (§6.2) - folders, cameras, participant table; sync reminder always visible (D2)."""
+"""Step 1: session setup (§6.2) - folders and cameras; sync reminder always visible (D2). Participants are
+entered with their trials in step 2 (Trials) since 0.1.0rc17."""
 
 from __future__ import annotations
 
-from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtWidgets import (
-    QCheckBox,
-    QComboBox,
-    QDialog,
-    QDialogButtonBox,
     QFileDialog,
     QFormLayout,
     QGroupBox,
@@ -21,9 +17,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSpinBox,
     QStackedWidget,
-    QStyle,
     QTableWidget,
-    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -34,24 +28,13 @@ from mocapapp.core.workflow import (
     MAX_TRIALS,
     NewSession,
     SetupError,
-    add_detail,
-    add_participant,
     camera_number,
     check_new_session,
-    check_renamable,
     create_session,
-    new_pseudonym,
-    remove_detail,
-    remove_participant,
-    rename_consequences,
-    rename_participant,
-    set_detail_enabled,
     sibling_camera_dirs,
 )
 from mocapapp.gui.common import (
     IssueView,
-    clear_table,
-    confirm,
     error_box,
     fit_rows,
     last_output_root,
@@ -67,52 +50,6 @@ def _scroll(widget: QWidget) -> QScrollArea:
     area.setWidgetResizable(True)
     area.setWidget(widget)
     return area
-
-
-def detail_title(d) -> str:
-    return f"{d.label} ({d.unit})" if d.unit else d.label
-
-
-class DetailDialog(QDialog):
-    """A new participant detail: a name, and whether it is a number (with a unit), a choice or free text."""
-
-    KINDS = (("number", "Number"), ("choice", "Choice"), ("text", "Text"))
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Add participant detail")
-        form = QFormLayout(self)
-        self.name = QLineEdit()
-        self.name.setMaxLength(40)
-        self.name.setPlaceholderText("for example Leg length")
-        self.kind = QComboBox()
-        for key, title in self.KINDS:
-            self.kind.addItem(title, key)
-        self.unit = QLineEdit()
-        self.unit.setMaxLength(12)
-        self.unit.setPlaceholderText("for example cm")
-        self.options = QLineEdit()
-        self.options.setPlaceholderText("for example left, right")
-        form.addRow("Name", self.name)
-        form.addRow("Kind", self.kind)
-        form.addRow("Unit", self.unit)
-        form.addRow("Options", self.options)
-        form.addRow(para("<i>Never ask for names or other details that identify the person.</i>"))
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        form.addRow(buttons)
-        self.kind.currentIndexChanged.connect(self._kind_changed)
-        self._kind_changed()
-
-    def _kind_changed(self) -> None:
-        kind = self.kind.currentData()
-        self.unit.setEnabled(kind == "number")
-        self.options.setEnabled(kind == "choice")
-
-    def values(self) -> tuple[str, str, str, list[str]]:
-        return (self.name.text(), self.kind.currentData(), self.unit.text(),
-                [o.strip() for o in self.options.text().split(",") if o.strip()])
 
 
 class SetupPage(Page):
@@ -158,8 +95,9 @@ class SetupPage(Page):
         self.people_spin.valueChanged.connect(lambda _: self._check_new())
         form.addRow("Participants", self.people_spin)
         layout.addLayout(form)
-        layout.addWidget(note("Pseudonyms are generated when the session is created. Height and the other "
-                              "participant details are entered per trial in step 2 (Trials)."))
+        layout.addWidget(note("Pseudonyms are generated when the session is created. Height, the other "
+                              "participant details and consent are entered per trial in step 2 (Trials), where "
+                              "trials can also be added."))
 
         cams = QGroupBox("Cameras: one folder per camera")
         cl = QVBoxLayout(cams)
@@ -282,59 +220,8 @@ class SetupPage(Page):
         layout.addLayout(move_row)
         layout.addWidget(note(s("sync_reminder"), "important"))
         layout.addWidget(note(s("cameras_stay_put")))
-        box = QGroupBox("Participants")
-        bl = QVBoxLayout(box)
-        bl.addWidget(para("Each participant gets a random pseudonym. Type another one, or click the arrow for a new "
-                            "random one, until their signed consent is received (never use real names). "
-                            "<i>Generate ...</i> makes the participant's consent form. Tick <i>Signed consent "
-                            "received</i> once you hold the signed form for that pseudonym. <i>Delete raw footage</i> "
-                            "follows the storage consent by default; deletion is done after a successful run and "
-                            "export, and is always possible later."))
-        self.people = QTableWidget(0, 5)
-        self.people.setHorizontalHeaderLabels(["Participant", "Signed consent\nreceived",
-                                               "Consented to storing\nraw footage", "Delete raw\nfootage",
-                                               "Consent\nform"])
-        self.people.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
-        self.people.horizontalHeader().setStretchLastSection(True)
-        self.people.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        bl.addWidget(self.people)
-        people_row = QHBoxLayout()
-        self.all_forms_button = QPushButton("Generate all consent forms ...")
-        self.all_forms_button.setToolTip("One PDF with every participant's consent form, ready to print.")
-        self.all_forms_button.clicked.connect(self.win.save_all_consent_pdfs)
-        self.add_person_button = QPushButton("Add participant")
-        self.add_person_button.clicked.connect(self.add_person)
-        self.remove_person_button = QPushButton("Remove participant")
-        self.remove_person_button.setToolTip("Removes the selected participant (or the last one) if they have no "
-                                             "videos or results yet.")
-        self.remove_person_button.clicked.connect(self.remove_person)
-        people_row.addWidget(self.add_person_button)
-        people_row.addWidget(self.remove_person_button)
-        people_row.addStretch()
-        people_row.addWidget(self.all_forms_button)
-        bl.addLayout(people_row)
-        layout.addWidget(box)
-        details = QGroupBox("Participant details asked per trial")
-        dl = QVBoxLayout(details)
-        dl.addWidget(para("Ticked details get a column in the participant details table of step 2 (Trials), "
-                          "filled in for every trial. A participant's next trials start with the values of their "
-                          "first one. Height scales the body model: without it, it is estimated (not "
-                          "recommended)."))
-        self.details_list = QWidget()
-        self.details_layout = QVBoxLayout(self.details_list)
-        self.details_layout.setContentsMargins(0, 0, 0, 0)
-        dl.addWidget(self.details_list)
-        add_row = QHBoxLayout()
-        self.add_detail_button = QPushButton("Add detail ...")
-        self.add_detail_button.setToolTip("A custom detail, for example leg length or dominant leg.")
-        self.add_detail_button.clicked.connect(self.add_detail_dialog)
-        add_row.addWidget(self.add_detail_button)
-        add_row.addStretch()
-        dl.addLayout(add_row)
-        layout.addWidget(details)
-        self.existing_issues = IssueView()
-        self.existing_issues.setMaximumHeight(160)
-        layout.addWidget(self.existing_issues)
+        layout.addWidget(para("Participants, their details and their consent are entered with the trials in step 2 "
+                              "(Trials)."))
         layout.addStretch()
         return w
 
@@ -348,216 +235,6 @@ class SetupPage(Page):
         cams = "".join(f"<br>&nbsp;&nbsp;{c.name}: {c.source_dir}" for c in self.session.cameras)
         sample = " <b>(sample data)</b>" if self.session.calibration_source == "imported" else ""
         self.info.setText(f"<b>Session folder:</b> {self.root}{sample}<br><b>Cameras:</b>{cams}")
-        clear_table(self.people)
-        people = self.session.participants
-        self.people.setRowCount(len(people))
-        self.people.setVerticalHeaderLabels([f"Participant {p.label}" for p in people])
-        self.name_cells = {}
-        for r, t in enumerate(people):
-            trials = self.session.trials_of(t.label)
-            if t.withdrawn_at or (trials and not any(x.raw_present for x in trials)):
-                self.people.setItem(r, 0, readonly(t.code))
-                gone = (f"all data deleted {t.withdrawn_at[:10]}" if t.withdrawn_at
-                        else f"raw footage deleted {min(x.raw_deleted_at for x in trials)[:10]}")
-                self.people.setItem(r, 1, readonly(gone))
-                continue
-            self.people.setCellWidget(r, 0, self._name_cell(t))
-            attest = QCheckBox("received")
-            attest.setChecked(t.consent.attested)
-            attest.toggled.connect(lambda on, t=t: self._attest(t, on))
-            storage = QCheckBox("yes")
-            storage.setChecked(t.consent.raw_footage_storage)
-            delete = QCheckBox("delete")
-            delete.setChecked(t.delete_raw)
-            storage.toggled.connect(lambda on, t=t, d=delete: self._storage(t, on, d))
-            delete.toggled.connect(lambda on, t=t: self._delete(t, on))
-            for col, cb in ((1, attest), (2, storage), (3, delete)):
-                self.people.setCellWidget(r, col, cb)
-            form = QPushButton("Generate ...")
-            form.clicked.connect(lambda _=False, t=t: self.win.save_consent_pdf(t.code))
-            self.people.setCellWidget(r, 4, form)
-        fit_rows(self.people)
-        frozen = self.session.frozen
-        self.add_person_button.setEnabled(not frozen)
-        self.add_person_button.setToolTip("Raw footage was deleted in this session: start a new session for new "
-                                          "participants." if frozen else "Adds a participant with a new pseudonym.")
-        self.remove_person_button.setEnabled(len(people) > 1)
-        self._fill_details()
-        self._check_existing()
-
-    def _fill_details(self) -> None:
-        while self.details_layout.count():
-            item = self.details_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-        self.detail_boxes = {}
-        for d in self.session.details:
-            row = QWidget()
-            rl = QHBoxLayout(row)
-            rl.setContentsMargins(0, 0, 0, 0)
-            box = QCheckBox(detail_title(d))
-            box.setChecked(d.enabled)
-            kind = {"number": "number", "choice": " / ".join(d.choices), "text": "text"}[d.kind]
-            box.setToolTip(f"{kind}{'' if d.builtin else ' (added for this session)'}")
-            box.toggled.connect(lambda on, key=d.key: self._detail_toggled(key, on))
-            rl.addWidget(box)
-            if not d.builtin:
-                remove = QToolButton()
-                remove.setText("Remove")
-                remove.setToolTip("Removes this detail and the values entered for it.")
-                remove.clicked.connect(lambda _=False, key=d.key: self.remove_detail(key))
-                rl.addWidget(remove)
-            rl.addStretch()
-            self.details_layout.addWidget(row)
-            self.detail_boxes[d.key] = box
-
-    def _detail_toggled(self, key: str, on: bool) -> None:
-        set_detail_enabled(self.session, self.root, key, on)
-
-    def add_detail_dialog(self) -> None:
-        dialog = DetailDialog(self)
-        while dialog.exec() == QDialog.DialogCode.Accepted:
-            try:
-                add_detail(self.session, self.root, *dialog.values())
-            except SetupError as exc:
-                error_box(self, "Detail not added", str(exc))
-                continue
-            self._fill_details()
-            return
-
-    def remove_detail(self, key: str) -> None:
-        d = self.session.detail(key)
-        filled = sum(1 for t in self.session.trials if t.details.get(key))
-        if filled and not confirm(self, "Remove detail", f"Remove '{d.label}' and the values entered for {filled} "
-                                  "trial(s)?", "Remove"):
-            return
-        remove_detail(self.session, self.root, key)
-        self._fill_details()
-
-    def _name_cell(self, person) -> QWidget:
-        """The pseudonym, editable, with a button for a new random one. Locked once consent or results refer to it."""
-        cell = QWidget()
-        row = QHBoxLayout(cell)
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(2)
-        edit = QLineEdit(person.code)
-        edit.setMaxLength(24)
-        edit.setMinimumWidth(edit.fontMetrics().horizontalAdvance("M" * 13))
-        edit.editingFinished.connect(lambda p=person, e=edit: self._rename(p, e))
-        dice = QToolButton()
-        dice.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload))
-        dice.setToolTip("New random pseudonym")
-        dice.clicked.connect(lambda _=False, p=person, e=edit: self._randomize(p, e))
-        row.addWidget(edit, 1)
-        row.addWidget(dice)
-        self.name_cells[person.label] = (edit, dice)
-        self._update_name_lock(person)
-        return cell
-
-    def _update_name_lock(self, person) -> None:
-        edit, dice = self.name_cells.get(person.label, (None, None))
-        if edit is None:
-            return
-        try:
-            check_renamable(self.session, person.label)
-            reason = ""
-        except SetupError as exc:
-            reason = str(exc)
-        edit.setReadOnly(bool(reason))
-        dice.setEnabled(not reason)
-        former = (f" Earlier pseudonyms: {', '.join(person.former_codes)}." if person.former_codes else "")
-        edit.setToolTip((reason or "Type another pseudonym if you need to (letters, digits, - or _). Never use the "
-                                   "participant's real name.") + former)
-
-    def _confirm_rename(self, person) -> bool | None:
-        """None: cancelled. The signed form or results carry the pseudonym: say what changes, then go ahead."""
-        consequences = rename_consequences(self.session, person.label)
-        if not consequences:
-            return False
-        if confirm(self, "Change the pseudonym?", "\n\n".join(consequences), "Change it"):
-            return True
-        return None
-
-    def _rename(self, person, edit: QLineEdit) -> None:
-        if edit.isReadOnly() or edit.text().strip() == person.code:
-            edit.setText(person.code)
-            return
-        confirmed = self._confirm_rename(person)
-        if confirmed is None:
-            edit.setText(person.code)
-            return
-        try:
-            rename_participant(self.session, self.root, person.label, edit.text(), confirmed)
-        except SetupError as exc:
-            edit.setText(person.code)
-            error_box(self, "Pseudonym not changed", str(exc))
-            return
-        edit.setText(person.code)
-        self._update_name_lock(person)
-        self._check_existing()
-
-    def _randomize(self, person, edit: QLineEdit) -> None:
-        confirmed = self._confirm_rename(person)
-        if confirmed is None:
-            return
-        try:
-            new_pseudonym(self.session, self.root, person.label, confirmed)
-        except SetupError as exc:
-            error_box(self, "Pseudonym not changed", str(exc))
-            return
-        edit.setText(person.code)
-        self._update_name_lock(person)
-        self._check_existing()
-
-    def add_person(self) -> None:
-        try:
-            add_participant(self.session, self.root)
-        except SetupError as exc:
-            error_box(self, "Participant not added", str(exc))
-            return
-        self.win.set_session(self.root, self.session)
-
-    def remove_person(self) -> None:
-        rows = self.people.selectionModel().selectedRows()
-        r = rows[0].row() if rows else self.people.rowCount() - 1
-        try:
-            remove_participant(self.session, self.root, self.session.participants[r].label)
-        except SetupError as exc:
-            error_box(self, "Participant not removed", str(exc))
-            return
-        self.win.set_session(self.root, self.session)
-
-    def _attest(self, trial, on: bool) -> None:
-        trial.consent.attested = on
-        trial.consent.attested_at = datetime.now().isoformat(timespec="seconds") if on else None
-        self.win.save()
-        self._update_name_lock(trial)
-        self._check_existing()
-
-    def _storage(self, trial, on: bool, delete_box: QCheckBox) -> None:
-        trial.consent.raw_footage_storage = on
-        delete_box.setChecked(not on)  # default follows consent (§6.2); still changeable
-        self.win.save()
-        self._check_existing()
-
-    def _delete(self, trial, on: bool) -> None:
-        trial.delete_raw = on
-        self.win.save()
-        self._check_existing()
-
-    def _check_existing(self) -> None:
-        issues = []
-        for t in self.session.active_participants:
-            trials = self.session.trials_of(t.label)
-            if trials and not any(x.raw_present for x in trials):
-                continue
-            where = f"participant {t.label} ({t.code})"
-            if not t.consent.attested:
-                issues.append(Issue("action", where, "Signed consent not yet confirmed (needed before Run).", ""))
-            if not t.consent.raw_footage_storage and not t.delete_raw:
-                issues.append(Issue("warning", where, "No consent to store raw footage, but it will not be deleted: "
-                                    "the consent form promises deletion.", "Tick 'Delete raw footage'."))
-        self.existing_issues.show_issues(issues, "All participants are complete.")
 
     def is_complete(self) -> bool:
         return self.session is not None

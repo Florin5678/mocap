@@ -47,14 +47,10 @@ The steps are listed on the left. A step becomes available when the previous one
 2. Optionally enter a **study code** (up to 8 letters or digits, e.g. `PA26`). It starts every pseudonym.
 3. Add one **folder per camera**. Each folder holds the camera's `intrinsic` and `extrinsic` videos and one video per trial; before the recordings, the folders may still be empty. If the folders are named after the cameras (`cam01`, `cam02`, ...) and sit side by side, choosing one with **Browse ...** fills in the others.
 4. Set **Trials per participant** (usually 1). A session holds at most 10 trials in total.
-5. Set the number of **Participants**. Their height and other details are entered per trial in step 2 (Trials).
-6. Press **Create session**. Every participant gets a **pseudonym**, such as `PA26-K7M2QX4`. You can still add a participant later, or remove one who has no videos yet (select the row, then **Remove participant**). The pseudonym is random; you can type another one (letters, digits, `-` or `_`, never a real name) or click the arrow next to it for a new random one (`mocapapp session pseudonym --participant N --set P01` or `--random`). Once **Signed consent received** is ticked or the participant has results, the app first says what a change affects and asks you to confirm: write the new pseudonym on the signed form, and the quality report and exported files are renamed with it. The old pseudonym is shown in the field's tooltip.
-7. Press **Generate ...** in a participant's row for their **participation consent form**. The first time, a window asks for the study details: study name, purpose, researchers, data handling, risks and compensation. They are printed on the form as normal text; a field left blank gets a line to write on. The form is meant to be printed; it has no fields to fill in on screen. The details are kept for the next forms of the session; only the pseudonym changes. **Generate all consent forms ...** makes one PDF with every participant's form, ready to print.
-8. When you hold a signed form, tick **Signed consent received** for that participant.
-9. Tick **Consented to storing raw footage** only if the participant agreed to it. **Delete raw footage** then follows automatically; you can change it.
-10. Under **Participant details asked per trial**, tick what you want to record for every trial: height (ticked by default), weight, handedness, age, sex, or your own details with **Add detail ...** (a number with a unit, a choice such as *left / right*, or a short text). Never ask for names or other details that identify the person. The ticked details become columns of the participant details table in step 2 (Trials). A custom detail can be removed again; built-in ones are unticked instead (values already entered are kept).
+5. Set the number of **Participants**.
+6. Press **Create session**. The participants, their pseudonyms, details and consent are then entered in step 2 (Trials).
 
-A typical day: create the session and print the forms before the recordings, have the participants sign them, record, then continue with step 2 (Trials).
+A typical day: create the session, print the consent forms in step 2 before the recordings, have the participants sign them, record, then continue with the videos in step 2.
 
 Keep the signed forms separate from the data: the pseudonym is the only link between a person and their data.
 
@@ -68,39 +64,47 @@ Press **Check videos**. The app reads every file and:
 - matches the trial videos across cameras;
 - checks frame rate, resolution and length.
 
-Problems are listed with what to do. In particular:
+Problems are listed with what to do.
 
-- If a calibration video is missing or named differently, use **Choose intrinsic/extrinsic ...**; the file may be in any folder.
+**Trials and participants.** One table with a row per trial; changes are saved straight away.
 
-The page has two tables with one row per trial:
+- **Participant ID**: the pseudonym of the trial's participant, such as `PA26-K7M2QX4`. Click it to type another one (letters, digits, `-` or `_`, never a real name): this renames the participant, in all of their trials. Click the arrow next to it to choose a participant who already exists instead, for example for their second trial. A participant left without trials is removed. Once **Signed consent received** is ticked or the participant has results, the app first says what a rename affects and asks you to confirm: write the new pseudonym on the signed form, and the quality report and exported files are renamed with it. The old pseudonyms are shown in the field's tooltip. (CLI: `mocapapp session pseudonym --participant N --set P01` or `--random`.)
+- **Height (m)**: always a column, in metres or centimetres (shown as `1.70`). An empty height is estimated, which is less accurate.
+- **Edit columns ...** below the table adds or removes the other columns: weight, handedness, age, gender, or a custom column (a number with a unit, a choice such as *left / right*, or a short text). Never ask for names or other details that identify the person. A custom column can be removed again; built-in ones are unticked (values already entered are kept). When a participant has several trials, the values entered for one are copied into their other trials that are still empty, so normally you enter them once and change only what differs (for example the weight on a later day).
+- **Consent**: tick **Signed consent received** when you hold a signed form, and **Consented to storing raw footage** only if the participant agreed to it; **Delete raw footage** then follows automatically, and you can change it. These are per participant: ticking them in one row ticks them in the participant's other rows.
+- **Generate ...** in the **Consent form** column makes the participant's **participation consent form**. The first time, a window asks for the study details: study name, purpose, researchers, data handling, risks and compensation. They are printed on the form as normal text; a field left blank gets a line to write on. The form is meant to be printed; it has no fields to fill in on screen. The details are kept for the next forms of the session; only the pseudonym changes. **Generate all consent forms ...** makes one PDF with every participant's form, ready to print.
+- **Add trial** adds a row with a new participant and a new random pseudonym; choose an existing participant with the arrow if it is another trial of someone already in the table. Choose its video for every camera in the trial mapping, **Save this mapping**, check and copy again. Trials already processed keep their numbers and results. **Remove trial ...** removes the selected trial (click its row number first). A trial that already has copied videos or results is deleted with them, after the list of files is shown and you type the pseudonym; the participant's other trials stay.
 
-- **Trials and participant details**: whose trial each row is (the **Participant** column; the app fills it in recording order, the first participant's trials first) and a column for every **participant detail** ticked in step 1, such as the height in metres or centimetres. Fill them in while you add the trials; changes are saved straight away. When a participant has several trials, the values entered for one are copied into their other trials that are still empty, so normally you enter them once and change only what differs (for example the weight on a later day). An empty height is estimated, which is less accurate.
-- **Trial mapping**: which video is which trial, for every camera. If the app matched trial videos by recording time instead of by their numbers, check it and correct it if needed, then press **Save this mapping**.
+The table shows ten trials; with more, it scrolls and the column names stay in place. The drop-downs in the tables change only when you click them and choose, never by scrolling the mouse wheel over them.
 
-- **Add trial ...** adds a trial for a participant, for example one recorded on a later day: choose its video for every camera, **Save this mapping**, check and copy again. Trials already processed keep their numbers and results. **Remove trial ...** removes the selected trial (click its row number first). A trial that already has copied videos or results is deleted with them, after the list of files is shown and you type the pseudonym; the participant's other trials stay.
+**Trial mapping**: which video is which trial, for every camera. Videos whose names carry the trial numbers (`01`, `02`, ... or `trial01`, ...) are filled in already and highlighted: check them and press **Save this mapping**. If the app matched trial videos by recording time instead, check it and correct it if needed, then press **Save this mapping**.
+
+**Calibration videos.** Each camera has an **intrinsic** and an **extrinsic** video. If one is missing or named differently, use **Choose ...** in its cell; the file may be in any folder. A camera may have **several** calibration videos of either kind, for example a new extrinsic video after the camera was moved between trials (an exception: avoid it if you can), or a new intrinsic video after its zoom changed. **Change ...** opens the window *Extrinsic calibration for cam01* (or *Intrinsic ...*): a table with the trials as rows and the camera's videos as columns. **Add videos ...**, **Replace a video ...** and **Remove a video ...** change the videos; tick, in every trial's row, the one video that trial uses, then press **OK**. A cell with several videos shows a warning sign; click it to open the same window. Every trial is calibrated with the videos ticked for it. Trials whose calibration changes after they were processed have their 3D results recomputed at the next run.
 
 The page then shows how many videos will be copied and how much disk space this needs. Press **Copy videos into the session**: the app copies the videos, converting them if needed; your original files are never changed.
 
-### Step 3 – Lens calibration
+### Step 3 – Intrinsic calibration
 
-Press **Calibrate all cameras**. Each camera gets a result:
+Press **Calibrate all cameras**. Each intrinsic video gets a result (a camera with several intrinsic videos has a row for each):
 
 - **Pass:** fine.
 - **Check:** works, but could be better. Read the advice shown.
 - **Fail:** must be redone, usually with a new `intrinsic` video in which the board covers the whole picture, including the corners.
 
-### Step 4 – Reference points
+**Change intrinsic video(s) ...** opens the window *Intrinsic calibration for* the selected camera (see step 2, Calibration videos). The board PDF is in **Help**; print it before the recordings.
 
-First choose the **unit of the numbers**: metres, centimetres, inches or feet. Then enter the measured points (at least 10, Z up), import them from a CSV file in that unit, or paste a Config.toml snippet (always metres). The app saves them in metres for Pose2Sim. Typed the numbers in another unit than the one chosen? Choose the right unit: the numbers stay and their meaning changes. Then describe the **origin** and the **+X direction** in words. The app checks the points:
+### Step 4 – Extrinsic calibration
+
+This step has two parts: the reference points, then the camera positions.
+
+**Reference points.** Press **Edit reference points ...**. First choose the **unit of the numbers**: metres, centimetres, inches or feet. Then enter the measured points (at least 10, Z up), import them from a CSV file in that unit, or paste a Config.toml snippet (always metres). The app saves them in metres for Pose2Sim. Typed the numbers in another unit than the one chosen? Choose the right unit: the numbers stay and their meaning changes. Then describe the **origin** and the **+X direction** in words. The app checks the points:
 
 - duplicates;
 - points that all lie on a line;
 - values far from the origin, for example centimetres with the unit set to metres;
 - too few points above the floor.
 
-### Step 5 – Camera positions
-
-For each camera, open the picture from its `extrinsic` video and **click every reference point you can see**, in the order shown. Skip points that are hidden. The app then computes the camera's position and shows the error in centimetres:
+**Camera positions.** For each camera, press **Click points ...** to open the picture from its `extrinsic` video and **click every reference point you can see**, in the order shown. Skip points that are hidden. The app then computes the camera's position and shows the error in centimetres:
 
 - **below 1 cm:** good;
 - **above 2.5 cm:** look for a wrongly clicked point (the app shows how many pixels each point is off) or a wrong measurement.
@@ -109,15 +113,16 @@ If the app says points are *behind the camera*, an axis is probably flipped. It 
 
 Changing the reference points afterwards (a corrected measurement, another unit) does not mean clicking again: every camera position is recomputed from the points you already clicked, and the app lists the new errors. Only a camera left with too few clicked points (because points were removed) has to be clicked again.
 
-**A camera was moved between trials** (an exception: avoid it if you can). If a camera was moved or knocked between trials, record a new `extrinsic` video with it in its new place, showing the reference points. Then use the small **A camera was moved between trials ...** button under the table: choose the camera, the new video and the trials recorded from the new place. The camera gets an extra row; click the points on the new video as usual. Trials recorded from the new place use that position; the others keep the first one. **Position ...** in that row changes its trials or removes it. Trials whose camera position changes after they were processed have their 3D results recomputed at the next run.
+**A camera was moved between trials** (an exception: avoid it if you can). Record a new `extrinsic` video with it in its new place, showing the reference points, and add it to the camera in step 2 (Calibration videos), ticking the trials recorded from the new place. The camera then has a row for each extrinsic video here; click the points on each as usual.
 
-### Step 6 – Run
+### Step 5 – Run
 
 The summary shows every trial, camera and setting. Tick **I recorded a sync cue at the start of every trial**, then press **Run all**.
 
 - **Time:** the estimate is shown before you start. On a laptop without a graphics card, expect several minutes per camera and minute of video.
 - **Screen:** while a run is going, the screen stays on and the computer does not go to sleep, unless this is turned off in **Help > Settings**.
-- **Stop:** you can stop at any time and press **Run all** (or **Run this trial**) again later to resume; finished stages are kept.
+- **Stop:** you can stop at any time and press **Run all** (or **Run selected**, or **Run this trial**) again later to resume; finished stages are kept.
+- **Some trials only:** tick the box in the first column of the trials you want; the button then reads **Run selected** and runs only those. With none or all ticked it is **Run all**.
 - **One trial at a time:** **Run this trial** in a trial's row runs only that trial. You can save the project, close the app, record the next participant another day, open the project again, add the trial (step 2), and run just that one; finished trials are not touched.
 - **Failures:** if one trial fails, the others continue. The reason is shown in plain words, with the full log under `trials/trial_<label>/mocap_logs/`.
 - **Synchronisation:** if the app is unsure that the cameras are lined up for a trial (a low correlation), that trial stops. Choose **Check sync ...** to inspect it in a player, or **Accept as is**. While the player is open, the trial's state says so; close the player when the offsets look right and the trial continues by itself. After the player closes, the app first copies the trial's keypoint files, which can take several minutes. An offset longer than 5 s does not stop the trial: it is listed in the quality report, and is fine if the cameras were started that far apart.
@@ -137,7 +142,7 @@ The summary shows every trial, camera and setting. Tick **I recorded a sync cue 
 - **Smoothing cut-off:** 6 Hz suits walking. Faster movements need more, but the cut-off must stay below half the video frame rate: below 15 Hz for 30 fps video, below 30 Hz for 60 fps. The app checks this before it runs.
 - **Changing settings after a run:** allowed. **Run all** then repeats only the stages the change affects, for example smoothing and everything after it. A change of pose detection repeats everything.
 
-### Step 7 – Results
+### Step 6 – Results
 
 Each trial gets a **traffic light**: **Good**, **Check** or **Problem**. The metrics behind it:
 
@@ -158,7 +163,7 @@ Under **Export**, tick what you need and press **Export**. Files go to the sessi
 
 Press **Next** for the **Viewer** (no export needed).
 
-### Step 8 – Viewer
+### Step 7 – Viewer
 
 Choose a **trial** at the top. The **3D** tab plays the movement as a skeleton: **Play**, drag the slider to go to a moment, drag in the picture to rotate, use the mouse wheel to zoom, double-click to reset. Blue is left, red is right, grey dots are the LSTM markers; the grid is the floor in 0.5 m squares. **3D markers** chooses the marker file (smoothed + LSTM, smoothed, raw).
 
@@ -175,7 +180,7 @@ When you are done, press **Finished!**. The app saves the session, reminds you o
 
 ## 4. Participant data and deletion
 
-**File > Participant data and deletion** is available at any time, as are the buttons on the Session and Results steps. For each participant you can:
+**File > Participant data and deletion** is available at any time, as are the buttons on the Trials and Results steps. For each participant you can:
 
 - **Delete raw footage**: removes the copies of their videos, the overlay videos and the 2D keypoint files. The 3D results stay. Optionally, it also deletes the original recordings in the camera folders; you must type the pseudonym to confirm.
 - **Delete all data of this participant** (for example, when they withdraw consent): removes their footage, results and exported files. You must type the pseudonym to confirm.
@@ -190,7 +195,7 @@ Every deletion first shows the exact list of files and sizes. Files are deleted 
 - cloud backups;
 - external drives.
 
-When *Delete raw footage* was ticked in step 1, the Results step offers **Delete raw footage now** once the results are complete and exported. Footage kept with consent is never deleted automatically. The recent-sessions list marks sessions whose footage is still waiting to be deleted.
+When *Delete raw footage* was ticked in step 2, the Results step offers **Delete raw footage now** once the results are complete and exported. Footage kept with consent is never deleted automatically. The recent-sessions list marks sessions whose footage is still waiting to be deleted.
 
 Details: the project's `app/docs/privacy.md`.
 
@@ -201,14 +206,14 @@ Details: the project's `app/docs/privacy.md`.
 | "Session path contains non-ASCII letters" | Move the session to a folder whose path has only plain letters and digits. |
 | "No body keypoints were found in at least one camera" | Check that camera's video: is the person fully visible, and is the light sufficient? |
 | A trial stops with "needs sync fix" | Use **Check sync ...**. Next time, give a clear clap or jump at the start, visible to every camera. |
-| Large reprojection error | A camera may have moved after its `extrinsic` video, or a reference point was clicked or measured wrongly. Redo step 5 for that camera. |
+| Large reprojection error | A camera may have moved after its `extrinsic` video, or a reference point was clicked or measured wrongly. Redo the camera positions (step 4) for that camera. |
 | Feet far above or below the floor | The reference points' heights or the floor (Z = 0) are off. Check the measurements. |
 | "The smoothing cut-off is too high for this video's frame rate" | Lower **Advanced > Smoothing cut-off** below half the frame rate (for 30 fps video: 14 Hz or less), then press **Run all**. Only smoothing and later stages are repeated. |
 | Head below the feet | Z points down in your reference points: Z must point up. |
 | "Raw footage was deleted in this session" | After a deletion, the session's videos can no longer be changed. Start a new session for new recordings. |
 | "No space left on device" in a log | The drive filled up during the run. Free some space (or move the session to a larger drive) and press **Run all** again: finished stages are kept. |
 | "No video chosen for trial N" | A trial was added: choose its video for every camera in the trial mapping table (step 2, Trials) and press **Save this mapping**. |
-| "extrinsics missing" for a camera position | A camera was marked as moved: click the reference points on its new extrinsic video (step 5), or remove that position. |
+| "extrinsics missing" for an extrinsic video | A camera has a further extrinsic video: click the reference points on it (step 4), or remove that video in step 2 (Calibration videos). |
 | Anything else | **Help > Copy diagnostics** copies version and setup information (without your name or any participant data); paste it into your bug report. |
 
 ## 6. Command line (optional)

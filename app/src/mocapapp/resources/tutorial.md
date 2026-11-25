@@ -7,10 +7,10 @@ You film one person with two or more cameras at the same time. The app turns tho
 
 The steps, in order:
 
-1. **Session setup** – one folder per camera, one row per participant, and their consent forms.
-2. **Lens calibration** (intrinsic) – from a video of a printed board, once per camera.
-3. **Reference points** – measured points in the room that define the floor and the directions X, Y, Z.
-4. **Camera positions** (extrinsic) – you click the reference points in one picture per camera.
+1. **Session** – the output folder and one folder per camera.
+2. **Trials** – one row per trial with its participant, height and consent forms; then the videos.
+3. **Intrinsic calibration** – the lens, from a video of a printed board, once per camera.
+4. **Extrinsic calibration** – measured reference points in the room that define the floor and the directions X, Y, Z; you click them in one picture per camera.
 5. **Run** – the computer does the rest; this can take a long time on a laptop, and you can leave it running.
 6. **Results** – a quality report, a 3D preview and the export.
 

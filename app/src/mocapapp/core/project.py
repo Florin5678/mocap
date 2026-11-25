@@ -15,7 +15,8 @@ from mocapapp.core.session import SESSION_FILE, atomic_write_text
 
 SUFFIX = ".mocapproj"
 FORMAT = "mocapapp-project"
-STEPS = ("setup", "videos", "intrinsics", "scene", "extrinsics", "run", "results", "viewer")
+STEPS = ("setup", "videos", "intrinsics", "extrinsics", "run", "results", "viewer")
+OLD_STEPS = {"scene": "extrinsics"}  # 0.1.0rc17: reference points and camera positions are one step
 
 
 class ProjectError(ValueError):
@@ -72,7 +73,8 @@ def load_project(path: Path) -> Project:
         candidates.append(Path(data["session"]))
     for root in candidates:
         if (root / SESSION_FILE).is_file():
-            step = data.get("step") if data.get("step") in STEPS else "setup"
+            step = OLD_STEPS.get(data.get("step"), data.get("step"))
+            step = step if step in STEPS else "setup"
             return Project(path, root, step, data.get("saved_at", ""), data.get("app_version", ""))
     where = " or ".join(str(c) for c in dict.fromkeys(candidates)) or "(none given)"
     raise ProjectError(f"The session folder of {path.name} was not found at {where}. It may have been moved, "

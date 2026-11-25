@@ -51,13 +51,13 @@ def stage_inputs(session: Session, stage: str, label: str | None = None) -> str:
             "filtering": [st.filter.type, st.filter.cutoff_hz, st.filter.order],
             "markerAugmentation": [st.use_augmentation],
             "kinematics": [st.use_augmentation, True] + (["simple model"] if st.simple_model else [])}.get(stage, [])
-    if stage == "triangulation" and label is not None:  # a camera moved before this trial: its later position
+    if stage == "triangulation" and label is not None:  # further calibration videos this trial uses
         for cam in session.cameras:
-            key = cam.position_for(label)
-            if key:
-                entry = next((e for e in session.extrinsics
-                              if e.get("camera") == cam.name and e.get("position") == key), {})
-                deps.append(f"{cam.name}:{key}:{entry.get('error_px', '')}")
+            key, lens = cam.position_for(label), cam.lens_for(label)
+            if key or lens:
+                entry = next((e for e in session.extrinsics if e.get("camera") == cam.name
+                              and e.get("position", "") == key and e.get("lens", "") == lens), {})
+                deps.append(f"{cam.name}:{key}:{lens + ':' if lens else ''}{entry.get('error_px', '')}")
     return json.dumps(deps)
 
 

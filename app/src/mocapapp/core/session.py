@@ -36,6 +36,12 @@ def parse_height(value: str | float | None) -> float | None:
     return round(h, 3)
 
 
+def format_height(h: float) -> str:
+    """A height in metres with two or more decimals: 1.70, 1.705."""
+    whole, _, dec = f"{h:.3f}".rstrip("0").partition(".")
+    return f"{whole}.{dec.ljust(2, '0')}"
+
+
 class DetailField(BaseModel):
     """A participant detail asked for every trial (0.1.0rc13): height, weight, handedness, ... or a custom one."""
     key: str  # stable key in Trial.details
@@ -54,7 +60,7 @@ def default_details() -> list[DetailField]:
         DetailField(key="handedness", label="Handedness", kind="choice", choices=["right", "left", "both"],
                     builtin=True),
         DetailField(key="age", label="Age", kind="number", unit="years", builtin=True),
-        DetailField(key="sex", label="Sex", kind="choice", choices=["female", "male", "other"], builtin=True),
+        DetailField(key="sex", label="Gender", kind="choice", choices=["female", "male", "other"], builtin=True),
     ]
 
 
@@ -136,11 +142,15 @@ class CalibVideo(VideoRef):
 
 
 class CameraPosition(BaseModel):
-    """Another camera-position (extrinsic) video, for trials recorded after the camera was moved (0.1.0rc13).
-    The camera's main extrinsic video is position 1 and applies to every trial not listed here."""
+    """A further calibration video of a camera, used by the trials listed (0.1.0rc13 for extrinsic videos: the camera
+    was moved; 0.1.0rc17 also intrinsic ones). The camera's main video has the key "" and applies to every trial not
+    listed in one of its further videos."""
     key: str  # "2", "3", ...
     file: str
     trials: list[str] = Field(default_factory=list)
+
+
+ROLES = ("intrinsic", "extrinsic")
 
 
 class Camera(BaseModel):
@@ -149,17 +159,35 @@ class Camera(BaseModel):
     intrinsic: CalibVideo | None = None
     extrinsic: VideoRef | None = None
     trial_files: dict[str, str] = Field(default_factory=dict)  # trial label -> source file
-    positions: list[CameraPosition] = Field(default_factory=list)
+    positions: list[CameraPosition] = Field(default_factory=list)  # further extrinsic videos
+    lenses: list[CameraPosition] = Field(default_factory=list)  # further intrinsic videos (0.1.0rc17)
+
+    def extras(self, role: str) -> list[CameraPosition]:
+        return self.lenses if role == "intrinsic" else self.positions
+
+    def video_for(self, role: str, trial: str) -> str:
+        """The key of the calibration video a trial uses with this camera ("" = the main video)."""
+        return next((p.key for p in self.extras(role) if trial in p.trials), "")
 
     def position_for(self, trial: str) -> str:
-        """The position key a trial uses with this camera ("" = the main extrinsic video)."""
-        return next((p.key for p in self.positions if trial in p.trials), "")
+        return self.video_for("extrinsic", trial)
 
-    def position(self, key: str) -> CameraPosition:
-        for p in self.positions:
+    def lens_for(self, trial: str) -> str:
+        return self.video_for("intrinsic", trial)
+
+    def extra(self, role: str, key: str) -> CameraPosition:
+        for p in self.extras(role):
             if p.key == key:
                 return p
-        raise KeyError(f"{self.name} has no camera position {key}.")
+        raise KeyError(f"{self.name} has no {role} video {key}.")
+
+    def position(self, key: str) -> CameraPosition:
+        return self.extra("extrinsic", key)
+
+    def calib_videos(self, role: str) -> list[tuple[str, str]]:
+        """(key, file) of every calibration video for this role, the main one first ("" when it is chosen)."""
+        main = getattr(self, role)
+        return ([("", main.file)] if main is not None else []) + [(p.key, p.file) for p in self.extras(role)]
 
 
 class FilterSettings(BaseModel):
@@ -252,6 +280,11 @@ class Session(BaseModel):
     @model_validator(mode="after")
     def _linked(self):
         self.link()
+        for d in self.details:  # 0.1.0rc17: height is always a column; 'Sex' is shown as 'Gender'
+            if d.builtin and d.key == "height":
+                d.enabled = True
+            if d.builtin and d.key == "sex":
+                d.label = "Gender"
         return self
 
     def link(self) -> None:
@@ -342,7 +375,7 @@ class Layout:
         return self.calibration_work / "Calib_scene.toml"
 
     def trial_calib(self, label: str) -> Path:
-        """Calibration for a trial that uses another camera position (0.1.0rc13)."""
+        """Calibration for a trial that uses a further calibration video of some camera (0.1.0rc13)."""
         return self.calibration_work / f"Calib_scene_trial_{label}.toml"
 
     @property

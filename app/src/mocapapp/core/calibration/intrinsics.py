@@ -268,19 +268,20 @@ def calibrate_video(camera: str, video: Path, spec: BoardSpec, every_n_sec: floa
         layout=layout, mirrored=mirrored, status=status, advice=advice, used_frames=used)
 
 
-def result_path(work_dir: Path, camera: str) -> Path:
-    return work_dir / f"intrinsics_{camera}.json"
+def result_path(work_dir: Path, camera: str, lens: str = "") -> Path:
+    """lens "" = the camera's main intrinsic video; "2", "3", ... = a further one (0.1.0rc17)."""
+    return work_dir / (f"intrinsics_{camera}_lens{lens}.json" if lens else f"intrinsics_{camera}.json")
 
 
-def save_result(result: IntrinsicsResult, work_dir: Path) -> Path:
-    path = result_path(work_dir, result.camera)
+def save_result(result: IntrinsicsResult, work_dir: Path, lens: str = "") -> Path:
+    path = result_path(work_dir, result.camera, lens)
     atomic_write_text(path, result.to_json() + "\n")
     return path
 
 
-def load_result(work_dir: Path, camera: str, video: Path | None = None) -> IntrinsicsResult | None:
+def load_result(work_dir: Path, camera: str, video: Path | None = None, lens: str = "") -> IntrinsicsResult | None:
     """Saved result, or None if missing or computed from a different video (hash check, FR-3.4)."""
-    path = result_path(work_dir, camera)
+    path = result_path(work_dir, camera, lens)
     if not path.is_file():
         return None
     result = IntrinsicsResult.from_json(path.read_text(encoding="utf-8"))

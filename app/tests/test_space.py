@@ -117,8 +117,8 @@ def test_run_page_options(qtbot, tmp_path, monkeypatch):
     win = MainWindow()
     qtbot.addWidget(win)
     win.open_session(root)
-    win.go(5)
-    page = win.pages[5]
+    win.go(4)
+    page = win.pages[4]
     assert page.key == "run" and not page.overlay_box.isChecked()
     assert page.keep_box.isChecked()  # the helper session keeps its keypoints
     page.overlay_box.setChecked(True)

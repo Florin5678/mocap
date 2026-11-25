@@ -1,4 +1,4 @@
-"""Step 8: Viewer - the results of each trial as a 3D skeleton (play, scrub, rotate) and as data (joint angles and
+"""Step 7: Viewer - the results of each trial as a 3D skeleton (play, scrub, rotate) and as data (joint angles and
 marker positions over time: plot, table, comparison between trials, CSV). Reads the trial folders; no export needed.
 """
 

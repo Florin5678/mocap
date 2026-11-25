@@ -1,4 +1,5 @@
-"""Steps 3-5: lens calibration (§6.3), reference points (§6.4), camera positions (§6.5)."""
+"""Steps 3-4: intrinsic calibration (§6.3); extrinsic calibration: reference points (§6.4) and camera positions
+(§6.5), one step since 0.1.0rc17. A camera can have several calibration videos, each used by some trials."""
 
 from __future__ import annotations
 
@@ -7,50 +8,35 @@ from pathlib import Path
 
 from PySide6.QtWidgets import (
     QAbstractItemView,
-    QCheckBox,
     QComboBox,
-    QDialog,
-    QDialogButtonBox,
     QDoubleSpinBox,
-    QFileDialog,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
-    QLineEdit,
-    QMenu,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QTableWidget,
-    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
 from mocapapp.core.calibration import extrinsics as ex
-from mocapapp.core.calibration import intrinsics as intr
 from mocapapp.core.calibration import service
 from mocapapp.core.calibration.scene_points import MIN_POINTS, check_scene
 from mocapapp.core.session import Layout
 from mocapapp.core.texts import s
-from mocapapp.core.workflow import (
-    SetupError,
-    add_camera_position,
-    prepare_position,
-    remove_camera_position,
-    set_position_trials,
-)
 from mocapapp.gui.common import (
     Background,
     IssueView,
     clear_table,
-    confirm,
     error_box,
+    fit_rows,
     note,
     open_path,
-    para,
     readonly,
     status_badge,
 )
@@ -76,7 +62,7 @@ class _CalibPage(Page):
 # ---------- intrinsics ----------
 
 class IntrinsicsPage(_CalibPage):
-    key, title = "intrinsics", "Lens calibration"
+    key, title = "intrinsics", "Intrinsic calibration"
 
     def __init__(self, win):
         super().__init__(win)
@@ -99,11 +85,8 @@ class IntrinsicsPage(_CalibPage):
         form.addRow("Square size", self.square)
         bl.addLayout(form)
         side = QVBoxLayout()
-        pdf = QPushButton("Save the board PDF ...")
-        pdf.clicked.connect(self.win.save_board_pdf)
-        side.addWidget(pdf)
         side.addWidget(note("Changing these settings means the lens calibration must be recomputed. "
-                            "Lens calibration survives moving a camera, but not changing its zoom, resolution, "
+                            "Intrinsic calibration survives moving a camera, but not changing its zoom, resolution, "
                             "focus mode, stabilisation or lens."))
         bl.addLayout(side, 1)
         for w in (self.board_type, self.cols, self.rows, self.square):
@@ -113,7 +96,9 @@ class IntrinsicsPage(_CalibPage):
         row = QHBoxLayout()
         self.run_all = QPushButton("Calibrate all cameras")
         self.run_sel = QPushButton("Recalculate selected")
-        self.choose = QPushButton("Choose another intrinsic video ...")
+        self.choose = QPushButton("Change intrinsic video(s) ...")
+        self.choose.setToolTip("Add, replace or remove the selected camera's intrinsic videos, and choose which "
+                               "trials use each.")
         self.every = QDoubleSpinBox()
         self.every.setRange(0.2, 5)
         self.every.setValue(1.0)
@@ -135,7 +120,7 @@ class IntrinsicsPage(_CalibPage):
 
     def _selected(self) -> list[str]:
         rows = sorted({i.row() for i in self.table.selectedIndexes()})
-        return [self.session.cameras[r].name for r in rows]
+        return list(dict.fromkeys(self.video_rows[r][0].name for r in rows if r < len(self.video_rows)))
 
     def _board_changed(self) -> None:
         if self.session is None or self._loading:
@@ -156,12 +141,17 @@ class IntrinsicsPage(_CalibPage):
         self.rows.setValue(st.corners_nb[0] + 1)
         self.square.setValue(st.square_size_mm)
         self._loading = False
-        work = Layout(self.root).calibration_work
-        cams = self.session.cameras
-        self.table.setRowCount(len(cams))
-        for r, cam in enumerate(cams):
-            res = intr.load_result(work, cam.name)
-            self.table.setItem(r, 0, readonly(cam.name))
+        # one row per intrinsic video: a camera with several (0.1.0rc17) has a row for each
+        self.video_rows = [(cam, key, file) for cam in self.session.cameras
+                           for key, file in (cam.calib_videos("intrinsic") or [("", "")])]
+        self.table.setRowCount(len(self.video_rows))
+        for r, (cam, key, file) in enumerate(self.video_rows):
+            res = service.lens_result(self.root, cam.name, key)
+            name = cam.name if len(cam.calib_videos("intrinsic")) < 2 else f"{cam.name}: {Path(file).name}"
+            if key:
+                users = ", ".join(cam.extra("intrinsic", key).trials) or "none"
+                name += f"\n(trials {users})"
+            self.table.setItem(r, 0, readonly(name))
             if res is None:
                 self.table.setItem(r, 1, readonly("not calibrated yet"))
                 for c in range(2, 7):
@@ -185,6 +175,7 @@ class IntrinsicsPage(_CalibPage):
         return all(not v.startswith("intrinsics") for v in state.values())
 
     _loading = False
+    video_rows: list = []
 
     def calibrate(self, cameras: list[str] | None, force: bool) -> None:
         if cameras == []:
@@ -203,7 +194,7 @@ class IntrinsicsPage(_CalibPage):
         def failed(msg, details):
             self.win.set_busy(False)
             self.progress.setText("")
-            error_box(self, "Lens calibration stopped", msg, details)
+            error_box(self, "Intrinsic calibration stopped", msg, details)
             self.refresh()
 
         Background(self, service.run_intrinsics, self.session, self.root, cameras, self.every.value(), force,
@@ -212,32 +203,68 @@ class IntrinsicsPage(_CalibPage):
     def _choose_video(self) -> None:
         cams = self._selected()
         if len(cams) != 1:
-            error_box(self, "Select one camera", "Select the row of the camera whose video you want to replace.")
+            error_box(self, "Select one camera", "Select the row of the camera whose intrinsic videos you want to "
+                      "change.")
             return
-        # the Trials page owns choosing files and copying them into the session
-        self.win.go(1)
-        self.win.pages[1].choose(cams[0], "intrinsic")
+        from mocapapp.gui.calib_dialog import CalibDialog
+
+        dlg = CalibDialog(self, self.session, self.root, cams[0], "intrinsic")
+        dlg.exec()
+        self.win.save()
+        if dlg.files_changed:  # the Trials page checks the new files and copies them into the session
+            self.win.go(1)
+            self.win.pages[1].status.setText("A calibration video changed: press <b>Check videos</b>, then copy "
+                                             "the videos into the session.")
+            return
+        self.refresh()
+        self.completeChanged.emit()
 
 
-# ---------- reference points ----------
+# ---------- extrinsic calibration: reference points and camera positions ----------
 
-class ScenePage(_CalibPage):
-    key, title = "scene", "Reference points"
+class ExtrinsicsPage(_CalibPage):
+    key, title = "extrinsics", "Extrinsic calibration"
 
     def __init__(self, win):
         super().__init__(win)
-        layout = QVBoxLayout(self)
+        inner = QWidget()
+        layout = QVBoxLayout(inner)
+        points = QGroupBox("Reference points")
+        pl = QVBoxLayout(points)
+        prow = QHBoxLayout()
         self.summary = QLabel()
         self.summary.setWordWrap(True)
-        layout.addWidget(self.summary)
         edit = QPushButton("Edit reference points ...")
         edit.clicked.connect(self.edit)
-        layout.addWidget(edit)
-        self.issues = IssueView(min_height=160)
-        layout.addWidget(self.issues)
-        layout.addWidget(note(f"At least {MIN_POINTS} measured points; each camera must later see at least 6 of "
-                              "them. These points are shared by all cameras and all trials of this session."))
+        prow.addWidget(self.summary, 1)
+        prow.addWidget(edit)
+        pl.addLayout(prow)
+        self.issues = IssueView(min_height=70)
+        self.issues.setMaximumHeight(150)
+        pl.addWidget(self.issues)
+        pl.addWidget(note(f"At least {MIN_POINTS} measured points; each camera must later see at least 6 of them. "
+                          "These points are shared by all cameras and all trials of this session."))
+        layout.addWidget(points)
+
+        cams = QGroupBox("Camera positions")
+        cl = QVBoxLayout(cams)
+        cl.addWidget(note(s("cameras_stay_put") + " A camera moved between trials has a further extrinsic video for "
+                          "the trials recorded after the move (Trials step, calibration videos).", "important"))
+        self.table = _table(["Camera", "Result", "Points", "Error", "Camera position (m)", "", "", "Notes"])
+        cl.addWidget(self.table)
+        self.state = QLabel()
+        self.state.setWordWrap(True)
+        cl.addWidget(self.state)
+        layout.addWidget(cams)
         layout.addStretch()
+        area = QScrollArea()
+        area.setWidgetResizable(True)
+        area.setWidget(inner)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(area)
+
+    # ---------- reference points ----------
 
     def _scene(self):
         try:
@@ -245,19 +272,7 @@ class ScenePage(_CalibPage):
         except service.CalibrationStepError:
             return None
 
-    def refresh(self) -> None:
-        if self.session is None:
-            return
-        scene = self._scene()
-        if scene is None:
-            self.summary.setText("No reference points yet.")
-            self.issues.setHtml("")
-            return
-        self.summary.setText(f"<b>{len(scene.points)} points.</b> Origin: {html.escape(scene.origin_text or '?')}. "
-                             f"+X toward: {html.escape(scene.x_axis_text or '?')}. Z is up.")
-        self.issues.show_issues(check_scene(scene), "The reference points look fine.")
-
-    def is_complete(self) -> bool:
+    def _scene_ok(self) -> bool:
         scene = self._scene() if self.session is not None else None
         return scene is not None and not any(i.level in ("error", "action") for i in check_scene(scene))
 
@@ -274,116 +289,34 @@ class ScenePage(_CalibPage):
             self.refresh()
             self.completeChanged.emit()
 
-
-# ---------- extrinsics ----------
-
-class PositionDialog(QDialog):
-    """A camera was moved between trials: which camera, its new extrinsic video, and the trials recorded after."""
-
-    def __init__(self, parent, session, camera: str | None = None, trials: list[str] | None = None):
-        super().__init__(parent)
-        self.session = session
-        editing = camera is not None
-        self.setWindowTitle("Trials for this camera position" if editing else "A camera was moved between trials")
-        layout = QVBoxLayout(self)
-        if not editing:
-            layout.addWidget(para(
-                "Only for the exception: a camera was moved (or knocked) between trials. Record a new extrinsic "
-                "video with the camera in its new place, showing the reference points, and tick the trials recorded "
-                "from there. The lens calibration stays. You will then click the points on the new video."))
-        form = QFormLayout()
-        self.camera = QComboBox()
-        for cam in session.cameras:
-            self.camera.addItem(cam.name, cam.name)
-        if editing:
-            self.camera.setCurrentIndex(self.camera.findData(camera))
-            self.camera.setEnabled(False)
-        form.addRow("Camera", self.camera)
-        self.file = QLineEdit()
-        self.file.setReadOnly(True)
-        browse = QPushButton("Choose ...")
-        browse.clicked.connect(self._browse)
-        frow = QHBoxLayout()
-        frow.addWidget(self.file, 1)
-        frow.addWidget(browse)
-        if not editing:
-            form.addRow("New extrinsic video", frow)
-        layout.addLayout(form)
-        layout.addWidget(QLabel("Trials recorded with the camera in this position:"))
-        self.boxes = {}
-        for t in session.trials:
-            if t.withdrawn_at:
-                continue
-            box = QCheckBox(f"Trial {t.label} ({t.code})")
-            box.setChecked(t.label in (trials or []))
-            box.setEnabled(t.raw_present)
-            self.boxes[t.label] = box
-            layout.addWidget(box)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
-
-    def _browse(self) -> None:
-        cam = self.session.camera(self.camera.currentData())
-        name, _ = QFileDialog.getOpenFileName(self, f"New extrinsic video for {cam.name}", cam.source_dir,
-                                              "Videos (*.mp4 *.mov *.avi *.mkv *.MP4 *.MOV);;All files (*)")
-        if name:
-            self.file.setText(name)
-
-    def values(self) -> tuple[str, str, list[str]]:
-        return (self.camera.currentData(), self.file.text(),
-                [lbl for lbl, box in self.boxes.items() if box.isChecked()])
-
-
-class ExtrinsicsPage(_CalibPage):
-    key, title = "extrinsics", "Camera positions"
-
-    def __init__(self, win):
-        super().__init__(win)
-        layout = QVBoxLayout(self)
-        layout.addWidget(note(s("cameras_stay_put") + " The camera positions found here are used for every trial "
-                              "of this session (unless a camera was moved: see the button under the table).",
-                              "important"))
-        self.table = _table(["Camera", "Result", "Points", "Error", "Camera position (m)", "", "", "", "Notes"])
-        layout.addWidget(self.table, 1)
-        self.state = QLabel()
-        self.state.setWordWrap(True)
-        layout.addWidget(self.state)
-        moved = QHBoxLayout()
-        self.moved_button = QPushButton("A camera was moved between trials ...")
-        self.moved_button.setFlat(True)
-        self.moved_button.setToolTip("Only if a camera was moved between trials: add a second extrinsic video for "
-                                     "it and choose the trials it applies to.")
-        self.moved_button.clicked.connect(self.add_position)
-        moved.addStretch()
-        moved.addWidget(self.moved_button)
-        layout.addLayout(moved)
+    # ---------- camera positions ----------
 
     def refresh(self) -> None:
         if self.session is None:
             return
-        work = Layout(self.root).calibration_work
-        rows = [(cam, key) for cam in self.session.cameras for key in [""] + [p.key for p in cam.positions]]
+        scene = self._scene()
+        if scene is None:
+            self.summary.setText("No reference points yet: enter them first.")
+            self.issues.setHtml("")
+        else:
+            self.summary.setText(f"<b>{len(scene.points)} points.</b> Origin: "
+                                 f"{html.escape(scene.origin_text or '?')}. +X toward: "
+                                 f"{html.escape(scene.x_axis_text or '?')}. Z is up.")
+            self.issues.show_issues(check_scene(scene), "The reference points look fine.")
+        # one row per extrinsic video: a camera moved between trials has a row for each place
+        rows = [(cam, key, file) for cam in self.session.cameras
+                for key, file in (cam.calib_videos("extrinsic") or [("", "")])]
         clear_table(self.table)
         self.table.setRowCount(len(rows))
-        for r, (cam, key) in enumerate(rows):
-            res = ex.load_result(work, cam.name, key)
+        for r, (cam, key, file) in enumerate(rows):
+            res = service.position_result(self.root, self.session, cam.name, key)
+            name = cam.name if len(cam.calib_videos("extrinsic")) < 2 else f"{cam.name}: {Path(file).name}"
             if key:
-                trials = ", ".join(cam.position(key).trials)
-                self.table.setItem(r, 0, readonly(f"{cam.name}, moved\n(trials {trials})"))
-                more = QToolButton()
-                more.setText("Position ...")
-                more.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-                menu = QMenu(more)
-                menu.addAction("Choose trials ...", lambda c=cam.name, k=key: self.edit_position(c, k))
-                menu.addAction("Remove this position", lambda c=cam.name, k=key: self.remove_position(c, k))
-                more.setMenu(menu)
-                self.table.setCellWidget(r, 7, more)
-            else:
-                self.table.setItem(r, 0, readonly(cam.name))
-                self.table.setCellWidget(r, 7, QWidget())
+                name += f"\n(trials {', '.join(cam.position(key).trials) or 'none'})"
+            self.table.setItem(r, 0, readonly(name))
             click = QPushButton("Click points ...")
+            click.setEnabled(scene is not None)
+            click.setToolTip("" if scene is not None else "Enter the reference points first.")
             click.clicked.connect(lambda _=False, c=cam.name, k=key: self.click(c, k))
             self.table.setCellWidget(r, 5, click)
             review = QPushButton("Review image")
@@ -393,7 +326,7 @@ class ExtrinsicsPage(_CalibPage):
             self.table.setCellWidget(r, 6, review)
             if res is None:
                 self.table.setItem(r, 1, readonly("not done yet"))
-                for c in (2, 3, 4, 8):
+                for c in (2, 3, 4, 7):
                     self.table.setItem(r, c, readonly(""))
                 continue
             word = {"ok": "PASS", "warn": "CHECK (usable)", "fail": "FAIL" + (" (accepted)" if res.overridden
@@ -402,9 +335,9 @@ class ExtrinsicsPage(_CalibPage):
             self.table.setItem(r, 2, readonly(str(res.n_points)))
             self.table.setItem(r, 3, readonly(f"{res.rms_cm:.2f} cm ({res.rms_px:.1f} px)"))
             self.table.setItem(r, 4, readonly(", ".join(f"{v:.2f}" for v in res.camera_position)))
-            self.table.setItem(r, 8, readonly("\n".join(res.warnings)))
+            self.table.setItem(r, 7, readonly("\n".join(res.warnings)))
         self.table.resizeRowsToContents()
-        self.moved_button.setVisible(self.session.calibration_source == "app")
+        fit_rows(self.table)
         self._write_if_ready()
 
     def _write_if_ready(self) -> None:
@@ -427,23 +360,26 @@ class ExtrinsicsPage(_CalibPage):
         if self.session is None:
             return False
         state = service.calibration_state(self.session, self.root)
-        return all(v == "ready" for v in state.values()) and Layout(self.root).calib_file.is_file()
+        return (self._scene_ok() and all(v == "ready" for v in state.values())
+                and Layout(self.root).calib_file.is_file())
 
     def click(self, camera: str, position: str = "") -> None:
         from mocapapp.gui.extrinsic_dialog import ExtrinsicDialog
 
+        cam = self.session.camera(camera)
+        lens = service.lenses_for_position(self.session, cam, position)[0]
         try:
             scene = service.get_scene(self.root)
             video = service.input_video(self.root, camera, "extrinsic", position)
-            K = intr.load_result(Layout(self.root).calibration_work, camera)
         except service.CalibrationStepError as exc:
             error_box(self, "Not ready", str(exc))
             return
+        K = service.lens_result(self.root, camera, lens)
         if K is None:
-            error_box(self, "Not ready", f"{camera}: do the lens calibration first.")
+            error_box(self, "Not ready", f"{service.video_title(cam, 'intrinsic', lens)}: do the intrinsic "
+                      "calibration first.")
             return
-        work = Layout(self.root).calibration_work
-        previous = ex.load_result(work, camera, position)  # never the other position's clicks: they moved
+        previous = service.saved_clicks(self.root, camera, position)  # never another video's clicks: it moved
         dlg = ExtrinsicDialog(self, camera, video, scene, K, previous)
         if dlg.exec():
             try:
@@ -454,59 +390,3 @@ class ExtrinsicsPage(_CalibPage):
             self.win.save()
             self.refresh()
             self.completeChanged.emit()
-
-    # ---------- a camera moved between trials (0.1.0rc13) ----------
-
-    def add_position(self) -> None:
-        dlg = PositionDialog(self, self.session)
-        while dlg.exec() == QDialog.DialogCode.Accepted:
-            camera, file, trials = dlg.values()
-            if not file:
-                error_box(self, "No video", "Choose the extrinsic video recorded after the camera was moved.")
-                continue
-            try:
-                pos = add_camera_position(self.session, self.root, camera, Path(file), trials)
-            except SetupError as exc:
-                error_box(self, "Camera position not added", str(exc))
-                continue
-            self._prepare(camera, pos.key)
-            return
-
-    def _prepare(self, camera: str, key: str) -> None:
-        self.win.set_busy(True)
-        self.state.setText("Copying the new extrinsic video into the session ...")
-
-        def done(_):
-            self.win.set_busy(False)
-            self.refresh()
-            self.completeChanged.emit()
-            self.click(camera, key)
-
-        def failed(msg, details):
-            self.win.set_busy(False)
-            error_box(self, "Video not copied", msg, details)
-            self.refresh()
-
-        Background(self, prepare_position, self.session, self.root, camera, key, on_done=done, on_error=failed)
-
-    def edit_position(self, camera: str, key: str) -> None:
-        dlg = PositionDialog(self, self.session, camera, self.session.camera(camera).position(key).trials)
-        while dlg.exec() == QDialog.DialogCode.Accepted:
-            try:
-                set_position_trials(self.session, self.root, camera, key, dlg.values()[2])
-            except SetupError as exc:
-                error_box(self, "Not changed", str(exc))
-                continue
-            break
-        self.refresh()
-        self.completeChanged.emit()
-
-    def remove_position(self, camera: str, key: str) -> None:
-        trials = ", ".join(self.session.camera(camera).position(key).trials)
-        if not confirm(self, "Remove camera position", f"Remove this position of {camera}? Trials {trials} will "
-                       f"use {camera}'s main position again (their 3D results are recomputed at the next run).",
-                       "Remove"):
-            return
-        remove_camera_position(self.session, self.root, camera, key)
-        self.refresh()
-        self.completeChanged.emit()
