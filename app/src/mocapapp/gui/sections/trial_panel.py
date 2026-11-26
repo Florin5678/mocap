@@ -192,12 +192,13 @@ class TrialPanel(QGroupBox):
 
         status = readiness.trial_status(ses, root, label)
         lines = [f"<b>Status:</b> {status_badge(status)}"]
+        rs = ses.run_state
         if status == "not ready":
             lines += [f"&#9675; {html.escape(m)}" for m in readiness.trial_missing(ses, root, label)]
-        rs = ses.run_state
-        for msg in [rs.errors.get(label)] + rs.sync.get(label, {}).get("issues", []):
-            if msg:
-                lines.append(f"<b>Message:</b> {html.escape(msg)}")
+        elif msg := readiness.status_message(ses, root, label, status):
+            lines.append(f"<b>Message:</b> {html.escape(msg)}")
+        if status != "needs sync fix" and rs.sync.get(label, {}).get("accepted"):
+            lines += [f"<b>Sync accepted although:</b> {html.escape(m)}" for m in rs.sync[label].get("issues", [])]
         if not trial.withdrawn_at:
             height = format_height(trial.height_m) if trial.height_m else "missing"
             consent = "signed" if trial.consent.attested else "not signed yet"

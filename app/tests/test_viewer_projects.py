@@ -192,3 +192,108 @@ def test_viewer_shows_and_compares_trials(qtbot, tmp_path, monkeypatch):
     res.list.setCurrentRow(1)
     assert v.trial_box.currentData() == "2"
     assert v.markers is not None and v.source_box.currentText() == "smoothed + LSTM"
+
+
+# ---------- Pose2Sim data made elsewhere (Results > Import Pose2Sim data) ----------
+
+def _shot(win, name):  # MOCAPAPP_SHOTS=<folder>: screenshots for the review
+    import os
+    from pathlib import Path
+
+    if os.environ.get("MOCAPAPP_SHOTS"):
+        win.resize(1280, 860)
+        win.grab().save(str(Path(os.environ["MOCAPAPP_SHOTS"]) / f"{name}.png"))
+
+
+def _pose2sim_project(folder):
+    """A Pose2Sim project made outside the app: trial_a with markers and angles, trial_b with markers only."""
+    write_trc(folder / "trial_a" / "pose-3d" / "a_filt_butterworth.trc")
+    (folder / "trial_a" / "kinematics").mkdir()
+    write_mot(folder / "trial_a" / "kinematics" / "a.mot", peak=120.0)
+    write_trc(folder / "trial_b" / "pose-3d" / "b.trc")
+    (folder / "notes").mkdir()
+    return folder
+
+
+def test_linking_pose2sim_results(tmp_path, capsys):
+    from mocapapp.core.session import load_session
+
+    root = tmp_path / "S"
+    session = _results(root)
+    p2s = _pose2sim_project(tmp_path / "P2S")
+    new = outputs.link_results(session, root, p2s)
+    assert [(x.id, x.name) for x in new] == [("i1", "P2S/trial_a"), ("i2", "P2S/trial_b")]
+    assert outputs.link_results(session, root, p2s / "trial_a") == []  # linked already
+    with pytest.raises(outputs.OutputError, match="No Pose2Sim results"):
+        outputs.link_results(session, root, p2s / "notes")
+    with pytest.raises(outputs.OutputError, match="part of this project"):
+        outputs.link_results(session, root, root)
+    assert [k for k, _ in outputs.viewable(session, root)] == ["1", "2", "i1", "i2"]
+    assert outputs.result_dir(session, root, "i2") == (p2s / "trial_b").resolve()
+    save_session(session, root)
+    assert [x.name for x in load_session(root).linked] == ["P2S/trial_a", "P2S/trial_b"]
+
+    assert main(["data", "--session", str(root), "--trial", "i1"]) == 0
+    assert "of P2S/trial_a: a.mot" in capsys.readouterr().out
+    assert main(["data", "--session", str(root), "--trial", "i2"]) == 1
+    assert "P2S/trial_b has no joint angles (use --markers)." in capsys.readouterr().out
+    assert main(["project", "pose2sim", "--session", str(root), "--remove", "i2"]) == 0
+    assert main(["project", "pose2sim", "--session", str(root)]) == 0
+    out = capsys.readouterr().out
+    assert "Removed from the list: P2S/trial_b (its folder is not touched)." in out and "i1: P2S/trial_a" in out
+    assert (p2s / "trial_b" / "pose-3d" / "b.trc").is_file()
+    assert main(["project", "pose2sim", "--session", str(root), "--add", str(p2s)]) == 0
+    assert "Imported i2: P2S/trial_b" in capsys.readouterr().out
+    assert main(["project", "pose2sim", "--session", str(root), "--add", str(p2s / "notes")]) == 1
+
+
+def test_import_pose2sim_data_in_results(qtbot, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QFileDialog
+
+    from mocapapp.core.session import load_session
+    from mocapapp.gui.main_window import MainWindow
+
+    root = tmp_path / "S"
+    _wizard_done(root, monkeypatch)
+    p2s = _pose2sim_project(tmp_path / "P2S")
+    win = MainWindow()
+    qtbot.addWidget(win)
+    win.open_session(root)
+    win.go("results")
+    res = win.section("results")
+    v = res.viewer
+    assert res.import_button.isEnabled() and not res.unlink_button.isEnabled()
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory", lambda *a, **k: str(p2s))
+    res.import_button.click()
+    texts = [res.list.item(i).text() for i in range(res.list.count())]
+    assert texts[2:] == ["◆ Imported: P2S/trial_a", "◆ Imported: P2S/trial_b"]
+    assert res.selected() == "i1" and v.trial_box.currentData() == "i1" and res.unlink_button.isEnabled()
+    assert "Imported: P2S/trial_a" in res.qa.toPlainText() and "a.mot" in res.qa.toPlainText()
+    assert [x.id for x in load_session(root).linked] == ["i1", "i2"]  # saved
+    _shot(win, "import_quality")
+
+    res.tabs.setCurrentIndex(2)  # Data: the imported angles, compared with the project's trials
+    v.compare_box.setChecked(True)
+    assert "(P2S/trial_a)" in v.summary.text() and "(trial 2)" in v.summary.text()
+    assert "max 120" in v.summary.text()
+    _shot(win, "import_compare")
+    asked = []
+    monkeypatch.setattr(QFileDialog, "getSaveFileName",
+                        lambda *a, **k: (asked.append(a[2]), (str(tmp_path / "a.csv"), ""))[1])
+    v.save_csv()
+    assert asked == [str(p2s.resolve() / "trial_a" / "trial_a_joint_angles.csv")] and (tmp_path / "a.csv").is_file()
+
+    res.list.setCurrentRow(3)  # trial_b: markers only
+    res.tabs.setCurrentIndex(0)
+    assert "no joint angles" in res.qa.toPlainText()
+    res.tabs.setCurrentIndex(1)
+    assert v.trial_box.currentData() == "i2" and v.markers is not None
+    res.unlink_button.click()
+    assert [x.id for x in load_session(root).linked] == ["i1"] and (p2s / "trial_b").is_dir()
+
+    shutil.rmtree(p2s / "trial_a")  # the folder went away: listed, with a note
+    res.refresh()
+    assert res.list.item(2).text() == "◆ Imported: P2S/trial_a - folder not found"
+    res.list.setCurrentRow(2)
+    assert "no longer there" in res.qa.toPlainText()
+    assert [v.trial_box.itemData(i) for i in range(v.trial_box.count())] == ["1", "2"]

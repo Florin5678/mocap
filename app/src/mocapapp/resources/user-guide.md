@@ -61,20 +61,25 @@ With a project open, Session is the **hub**: the trials, their state, and the ru
 **The trials table.** One row per trial: its **number** (fixed: folders and results are named after it), its **name / note** (free text, such as *walking*), **participant**, **layout**, **date** (the day its videos were recorded) and **Status**:
 
 - **not ready** – with what is still missing (consent, height, a video, a calibration, copying);
-- **ready**, **running** (with the current step), **needs sync fix**, **failed**, **done**;
-- **out of date** – a setting changed after it ran; running it again repeats only the stages the change affects.
+- **ready**, **running** (with the current step, such as *step 4 of 7 (Computing 3D positions)*), **done**;
+- **needs sync fix** – it stopped after step 2 of 7 (Synchronising the cameras) because the cameras may not be lined up;
+- **failed** – with the step it failed in and why, such as *Failed in step 4 of 7 (Computing 3D positions): No 3D positions were computed*;
+- **stopped** – you pressed Stop during that step; running it again continues from there;
+- **out of date** – a setting changed after it ran, with the step it runs again from; running it again repeats only the stages the change affects.
+
+The seven steps are: 1 finding body keypoints in every video, 2 synchronising the cameras, 3 matching the person across cameras, 4 computing 3D positions, 5 smoothing, 6 adding anatomical markers, 7 scaling the OpenSim model and computing joint angles.
 
 Select a row to work on that trial; select several with **Ctrl**-click or **Shift**-click. The buttons above the table act on the selected trials:
 
-- **Run** runs the selected trials. With none selected it runs every trial that is ready (or failed, or out of date). Trials that are not ready are left out and named first. **Start over (ignore finished stages)** next to it computes every stage again; it unticks itself after the run.
+- **Run** runs the selected trials. With none selected it runs every trial that is ready (or failed, stopped, or out of date). Trials that are not ready are left out and named first. **Start over (ignore finished stages)** next to it computes every stage again; it unticks itself after the run.
 - **Duplicate** adds a trial like each selected one: same participant, layout and name, its own videos.
 - **Change layout ...** sets the layout the trials were recorded with.
 - **Check and copy videos** checks the videos (frame rate, size against the camera's lens calibration, length) and copies them into the project, converting them when needed; your original files are never changed. Each trial is checked on its own: a problem in one never holds the others back. With none selected, it checks every trial whose videos are chosen but not copied yet.
 - **Delete raw footage ...** and **Remove trial ...** (section 4). A trial without copied videos or results is removed after one question; its participant stays.
-- **Check sync ...** and **Accept sync as is** for the selected trials that stopped with *needs sync fix* (none selected: all of them), also while other trials run (below).
+- **Fix sync ...** and **Accept sync as is** for the selected trials that stopped with *needs sync fix* (none selected: all of them), also while other trials run (below). **Fix sync ...** also takes selected trials that got past their synchronisation (*failed*, *stopped* or *done*).
 - **Consent forms ...** makes one PDF with the forms of the selected trials' participants.
 
-Each row also has **Run this trial**, and, when a trial stopped for its synchronisation, **Check sync ...** and **Accept as is** (below).
+Each row also has **Run this trial**, and, when a trial stopped for its synchronisation, **Fix sync ...** and **Accept as is** (below). A trial that got past its synchronisation (failed, stopped or done) has **Fix sync ...** too: use it when its results look wrong because of the sync (see the quality report). For a finished trial the app asks first, since its 3D positions, smoothing and joint angles are computed again; export again afterwards.
 
 **Adding a trial.** The row under the table is filled in from the previous trial; change what differs and press **Add**. The **participant** (highlighted) is the previous trial's participant while they have fewer trials than *trials per participant*, otherwise a participant without trials yet, otherwise a **new participant** with a random pseudonym. The layout and name come from the previous trial (the layout: a newer one, when one was made on a later day); the date is left empty and becomes the day the videos were recorded.
 
@@ -92,8 +97,8 @@ Each row also has **Run this trial**, and, when a trial stopped for its synchron
 - **Screen:** while a run is going, the screen stays on and the computer does not go to sleep, unless this is turned off in **Help > Settings**.
 - **Stop:** stops after the current step; run the trials again later to continue. Finished stages are kept.
 - **A trial recorded later** (another participant, another day): add it, choose its videos, check and copy, and run just that one. Finished trials are not touched.
-- **Failures:** if one trial fails, the others continue. The reason is shown in its Status, with the full log under `trials/trial_<number>/mocap_logs/`.
-- **Synchronisation:** if the app is unsure that the cameras are lined up for a trial (a low correlation), that trial stops with **needs sync fix**. **Check sync ...** opens a player in a separate window; close it when the offsets look right and the trial continues by itself in the background (it first copies the trial's keypoint files, which can take several minutes). For several trials, select them and use **Check sync (n) ...** above the table: their players open one after another, and each trial starts running as soon as its player is closed, so you can check the next one meanwhile. This also works while other trials run: the checked trials join the run. **Accept as is** (or **Accept sync as is** for the selected trials) continues with the automatic result. **Stop** drops the players not opened yet; a trial whose sync you checked but that did not run keeps the checked sync: press **Accept as is** later to continue with it. An offset longer than 5 s does not stop the trial: it is listed in the quality report, and is fine if the cameras were started that far apart.
+- **Failures:** if one trial fails, the others continue. The reason is shown in its Status, with the full log under `trials/trial_<number>/mocap_logs/`. **Run this trial** runs it again from the step that failed, with the same input, so first fix the cause. When it failed computing 3D positions ("No 3D positions were computed"), the cameras are often not lined up even though the automatic synchronisation looked fine: use **Fix sync ...** on that trial, correct the offsets in the player, and it runs again from there in the background.
+- **Synchronisation:** if the app is unsure that the cameras are lined up for a trial (a low correlation), that trial stops with **needs sync fix** after step 2. **Fix sync ...** opens a player in a separate window; close it when the offsets look right and the trial continues by itself in the background (it first copies the trial's keypoint files, which can take several minutes). For several trials, select them and use **Fix sync (n) ...** above the table: their players open one after another, and each trial starts running as soon as its player is closed, so you can check the next one meanwhile. This also works while other trials run: the checked trials join the run. **Accept as is** (or **Accept sync as is** for the selected trials) continues with the automatic result. **Stop** drops the players not opened yet; a trial whose sync you fixed but that did not run keeps the fixed sync: press **Accept as is** later to continue with it. Fixing the sync replaces the previous one completely (it is kept until the player saves a new one, so closing the player without saving leaves the trial as it was), and every later step runs again from scratch. An offset longer than 5 s does not stop the trial: it is listed in the quality report, and is fine if the cameras were started that far apart.
 
 **Processing settings** (Session settings). The defaults suit most studies.
 
@@ -161,6 +166,8 @@ The trials are listed on the left with a **traffic light**: **Good**, **Check** 
 
 **Data** shows the numbers: **joint angles (.mot)** in degrees (for the arm: `arm_flex`, `arm_add`, `arm_rot`, `elbow_flex`, `pro_sup`, `wrist_flex`, `wrist_dev`; `_r` right, `_l` left) or **marker positions (.trc)** in metres (Y is up). Tick columns to plot them; type in the filter box to find them (e.g. `elbow`). The table lists the values frame by frame; the line under the plot gives each column's minimum, maximum, range and **peak speed**. **Compare all trials** draws the same columns of every trial together; **Plot speed** draws the rate of change. **Save as CSV ...** writes the ticked columns (or all) for Excel, R, Python or MATLAB. With the default keypoints there are no points on the hand, so wrist and forearm rotation angles are not reliable; shoulder and elbow are.
 
+**Import Pose2Sim data ...** (under the list) shows Pose2Sim results made elsewhere next to this project's trials: choose a Pose2Sim trial folder (with `pose-3d/` and/or `kinematics/`), or a Pose2Sim project folder, whose trial folders are each listed. They appear as **◆ Imported:** and the folder name, and work in **3D** and **Data** (also in **Compare all trials** and **Save as CSV ...**); they have no quality light and are not exported. Only a link is kept in the project: nothing is copied, and the app never changes or deletes those folders. The project remembers them; if a folder is moved, it shows *folder not found*. **Remove from the list** forgets one (its folder stays).
+
 **Export**: tick what you need and press **Export** (once the run has finished). Files go to the project's `export/` folder, named `<pseudonym>_trial<number>_<content>`, with `README.txt` (what every file is) and `manifest.json` (versions, settings and checksums). The tab also shows what happens to each trial's raw footage, with **Delete raw footage now ...** and **Participant data and deletion ...** (section 4).
 
 ## 4. Participant data and deletion
@@ -190,7 +197,8 @@ Details: the project's `app/docs/privacy.md`.
 |---|---|
 | "Session path contains non-ASCII letters" | Move the project (Session settings > Change output folder) to a folder whose path has only plain letters and digits. |
 | "No body keypoints were found in at least one camera" | Check that camera's video: is the person fully visible, and is the light sufficient? |
-| A trial stops with "needs sync fix" | Use **Check sync ...**. Next time, give a clear clap or jump at the start, visible to every camera. |
+| A trial stops with "needs sync fix" | Use **Fix sync ...**. Next time, give a clear clap or jump at the start, visible to every camera. |
+| A trial failed with "No 3D positions were computed" | Use **Fix sync ...** on it and correct the offsets. If they look right, check that layout's calibration (Layouts). |
 | Large reprojection error | A camera may have moved after its `extrinsic` video, or a reference point was clicked or measured wrongly. Click the points again for that camera in its layout (Layouts), or make a new layout. |
 | Feet far above or below the floor | The reference points' heights or the floor (Z = 0) are off. Check the measurements. |
 | "The smoothing cut-off is too high for this video's frame rate" | Lower **Smoothing cut-off** in Session settings below half the frame rate (for 30 fps video: 14 Hz or less), then run the trial again. Only smoothing and later stages are repeated. |
@@ -203,7 +211,7 @@ Details: the project's `app/docs/privacy.md`.
 
 ## 6. Command line (optional)
 
-Everything also works without the window, for scripting and lab servers. Run `mocapapp --help`, or see the project's `app/README.md`. For example, `mocapapp data --session <folder> --trial 1 --columns elbow_flex_r` prints the minimum, maximum and peak speed of a joint angle, and `--csv out.csv` saves the values.
+Everything also works without the window, for scripting and lab servers. Run `mocapapp --help`, or see the project's `app/README.md`. For example, `mocapapp data --session <folder> --trial 1 --columns elbow_flex_r` prints the minimum, maximum and peak speed of a joint angle, and `--csv out.csv` saves the values. `mocapapp project pose2sim --session <folder> --add <Pose2Sim folder>` imports Pose2Sim data (a link, as in Results); `--trial i1` then shows it with `mocapapp data`.
 
 ## 7. Citing
 

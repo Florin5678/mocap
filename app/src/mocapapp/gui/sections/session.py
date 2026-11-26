@@ -54,7 +54,7 @@ from mocapapp.gui.sections.trial_panel import TrialPanel
 TITLES = {"session": "Session", "participants": "Participants", "cameras": "Cameras", "layouts": "Layouts"}
 COLUMNS = ["Trial", "Name / note", "Participant", "Layout", "Date", "Status", "", "", ""]
 STATUS = 5
-RUNS_AGAIN = ("ready", "failed", "out of date")  # Run with nothing selected: every trial in one of these states
+RUNS_AGAIN = ("ready", "failed", "stopped", "out of date")  # Run with nothing selected runs these
 ERRORS = (ValueError, KeyError, OSError)
 HIGHLIGHT = "QComboBox { background: #fff3cd; font-weight: bold; }"
 
@@ -195,7 +195,7 @@ class SessionSection(Section):
         self.run_button = QPushButton("Run ready trials")
         self.run_button.setMinimumHeight(34)
         self.run_button.setToolTip("Runs the selected trials; with none selected, every trial that is ready (or "
-                                   "failed, or out of date). Trials that are not ready are left out.")
+                                   "failed, stopped, or out of date). Trials that are not ready are left out.")
         self.run_button.clicked.connect(self.run_clicked)
         self.start_over = QCheckBox("Start over (ignore finished stages)")
         self.start_over.setToolTip("Computes every stage again, also those already finished. Without it, a run "
@@ -214,10 +214,11 @@ class SessionSection(Section):
                 ("check", "Check and copy videos", lambda: self.check_and_copy(), "Checks the videos of the selected "
                  "trials and copies them into the project, each trial on its own (none selected: every trial whose "
                  "videos are chosen but not copied yet)."),
-                ("sync", "Check sync ...", lambda: self.bar.check_sync(self.sync_labels()), "Opens Pose2Sim's "
-                 "synchronisation player for each selected trial that needs a sync fix (none selected: every such "
-                 "trial), one after another. Each trial runs in the background as soon as its player is closed, also "
-                 "while other trials run."),
+                ("sync", "Fix sync ...", lambda: self.bar.check_sync(self.sync_labels(check=True)), "Opens "
+                 "Pose2Sim's synchronisation player for each selected trial that needs a sync fix or is past its "
+                 "synchronisation (failed, stopped or finished; none selected: every trial that needs a sync fix), "
+                 "one after another. Each trial "
+                 "runs in the background as soon as its player is closed, also while other trials run."),
                 ("accept", "Accept sync as is", lambda: self.bar.accept_sync(self.sync_labels()), "The selected "
                  "trials that need a sync fix (none selected: every such trial) continue with the automatic "
                  "synchronisation, in the background."),
@@ -326,8 +327,10 @@ class SessionSection(Section):
             one = QPushButton("Run this trial")
             one.setToolTip("Runs (or continues) only this trial. The other trials are not touched.")
             one.clicked.connect(lambda _=False, lb=t.label: self._start([lb]))
-            fix = QPushButton("Check sync ...")
-            fix.setToolTip("Opens Pose2Sim's synchronisation player, where the offsets can be corrected.")
+            fix = QPushButton("Fix sync ...")
+            fix.setToolTip("Opens Pose2Sim's synchronisation player, where the offsets can be corrected (also for a "
+                           "trial that failed, stopped or finished after its synchronisation). The later steps then "
+                           "run again in the background.")
             fix.clicked.connect(lambda _=False, lb=t.label: self.bar.check_sync([lb]))
             accept = QPushButton("Accept as is")
             accept.setToolTip("Continues with the automatic synchronisation.")
@@ -352,12 +355,7 @@ class SessionSection(Section):
         if self.win.busy and label in self.bar.activity:
             return "running", self.bar.activity[label]
         status = readiness.trial_status(ses, root, label)
-        if status == "not ready":
-            return status, " ".join(readiness.trial_missing(ses, root, label))
-        rs = ses.run_state
-        if status in ("failed", "needs sync fix"):
-            return status, rs.errors.get(label) or "; ".join(rs.sync.get(label, {}).get("issues", []))
-        return status, ""
+        return status, readiness.status_message(ses, root, label, status)
 
     def runnable(self, label: str) -> bool:
         """Ready to run: nothing missing (§16.4), footage still there."""
@@ -376,16 +374,20 @@ class SessionSection(Section):
             status, msg = self._status(label)
             state.setText(status_badge(status) + (f" - {html.escape(msg)}" if msg else ""))
             one.setEnabled(not busy and status != "needs sync fix" and self.runnable(label))
-            for b in (fix, accept):  # also during a run: the trial joins it (§6.6)
-                b.setEnabled(status == "needs sync fix" and self.bar.sync_eligible(label))
+            # also during a run: the trial joins it (§6.6)
+            fix.setEnabled(status not in ("not ready", "ready", "running") and self.bar.sync_checkable(label))
+            accept.setEnabled(status == "needs sync fix" and self.bar.sync_eligible(label))
         self._enable()
 
-    def sync_labels(self) -> list[str]:
-        """The selected trials (none selected: all) that need a sync fix and are not queued yet."""
+    def sync_labels(self, check: bool = False) -> list[str]:
+        """The selected trials (none selected: all) that need a sync fix and are not queued yet. check: selected
+        trials past their synchronisation too (failed, stopped or finished; never all of them unasked)."""
         if self.session is None:
             return []
-        chosen = self.selected() or [t.label for t in self.session.trials]
-        return [lb for lb in chosen if self.bar.sync_eligible(lb)]
+        selected = self.selected()
+        chosen = selected or [t.label for t in self.session.trials]
+        return [lb for lb in chosen if self.bar.sync_eligible(lb)
+                or (check and selected and self.bar.sync_redoable(lb))]
 
     def selected(self) -> list[str]:
         if self.session is None:
@@ -412,8 +414,8 @@ class SessionSection(Section):
             self.buttons[key].setEnabled(not busy and bool(open_))
         self.buttons["check"].setEnabled(not busy and bool(self.session.trials))
         self.buttons["forms"].setEnabled(bool(self.session.active_participants))
-        sync = self.sync_labels()
-        for key, text in (("sync", "Check sync"), ("accept", "Accept sync as is")):
+        for key, text in (("sync", "Fix sync"), ("accept", "Accept sync as is")):
+            sync = self.sync_labels(check=key == "sync")
             self.buttons[key].setEnabled(bool(sync))
             self.buttons[key].setText(text + (f" ({len(sync)})" if len(sync) > 1 else "") + (" ..." if key == "sync"
                                                                                               else ""))

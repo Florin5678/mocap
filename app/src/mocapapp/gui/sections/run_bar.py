@@ -138,18 +138,37 @@ class RunBar(QWidget):
 
     # ---------- checking the sync of several trials (§6.6) ----------
 
+    def _sync_free(self, label: str) -> bool:
+        """Exists, has its footage and is not already waiting for its player or its turn."""
+        trial = next((t for t in self.session.trials if t.label == label), None)
+        return trial is not None and label not in self.activity and trial.raw_present and not trial.withdrawn_at
+
     def sync_eligible(self, label: str) -> bool:
-        """Needs a sync fix and is not already waiting for its player or its turn."""
-        ses = self.session
-        trial = next((t for t in ses.trials if t.label == label), None)
-        return (trial is not None and label not in self.activity and trial.raw_present and not trial.withdrawn_at
-                and ses.run_state.trial_status.get(label) == "needs_sync_fix")
+        """Stopped for its sync (needs a sync fix): its sync can be checked or accepted as is."""
+        return self._sync_free(label) and self.session.run_state.trial_status.get(label) == "needs_sync_fix"
+
+    def sync_redoable(self, label: str) -> bool:
+        """Got past its synchronisation (failed later, stopped, or finished: often a sync that passed the check or
+        was accepted but was wrong): its sync can be fixed in the player too, and the later steps run again. Not when
+        its 2D keypoints were removed (the player needs them)."""
+        rs = self.session.run_state
+        return (self._sync_free(label) and rs.trial_status.get(label) in ("failed", "cancelled", "done", "partial")
+                and "synchronization" in rs.stage_done.get(label, []) and label not in rs.keypoints_removed)
+
+    def sync_checkable(self, label: str) -> bool:
+        return self.sync_eligible(label) or self.sync_redoable(label)
 
     def check_sync(self, labels: list[str]) -> None:
         """Pose2Sim's synchronisation player for each trial, one after another; each trial whose player was closed
         runs in the background straight away (after the current run, if one is going), so the next player can be
         handled meanwhile."""
-        new = [lb for lb in labels if self.sync_eligible(lb)]
+        new = [lb for lb in labels if self.sync_checkable(lb)]
+        finished = [lb for lb in new if self.session.run_state.trial_status.get(lb) in ("done", "partial")]
+        if finished and not confirm(
+                self, "Fix sync", f"Trial(s) {', '.join(finished)} finished already. Fixing the sync computes the "
+                "3D positions, smoothing and joint angles again, replacing the present results (export again "
+                "afterwards).", "Fix sync"):
+            return
         for lb in new:
             self.activity[lb] = "waiting for its sync player (they open one after another)"
         self.players += new
@@ -190,17 +209,18 @@ class RunBar(QWidget):
         self.activity.pop(label, None)
         if not ok:
             self.log.appendPlainText(f"Trial {label}: the synchronisation player stopped with an error {problem}")
-            self.left.append(f"Trial {label}: the player stopped with an error; check its sync again.")
+            self.left.append(f"Trial {label}: the synchronisation player stopped with an error; use Fix sync "
+                             "again.")
         elif self.stopped:
-            self.left.append(f"Trial {label}: its sync was checked but it did not run; press Accept as is to "
-                             "continue with the checked sync.")
+            self.left.append(f"Trial {label}: its sync was fixed but it did not run; press Accept as is to "
+                             "continue with the fixed sync.")
         else:
             self._queue(label)
         self._next_player()
 
     def _queue(self, label: str) -> None:
         """Run this trial (its sync checked or accepted): now, or as soon as the current run gets to it."""
-        self.activity[label] = "sync checked: waits for its turn"
+        self.activity[label] = "sync fixed: waits for its turn"
         self.labels.append(label)
         self.pending.append(label)
         if self.running:
@@ -238,8 +258,8 @@ class RunBar(QWidget):
         self.stopped = True
         for lb in self.pending:
             self.activity.pop(lb, None)
-            self.left.append(f"Trial {lb}: its sync was checked but it did not run; press Accept as is to continue "
-                             "with the checked sync.")
+            self.left.append(f"Trial {lb}: its sync was fixed but it did not run; press Accept as is to continue "
+                             "with the fixed sync.")
         self.pending.clear()
         for lb in self.players:
             self.activity.pop(lb, None)
@@ -265,8 +285,9 @@ class RunBar(QWidget):
             self.bar.setValue(max(self.bar.value(), int(1000 * (k + e.fraction) / n)))
         if e.kind == "stage_start":
             code = self.session.trial(e.trial).code if e.trial else ""
-            self.stage.setText(f"Trial {e.trial} ({code}), {k + 1} of {n}: {e.message} ...")
-            self.activity[e.trial] = f"{e.message} ..."
+            step = runner.step_name(e.stage)
+            self.stage.setText(f"Trial {e.trial} ({code}), {k + 1} of {n}: {step[0].upper()}{step[1:]} ...")
+            self.activity[e.trial] = f"{step[0].upper()}{step[1:]} ..."
             self.section.show_status()
         elif e.kind == "stage_end" and not e.ok:
             self.log.appendPlainText(f"PROBLEM: {e.message}")

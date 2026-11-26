@@ -11,6 +11,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QCheckBox,
+    QFileDialog,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -25,6 +26,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from mocapapp.core import outputs
 from mocapapp.core.export import export, kinds
 from mocapapp.core.qa import LIGHT_COLOR, LIGHT_TEXT, trial_qa, write_report
 from mocapapp.core.session import Layout
@@ -39,6 +41,9 @@ LABELS = {"config": "Config.toml", "trc.raw": "raw", "trc.filt": "smoothed", "tr
           "c3d.raw": "raw", "c3d.filt": "smoothed", "c3d.filt_lstm": "smoothed + LSTM",
           "osim": "scaled model (.osim)", "mot": "joint angles (.mot)", "bvh": "animation (.bvh)"}
 QUALITY, VIEW, DATA, EXPORT = range(4)
+IMPORT_TIP = ("Show Pose2Sim results made elsewhere (a trial folder, or a Pose2Sim project with several) in 3D and "
+              "Data, next to this project's trials. Only a link is kept: nothing is copied, and the folder is never "
+              "changed.")
 
 
 def metric_value(m) -> str:
@@ -68,6 +73,14 @@ class ResultsSection(Section):
         ll.addWidget(QLabel("<b>Trials</b>"))
         ll.addWidget(self.list, 1)
         ll.addWidget(self.empty)
+        self.import_button = QPushButton("Import Pose2Sim data ...")
+        self.import_button.setToolTip(IMPORT_TIP)
+        self.import_button.clicked.connect(self.import_pose2sim)
+        self.unlink_button = QPushButton("Remove from the list")
+        self.unlink_button.setToolTip("Forgets the chosen imported data. Its folder and files are not touched.")
+        self.unlink_button.clicked.connect(self.unlink)
+        ll.addWidget(self.import_button)
+        ll.addWidget(self.unlink_button)
 
         self.tabs = QTabWidget()
         self.tabs.addTab(self._quality_tab(), "Quality")
@@ -182,7 +195,14 @@ class ResultsSection(Section):
             item.setForeground(QBrush(QColor(LIGHT_COLOR[r.light])))
             item.setData(Qt.ItemDataRole.UserRole, r.label)
             self.list.addItem(item)
-        labels = [r.label for r in self.results]
+        for link in self.session.linked:
+            there = outputs.has_results(Path(link.path))
+            item = QListWidgetItem(f"◆ Imported: {link.name}" + ("" if there else " - folder not found"))
+            item.setForeground(QBrush(QColor("#555" if there else LIGHT_COLOR["red"])))
+            item.setToolTip(link.path)
+            item.setData(Qt.ItemDataRole.UserRole, link.id)
+            self.list.addItem(item)
+        labels = [r.label for r in self.results] + [x.id for x in self.session.linked]
         done = [r.label for r in self.results if r.status == "done"]
         pick = current if current in labels else (done[0] if done else (labels[0] if labels else None))
         self.list.setCurrentRow(labels.index(pick) if pick else -1)
@@ -201,6 +221,11 @@ class ResultsSection(Section):
         label = self.selected()
         r = next((x for x in self.results if x.label == label), None)
         self.viewer.show_trial(label)
+        self._link_buttons()
+        link = outputs.find_link(self.session, label) if label and label.startswith("i") else None
+        if link is not None:
+            self.qa.setHtml(self._link_html(link))
+            return
         if r is None:
             self.qa.setHtml("<p>No trials yet.</p>")
             return
@@ -224,6 +249,60 @@ class ResultsSection(Section):
                          f"{html.escape(r.label)}</a> - watch for limbs that jump or swap sides.</p>")
         self.qa.setHtml("".join(parts))
 
+    def _link_html(self, link) -> str:
+        folder = Path(link.path)
+        parts = [f"<h3>Imported: {html.escape(link.name)}</h3>",
+                 f"<p>Pose2Sim results from <a href='{folder.as_uri()}'>{html.escape(str(folder))}</a>, made outside "
+                 "this project. They are read where they are: nothing is copied, and the app never changes or "
+                 "deletes them. There are no quality checks or export for them; see them in 3D and Data.</p>"]
+        if not outputs.has_results(folder):
+            parts.append("<p><b>The folder is no longer there</b> (or has no results any more). Move it back, or "
+                         "use <i>Remove from the list</i>.</p>")
+            return "".join(parts)
+        files = [f"3D markers, {label}: {html.escape(p.name)}" for label, p in outputs.marker_files(folder).items()]
+        mot = outputs.angle_file(folder)
+        files.append(f"joint angles: {html.escape(mot.name)}" if mot else "no joint angles (no kinematics/*.mot)")
+        return "".join(parts) + "<ul>" + "".join(f"<li>{f}</li>" for f in files) + "</ul>"
+
+    def _link_buttons(self) -> None:
+        label = self.selected() or ""
+        busy = self.win.busy  # a run writes the project file: links wait
+        self.import_button.setEnabled(not busy)
+        self.unlink_button.setEnabled(not busy and label.startswith("i"))
+        self.import_button.setToolTip("Waits for the app to finish what it is doing." if busy else IMPORT_TIP)
+
+    def import_pose2sim(self) -> None:
+        if self.win.busy:
+            return
+        folder = QFileDialog.getExistingDirectory(self, "Import Pose2Sim data: a trial folder or a Pose2Sim "
+                                                  "project", str(Path(self.root).parent))
+        if not folder:
+            return
+        self.link_folder(Path(folder))
+
+    def link_folder(self, folder: Path) -> list:
+        try:
+            new = outputs.link_results(self.session, self.root, folder)
+        except outputs.OutputError as exc:
+            error_box(self, "Nothing imported", str(exc))
+            return []
+        if not new:
+            self.win.statusBar().showMessage("These Pose2Sim results are in the list already.", 6000)
+            return []
+        self.win.save()
+        self.refresh()
+        self.list.setCurrentRow(len(self.results) + self.session.linked.index(new[0]))
+        self.win.statusBar().showMessage(f"Imported: {', '.join(x.name for x in new)}", 6000)
+        return new
+
+    def unlink(self) -> None:
+        label = self.selected() or ""
+        if self.win.busy or not label.startswith("i"):
+            return
+        outputs.unlink_results(self.session, label)
+        self.win.save()
+        self.refresh()
+
     def _export_settings(self) -> None:
         st = self.session.settings
         for k in kinds(st.filter.type):
@@ -237,6 +316,7 @@ class ResultsSection(Section):
         self.export_button.setToolTip("Waits for the run to finish." if busy else
                                       "Every finished trial, to the export folder of the project.")
         self.data_button.setEnabled(not busy)
+        self._link_buttons()
 
     def _due(self) -> list:
         """Trials whose footage is to be deleted (consent or Session settings) and is still there."""

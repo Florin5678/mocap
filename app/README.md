@@ -47,6 +47,7 @@ mocapapp qa --session <dir>                                # qa/qa_report.html, 
 mocapapp export --session <dir> [--select config,trc.filt_lstm,c3d.filt_lstm,osim,mot,bvh]
 mocapapp data --session <dir> --trial 1 [--columns elbow_flex_r,arm_flex_r] [--csv out.csv]   # joint angles: min/max/peak speed or CSV
 mocapapp data --session <dir> --trial 1 --markers [raw|smoothed|'smoothed + LSTM'] [--columns 'RWrist Y']
+mocapapp project pose2sim --session <dir> [--add <Pose2Sim folder>] [--remove i1]   # Pose2Sim data made elsewhere, shown in Results (a link); data --trial i1
 mocapapp session pseudonym --session <dir> --participant 2 --set P02|--random
 mocapapp session move --session <dir> --to <new output folder> [--dry-run]   # change the output folder later
 mocapapp session details --session <dir> [--enable weight] [--add "Leg length:number:cm"] [--add "Dominant leg:choice:left/right"]

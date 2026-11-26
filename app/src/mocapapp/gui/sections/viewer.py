@@ -30,7 +30,6 @@ from PySide6.QtWidgets import (
 )
 
 from mocapapp.core import outputs
-from mocapapp.core.session import Layout
 from mocapapp.gui.common import error_box, open_path
 from mocapapp.gui.main_window import Page
 
@@ -206,7 +205,7 @@ class Viewer(Page):
         self.checked: dict[str, set[str]] = {"angles": set(DEFAULT_ANGLES), "markers": set()}
         self.canvas = None
 
-        self.trial_box = QComboBox(self)  # the trials with results (not shown: Results' list chooses)
+        self.trial_box = QComboBox(self)  # trials with results, then imported data (not shown: Results chooses)
         self.trial_box.setVisible(False)
         self.trial_box.currentIndexChanged.connect(lambda _: self.load_trial())
         self.source_box = QComboBox()
@@ -267,7 +266,8 @@ class Viewer(Page):
         self.columns = QListWidget()
         self.columns.itemChanged.connect(self._column_toggled)
         self.compare_box = QCheckBox("Compare all trials")
-        self.compare_box.setToolTip("Plot the ticked columns of every trial with results on top of each other.")
+        self.compare_box.setToolTip("Plot the ticked columns of every trial with results (and the imported Pose2Sim "
+                                    "data) on top of each other.")
         self.compare_box.toggled.connect(lambda _: self.plot())
         self.speed_plot_box = QCheckBox("Plot speed (rate of change)")
         self.speed_plot_box.setToolTip("deg/s for angles, m/s for positions")
@@ -327,7 +327,13 @@ class Viewer(Page):
         return False
 
     def trial_dir(self, label: str | None = None) -> Path:
-        return Layout(self.root).trial(label or self.trial_box.currentData())
+        """The results folder of a trial (its label) or of imported Pose2Sim data (its id)."""
+        return outputs.result_dir(self.session, self.root, label or self.trial_box.currentData())
+
+    def short_name(self, key: str) -> str:
+        """For legends and summaries: 'trial 3', or the imported data's name."""
+        link = outputs.find_link(self.session, key) if key.startswith("i") else None
+        return link.name if link else f"trial {key}"
 
     def _read(self, path: Path, reader):
         key = (str(path), path.stat().st_mtime)
@@ -340,11 +346,11 @@ class Viewer(Page):
             self.timer.stop()
             return
         current = self.trial_box.currentData()
-        trials = outputs.trials_with_results(self.session, self.root)
+        trials = outputs.viewable(self.session, self.root)
         self.trial_box.blockSignals(True)
         self.trial_box.clear()
-        for t in trials:
-            self.trial_box.addItem(f"Trial {t.label} ({t.code})", t.label)
+        for key, title in trials:
+            self.trial_box.addItem(title, key)
         found = self.trial_box.findData(current)
         self.trial_box.setCurrentIndex(max(found, 0))
         self.trial_box.blockSignals(False)
@@ -474,8 +480,10 @@ class Viewer(Page):
         self.columns.blockSignals(False)
         self._filter_columns(self.filter_edit.text())
         if table is None:
-            self.summary.setText("This trial has no joint angles yet (the kinematics step did not finish)."
-                                 if kind == "angles" and self.trial_box.currentData() else "")
+            key = self.trial_box.currentData() or ""
+            self.summary.setText("" if kind != "angles" or not key else
+                                 "This folder has no joint angles (no kinematics/*.mot)." if key.startswith("i")
+                                 else "This trial has no joint angles yet (the kinematics step did not finish).")
         self.csv_button.setEnabled(table is not None)
         self.plot()
 
@@ -534,13 +542,14 @@ class Viewer(Page):
                 if c not in tab.columns:
                     continue
                 y = outputs.speed(tab, c) if speed else tab.column(c)
-                name = f"{c} - trial {label}" if len(labels) > 1 else c
+                name = f"{c} - {self.short_name(label)}" if len(labels) > 1 else c
                 ax.plot(tab.time, y, label=name, linewidth=1.4)
             for r in outputs.summary(tab, [c for c in columns if c in tab.columns]):
                 if r["min"] is None:
-                    lines.append(f"{r['column']}{' (trial ' + label + ')' if len(labels) > 1 else ''}: no data")
+                    lines.append(f"{r['column']}{f' ({self.short_name(label)})' if len(labels) > 1 else ''}: "
+                                 "no data")
                     continue
-                lines.append(f"<b>{r['column']}</b>{' (trial ' + label + ')' if len(labels) > 1 else ''}: "
+                lines.append(f"<b>{r['column']}</b>{f' ({self.short_name(label)})' if len(labels) > 1 else ''}: "
                              f"min {r['min']:.3g}, max {r['max']:.3g}, range {r['range']:.3g} {r['unit']}; "
                              f"peak speed {r['peak_speed'] or 0:.3g} {outputs.rate_unit(r['unit'])}")
         units = sorted({table.unit(c) for c in columns})
@@ -565,9 +574,12 @@ class Viewer(Page):
         if table is None:
             return
         label = self.trial_box.currentData()
-        code = self.session.trial(label).code
         kind = "joint_angles" if self.dataset_box.currentData() == "angles" else "marker_positions"
-        start = Path(self.root) / f"{code}_trial{label}_{kind}.csv"
+        link = outputs.find_link(self.session, label) if label.startswith("i") else None
+        if link:
+            start = Path(link.path) / f"{Path(link.path).name}_{kind}.csv"
+        else:
+            start = Path(self.root) / f"{self.session.trial(label).code}_trial{label}_{kind}.csv"
         name, _ = QFileDialog.getSaveFileName(self, "Save as CSV", str(start), "CSV (*.csv)")
         if not name:
             return

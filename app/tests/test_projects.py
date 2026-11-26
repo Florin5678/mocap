@@ -230,6 +230,18 @@ def test_upgrade_v1_cameras_layouts_and_videos():
         assert s.run_state.stage_settings[label]["triangulation"] == expected
 
 
+def test_upgrade_v1_gives_participants_the_height_entered_with_their_trials():
+    """0.1.0rc13 to rc17 asked the height with each trial; 0.2 keeps it on the participant (its 'to do' otherwise)."""
+    v1 = v1_session()
+    v1["participants"] += [{"label": "3", "code": "T1-CCCCCCC", "height_m": None}]
+    v1["participants"][0]["height_m"] = None
+    v1["trials"][0]["details"] = {"height": "1.83"}
+    data = upgrade_v1(v1).data
+    s = Session.model_validate(data)
+    assert [p.height_m for p in s.participants] == [1.83, 1.8, None]  # the third has no trial
+    assert s.trial("1").height_m == 1.83
+
+
 def _write(path, text="x"):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")

@@ -175,11 +175,63 @@ def test_sync_buttons_in_the_trials_table(win, tmp_path, qtbot, monkeypatch):
     assert ses.run_state.trial_status["1"] == "needs_sync_fix"
     _state, one, fix, accept = hub.cells["1"]
     assert "needs sync fix" in _status(hub, "1") and fix.isEnabled() and accept.isEnabled()
-    assert not one.isEnabled()  # Check sync or Accept as is, not a plain re-run
+    assert not one.isEnabled()  # Fix sync or Accept as is, not a plain re-run
 
     hub.cells["1"][3].click()  # Accept as is
     _idle(qtbot, win)
     assert ses.run_state.trial_status["1"] == "done" and "done" in _status(hub, "1")
+
+
+def test_check_sync_of_a_trial_that_failed_after_its_sync(win, tmp_path, qtbot, monkeypatch):
+    """A trial whose 3D step failed (sync passed the automatic check): its sync can be checked, not accepted as is;
+    it then runs again from its synchronisation."""
+    fake = _fake_run(monkeypatch, FakeStages(fail={"triangulation"}, fail_trials={"1"}))
+    ses = _ready_project(tmp_path, 2)
+    hub = _hub(win, tmp_path, ses)
+    hub.run_button.click()
+    _idle(qtbot, win)
+    assert ses.run_state.trial_status == {"1": "failed", "2": "done"}
+    _state, one, fix, accept = hub.cells["1"]
+    assert "failed" in _status(hub, "1") and fix.isEnabled() and one.isEnabled() and not accept.isEnabled()
+    assert "Failed in step 4 of 7 (Computing 3D positions): " in _status(hub, "1")
+    _shot(win, "failed_trial")
+    assert not hub.cells["2"][2].isEnabled()
+    # the toolbar takes a failed trial only when it is selected (it may have failed for another reason)
+    assert not hub.buttons["sync"].isEnabled() and not hub.buttons["accept"].isEnabled()
+    _select(hub.table, [0])
+    assert hub.buttons["sync"].isEnabled() and not hub.buttons["accept"].isEnabled()
+    opened = []
+    monkeypatch.setattr(runner, "sync_player", lambda _s, _r, label: opened.append(label) or True)
+    fake.fail, fake.calls = set(), []
+    fix.click()
+    _idle(qtbot, win)
+    assert opened == ["1"] and ses.run_state.trial_status["1"] == "done"
+    assert ("1", "triangulation") in fake.calls and ("1", "poseEstimation") not in fake.calls
+    assert ("1", "synchronization") not in fake.calls  # continues from the checked sync
+
+
+def test_fix_sync_of_a_finished_trial(win, tmp_path, qtbot, monkeypatch):
+    """A finished trial whose sync was accepted but wrong: Fix sync asks first, then runs its later steps again."""
+    fake = _fake_run(monkeypatch, FakeStages(sync_log=SYNC_BAD))
+    ses = _ready_project(tmp_path, 2)
+    ses.settings.keep_keypoints = True  # the player needs the 2D keypoints
+    save_session(ses, tmp_path)
+    hub = _hub(win, tmp_path, ses)
+    hub.run_button.click()
+    _idle(qtbot, win)
+    hub.buttons["accept"].click()  # both accepted as is
+    _idle(qtbot, win)
+    assert ses.run_state.trial_status == {"1": "done", "2": "done"}
+    assert hub.cells["1"][2].isEnabled() and not hub.cells["1"][3].isEnabled()
+    assert not hub.buttons["sync"].isEnabled()  # none selected: only trials that need a sync fix
+    asked = []
+    monkeypatch.setattr(run_bar, "confirm", lambda _w, title, text, *a: asked.append(text) or True)
+    monkeypatch.setattr(runner, "sync_player", lambda _s, _r, label: True)
+    fake.calls = []
+    hub.cells["1"][2].click()
+    _idle(qtbot, win)
+    assert "Trial(s) 1 finished already" in asked[0]
+    assert [s for lb, s in fake.calls if lb == "1"] == runner.STAGES[2:] and ses.run_state.trial_status["1"] == "done"
 
 
 def test_check_sync_of_several_trials_in_the_background(win, tmp_path, qtbot, monkeypatch):
@@ -203,7 +255,7 @@ def test_check_sync_of_several_trials_in_the_background(win, tmp_path, qtbot, mo
 
     monkeypatch.setattr(runner, "sync_player", player)
     _select(hub.table, [0, 1])
-    assert hub.buttons["sync"].text() == "Check sync (2) ..." and hub.buttons["accept"].isEnabled()
+    assert hub.buttons["sync"].text() == "Fix sync (2) ..." and hub.buttons["accept"].isEnabled()
     hub.buttons["sync"].click()
     assert win.busy
     qtbot.waitUntil(lambda: ses.run_state.trial_status["1"] == "done", timeout=60000)
@@ -238,7 +290,7 @@ def test_stop_while_a_sync_player_is_open(win, tmp_path, qtbot, monkeypatch):
 
     monkeypatch.setattr(runner, "sync_player", player)
     hub.table.clearSelection()
-    assert hub.buttons["sync"].text() == "Check sync (2) ..."  # none selected: every trial that needs it
+    assert hub.buttons["sync"].text() == "Fix sync (2) ..."  # none selected: every trial that needs it
     hub.buttons["sync"].click()
     qtbot.waitUntil(lambda: opened == ["1"], timeout=10000)
     assert hub.bar.stop_button.isEnabled()
@@ -247,7 +299,7 @@ def test_stop_while_a_sync_player_is_open(win, tmp_path, qtbot, monkeypatch):
     release.set()
     _idle(qtbot, win)
     assert opened == ["1"] and set(ses.run_state.trial_status.values()) == {"needs_sync_fix"}
-    assert "Trial 1: its sync was checked but it did not run" in hub.bar.stage.text()
+    assert "Trial 1: its sync was fixed but it did not run" in hub.bar.stage.text()
     hub.cells["1"][3].click()  # Accept as is continues with the checked sync
     _idle(qtbot, win)
     assert ses.run_state.trial_status["1"] == "done"

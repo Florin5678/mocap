@@ -134,3 +134,15 @@ def test_cli_run_qa_export(tmp_path, monkeypatch, capsys):
     assert main(["export", "--session", s, "--select", "trc.filt_lstm,bvh"]) == 0
     assert sorted(p.suffix for p in (tmp_path / "export").iterdir()) == [".bvh", ".csv", ".json", ".trc", ".txt"]
     assert main(["export", "--session", s, "--select", "nope"]) == 1
+
+
+def test_export_again_replaces_a_trials_earlier_files(done_session, tmp_path):
+    """An earlier export with two files of a kind (two runs' results) is replaced, not added to."""
+    out, _ = export(done_session, tmp_path, ["mot"])
+    for n in (1, 2):
+        (out / f"T1-ABCDEF1_trial1_joint_angles_{n}.mot").write_text("old")
+    (out / "T1-ABCDEF1_trial1_joint_angles.mot").unlink()
+    (out / "T1-ABCDEF1_trial1_model_scaled.osim").write_text("not exported now: kept")
+    export(done_session, tmp_path, ["mot"])
+    names = sorted(p.name for p in out.glob("T1-ABCDEF1_trial1_*"))
+    assert names == ["T1-ABCDEF1_trial1_joint_angles.mot", "T1-ABCDEF1_trial1_model_scaled.osim"]

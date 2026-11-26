@@ -147,6 +147,12 @@ def upgrade_v1(v1: dict) -> Upgrade:
             record["triangulation"] = json.dumps(triangulation_deps(
                 [(f"cam{i + 1:02d}", lc["camera"], lc["result"]) for i, lc in enumerate(lay["cameras"])]))
     data["trials"] = trials
+    # 0.1.0rc13 asked the height with every trial: a participant without its own takes its last trial's
+    for person in data.get("participants", []):
+        if person.get("height_m") in (None, "", "auto"):
+            heights = [t.get("details", {}).get("height") for t in trials if t.get("participant") == person["label"]]
+            if any(heights):
+                person["height_m"] = [h for h in heights if h][-1]
     return up
 
 

@@ -70,7 +70,39 @@ def trial_status(session: Session, root: Path, label: str) -> str:
         return "footage deleted"
     if trial_missing(session, root, label):
         return "not ready"
-    return "failed" if state == "failed" else "ready"
+    return {"failed": "failed", "cancelled": "stopped"}.get(state, "ready")
+
+
+def status_message(session: Session, root: Path, label: str, status: str | None = None) -> str:
+    """What goes with a trial's status, always naming the step where it failed, stopped or continues (R9)."""
+    from mocapapp.core.runner import STAGES, stale_stages, step_name
+
+    status = status or trial_status(session, root, label)
+    rs = session.run_state
+    error = rs.errors.get(label, "")
+    done = rs.stage_done.get(label, [])
+    if status == "not ready":
+        return " ".join(trial_missing(session, root, label))
+    if status == "needs sync fix":
+        issues = "; ".join(rs.sync.get(label, {}).get("issues", []))
+        return (f"Stopped after {step_name('synchronization')}: the cameras may not be lined up ({issues}). Use "
+                "Fix sync, or Accept as is.")
+    if status in ("failed", "stopped"):
+        if error:
+            return error
+        nxt = next((s for s in STAGES if s not in done), STAGES[0])
+        return f"Stopped in {step_name(nxt)}."
+    if status == "out of date":
+        first = next((s for s in STAGES if s in stale_stages(session, label) or s not in done), None)
+        if first is None:
+            return ""
+        why = "settings changed since it ran" if first in stale_stages(session, label) else "not every step ran"
+        return f"Runs again from {step_name(first)}: {why}."
+    if status == "footage deleted":
+        nxt = next((s for s in STAGES if s not in done), None)
+        where = f" (it got to {step_name(nxt)})" if nxt else ""
+        return f"The raw footage was deleted before every step finished{where}, so it cannot run again."
+    return ""
 
 
 # ---------- the window's sidebar and the empty-project checklist (§16.3) ----------

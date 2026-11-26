@@ -20,7 +20,7 @@ LEVEL_COLOR = {"error": "#c62828", "action": "#1565c0", "warning": "#b26a00", "i
 STATUS_LEVEL = {"ok": "ok", "ready": "ok", "done": "ok", "warn": "warning", "fail": "error", "failed": "error",
                 "pending": "info", "missing": "action", "needs_sync_fix": "action", "cancelled": "warning",
                 "running": "info", "partial": "warning", "not ready": "action", "needs sync fix": "action",
-                "out of date": "warning", "footage deleted": "info", "withdrawn": "info"}
+                "out of date": "warning", "footage deleted": "info", "withdrawn": "info", "stopped": "warning"}
 
 
 def settings() -> QSettings:

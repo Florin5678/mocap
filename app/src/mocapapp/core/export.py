@@ -122,13 +122,16 @@ def export(session: Session, root: Path, selection: list[str], labels: list[str]
         for key in selection:
             kind = table[key]
             found = find_files(tdir, kind)
+            ext = ".toml" if key == "config" else Path(kind.pattern).suffix
+            stem = f"{trial.code}_trial{trial.label}_{kind.name}"
             if not found:
                 warnings.append(f"trial {trial.label}: no {key} file found.")
                 continue
+            for old in [out / f"{stem}{ext}", *out.glob(f"{stem}_[0-9]*{ext}")]:  # replaced: an earlier export
+                old.unlink(missing_ok=True)                                     # can have had more files
             for n, src in enumerate(found):
                 suffix = f"_{n + 1}" if len(found) > 1 else ""
-                ext = src.suffix if key != "config" else ".toml"
-                dst = out / f"{trial.code}_trial{trial.label}_{kind.name}{suffix}{ext}"
+                dst = out / f"{stem}{suffix}{ext}"
                 shutil.copy2(src, dst)
                 entry = {"file": dst.name, "kind": key, "trial": trial.label, "code": trial.code,
                          "source": str(src.relative_to(root)), "sha256": sha256(dst)}

@@ -11,7 +11,7 @@ from pathlib import Path
 import numpy as np
 
 from mocapapp.core.qa import BONES
-from mocapapp.core.session import Layout, Session, Trial
+from mocapapp.core.session import Layout, LinkedResults, Session, Trial
 
 # (label, glob in pose-3d/, name parts to exclude): best first
 MARKER_SOURCES = [("smoothed + LSTM", "*_filt_*_LSTM.trc", ()),
@@ -84,6 +84,77 @@ def trials_with_results(session: Session, root: Path) -> list[Trial]:
     layout = Layout(root)
     return [t for t in session.active_trials
             if marker_files(layout.trial(t.label)) or angle_file(layout.trial(t.label))]
+
+
+def has_results(folder: Path) -> bool:
+    return bool(marker_files(folder) or angle_file(folder))
+
+
+# ---------- Pose2Sim results made elsewhere (Results > Import Pose2Sim data) ----------
+
+def find_result_folders(folder: Path, depth: int = 3) -> list[Path]:
+    """The folder itself when it holds Pose2Sim results (pose-3d/*.trc or kinematics/*.mot), otherwise every such
+    folder below it (a Pose2Sim project with its trial folders, up to `depth` levels down)."""
+    folder = Path(folder)
+    if has_results(folder):
+        return [folder]
+    if depth <= 0:
+        return []
+    try:
+        subs = sorted(p for p in folder.iterdir() if p.is_dir() and not p.name.startswith("."))
+    except OSError:
+        return []
+    return [f for sub in subs for f in find_result_folders(sub, depth - 1)]
+
+
+def link_results(session: Session, root: Path, folder: Path) -> list[LinkedResults]:
+    """Remember the Pose2Sim results in `folder` (a trial folder, or a project with several) for Results. Nothing
+    is copied or changed there. Returns the new links; folders linked before are skipped."""
+    folder = Path(folder).resolve()
+    if folder == Path(root).resolve() or Path(root).resolve() in folder.parents:
+        raise OutputError("This folder is part of this project: its trials are in Results already.")
+    found = find_result_folders(folder)
+    if not found:
+        raise OutputError(f"No Pose2Sim results in {folder}: expected a pose-3d folder with .trc files or a "
+                          "kinematics folder with .mot files (in this folder, or in its trial folders).")
+    known = {str(Path(x.path).resolve()) for x in session.linked}
+    n = max((int(x.id[1:]) for x in session.linked if x.id[1:].isdigit()), default=0)
+    new = []
+    for f in found:
+        if str(f) in known:
+            continue
+        n += 1
+        name = folder.name if f == folder else f"{folder.name}/{f.relative_to(folder).as_posix()}"
+        new.append(LinkedResults(id=f"i{n}", name=name, path=str(f)))
+    session.linked += new
+    return new
+
+
+def find_link(session: Session, key: str) -> LinkedResults | None:
+    """A link by its id ("i2") or its name."""
+    return next((x for x in session.linked if key in (x.id, x.name)), None)
+
+
+def unlink_results(session: Session, key: str) -> LinkedResults:
+    """Forget a link (its folder is not touched)."""
+    link = find_link(session, key)
+    if link is None:
+        raise OutputError(f"No imported Pose2Sim data called {key}.")
+    session.linked.remove(link)
+    return link
+
+
+def result_dir(session: Session, root: Path, key: str) -> Path:
+    """The folder with the results of a trial (its label) or of imported Pose2Sim data (its id)."""
+    link = find_link(session, key) if key.startswith("i") else None
+    return Path(link.path) if link else Layout(root).trial(key)
+
+
+def viewable(session: Session, root: Path) -> list[tuple[str, str]]:
+    """(key, title) of everything the viewer can show: the trials with results, then the imported data whose
+    folder is still there."""
+    out = [(t.label, f"Trial {t.label} ({t.code})") for t in trials_with_results(session, root)]
+    return out + [(x.id, f"Imported: {x.name}") for x in session.linked if has_results(Path(x.path))]
 
 
 # ---------- readers ----------

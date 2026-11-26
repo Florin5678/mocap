@@ -227,6 +227,38 @@ def _project_import(args: argparse.Namespace) -> int:
     return 0
 
 
+@_guard
+def _project_pose2sim(args: argparse.Namespace) -> int:
+    """Pose2Sim results made elsewhere, shown in Results: list, add (a link) or remove (the link only)."""
+    from mocapapp.core import outputs
+    from mocapapp.core.session import save_session
+
+    root, session = _open(args)
+    if args.add:
+        try:
+            new = outputs.link_results(session, root, Path(args.add))
+        except outputs.OutputError as exc:
+            print(exc)
+            return 1
+        save_session(session, root)
+        print("\n".join(f"Imported {x.id}: {x.name}" for x in new) or "These Pose2Sim results are listed already.")
+    if args.remove:
+        try:
+            link = outputs.unlink_results(session, args.remove)
+        except outputs.OutputError as exc:
+            print(exc)
+            return 1
+        save_session(session, root)
+        print(f"Removed from the list: {link.name} (its folder is not touched).")
+    if not (args.add or args.remove):
+        for x in session.linked:
+            there = "" if outputs.has_results(Path(x.path)) else "   (folder not found)"
+            print(f"{x.id}: {x.name}  {x.path}{there}")
+        if not session.linked:
+            print("No imported Pose2Sim data.")
+    return 0
+
+
 # ---------- cameras ----------
 
 def _camera_fields(args: argparse.Namespace) -> dict[str, str]:
@@ -467,7 +499,7 @@ def _participant(args: argparse.Namespace) -> int:
 @_guard
 def _trial(args: argparse.Namespace) -> int:
     from mocapapp.core import workflow
-    from mocapapp.core.readiness import trial_missing, trial_status
+    from mocapapp.core.readiness import status_message, trial_missing, trial_status
 
     root, s = _open(args)
     cmd = args.trial_command
@@ -550,7 +582,8 @@ def _trial(args: argparse.Namespace) -> int:
         ready = True
         for label in labels:
             state = trial_status(s, root, label)
-            print(f"trial {label}: {state}")
+            msg = status_message(s, root, label, state) if state != "not ready" else ""
+            print(f"trial {label}: {state}" + (f" - {msg}" if msg else ""))
             if state == "not ready":
                 ready = False
                 for item in trial_missing(s, root, label):
@@ -610,6 +643,12 @@ def register(sub, project_save_show) -> None:
     pim.add_argument("--layouts", action="store_true", help="all its layouts (with their cameras)")
     pim.add_argument("--list", action="store_true", help="only show what the other project has")
     pim.set_defaults(func=_project_import)
+    pp2 = prsub.add_parser("pose2sim", help="Pose2Sim results made elsewhere, shown in Results next to the trials "
+                                            "(only a link: nothing is copied)")
+    _session_arg(pp2)
+    pp2.add_argument("--add", metavar="FOLDER", help="a Pose2Sim trial folder, or a Pose2Sim project with several")
+    pp2.add_argument("--remove", metavar="ID", help="forget one (its id, e.g. i2, or its name); the folder stays")
+    pp2.set_defaults(func=_project_pose2sim)
     project_save_show(prsub)
 
     cam = sub.add_parser("camera", help="cameras and their lens (intrinsic) calibration")

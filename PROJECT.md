@@ -443,7 +443,7 @@ mocapapp delete-session --session <dir>              # withdrawal
 | R6 | **No intrinsic recalibration of a camera that is already used** (see §16.2 for "used"). To recalibrate, duplicate the camera and calibrate the copy. |
 | R7 | **Layouts:** what today's Extrinsic calibration page does (reference points, click points, review image, errors). A layout says which cameras are used and where they stood, so **trials show only the layout**; the cameras follow from it. |
 | R8 | **Warn when a trial reuses a layout** recorded on another day (including one imported from another project): "Were the cameras set up again? Record new extrinsic videos." The researcher can **override** it (*Use this layout anyway*); the override is recorded with the trial. |
-| R9 | **Trials table** (Session): one row per trial; **trial numbers are fixed** (folders and results are named after them), with a free-text **name/note**; a **Status** column: *not ready (what is missing), ready, running, needs sync fix, done, out of date*. *Run this trial*, *Check sync ...* and *Accept as is* stay in the row. Rows are **multi-selectable** so one action applies to several trials. A **Duplicate** action. Clicking a row opens a **trial panel** with its videos, checks and state. |
+| R9 | **Trials table** (Session): one row per trial; **trial numbers are fixed** (folders and results are named after them), with a free-text **name/note**; a **Status** column: *not ready (what is missing), ready, running, needs sync fix, done, out of date*. *Run this trial*, *Fix sync ...* and *Accept as is* stay in the row. Rows are **multi-selectable** so one action applies to several trials. A **Duplicate** action. Clicking a row opens a **trial panel** with its videos, checks and state. |
 | R10 | **Add-trial row** under the table, pre-filled from the previous trial and editable before **Add**. Participant default: the previous trial's participant while they have fewer trials than *trials per participant*, otherwise a new participant (random pseudonym). The participant field is **highlighted**. |
 | R11 | **Participants table:** random pseudonyms (editable, as now), mandatory **Height**, optional columns via *Edit columns ...* (weight, handedness, age, gender, custom), consent form buttons. Consent in **one drop-down column**: *Not signed yet / Signed, delete footage / Signed, keep footage*, same rules as today's three columns. |
 | R12 | **Details stay stored per trial** (as now). Differences between days are recorded with custom columns. **No per-trial override UI.** |
@@ -471,7 +471,7 @@ mocapapp delete-session --session <dir>              # withdrawal
 ### 16.3 Sections
 
 **Session** (home)
-- Trials table (R9) with columns: Trial, Name/note, Participant, Layout, Status, row buttons (Run this trial, Check sync ..., Accept as is). Header fixed, scrolls.
+- Trials table (R9) with columns: Trial, Name/note, Participant, Layout, Status, row buttons (Run this trial, Fix sync ..., Accept as is). Header fixed, scrolls.
 - Add-trial row (R10) + **Add**. Videos for each layout camera are suggested by number (today's name rule) and confirmed in the trial panel.
 - Actions on selected trials: Run, Duplicate, Change layout, Check and copy videos, Delete raw footage ..., Remove trial ..., Generate consent forms.
 - Buttons: **Session settings ...**, **Run** (runs the selected trials; with none selected, every ready trial), and the **Start over (ignore finished stages)** checkbox next to it (R19).
@@ -520,7 +520,7 @@ A trial is **ready** when: its participant has signed consent and a height (opti
 | Trials: calibration videos and per-trial assignment dialog | Cameras (intrinsic) and Layouts (extrinsic); trial → layout |
 | Intrinsic calibration page | Cameras |
 | Extrinsic calibration page (reference points + camera positions) | Layouts (+ presets) |
-| Run: summary, sync reminder (tick removed, R18), advanced settings, Run all/selected/this trial, Stop, Start over checkbox, Check sync, Accept as is, progress, Pose2Sim output, disk check | Session (table, actions, bottom bar), trial panel, Session settings |
+| Run: summary, sync reminder (tick removed, R18), advanced settings, Run all/selected/this trial, Stop, Start over checkbox, Fix sync, Accept as is, progress, Pose2Sim output, disk check | Session (table, actions, bottom bar), trial panel, Session settings |
 | Results: traffic lights, metrics, 3D preview, export, Delete raw footage now | Results: Quality, Export |
 | Viewer: 3D, data, compare, speed, CSV | Results: 3D, Data |
 | Finished! (save, reminders, back to start) | Dropped (R16): saving is automatic; reminders shown on Session and in recent projects |

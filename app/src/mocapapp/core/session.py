@@ -280,6 +280,14 @@ class RunState(BaseModel):
     last_error: str | None = None
 
 
+class LinkedResults(BaseModel):
+    """Pose2Sim results made outside this project, shown in Results (0.2): only a link, nothing is copied."""
+    id: str  # "i1", "i2", ...: never a trial number
+    name: str
+    path: str  # absolute folder holding pose-3d/ and/or kinematics/
+    added_at: str = Field(default_factory=lambda: datetime.now().isoformat(timespec="seconds"))
+
+
 class StudyInfo(BaseModel):
     """What the researcher entered for the consent forms; the same for every participant of the session."""
     study_name: str = ""
@@ -312,6 +320,7 @@ class Session(BaseModel):
     layouts: list[CameraLayout] = Field(default_factory=list)
     settings: Settings = Field(default_factory=Settings)
     run_state: RunState = Field(default_factory=RunState)
+    linked: list[LinkedResults] = Field(default_factory=list)  # Pose2Sim results imported into Results (links)
     # "app" = computed with the app's calibration steps; "imported" = an existing Calib file (sample data only)
     calibration_source: Literal["app", "imported"] = "app"
 

@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from mocapapp.core import runner
+from mocapapp.core import qa, readiness, runner
 from mocapapp.core.session import Layout, load_session
 from tests.m3_fakes import SYNC_BAD, FakeStages, make_session
 
@@ -52,7 +52,7 @@ def test_one_failed_trial_does_not_stop_the_others(tmp_path, fake):
     session = make_session(tmp_path)
     assert runner.run_session(session, tmp_path) == {"1": "failed", "2": "done"}
     err = load_session(tmp_path).run_state.errors["1"]
-    assert err.startswith("Computing 3D positions") and "calibration" in err
+    assert err.startswith("Failed in step 4 of 7 (Computing 3D positions): ") and "calibration" in err
 
 
 def test_nonzero_exit_with_outputs_is_still_a_failure(tmp_path, fake, monkeypatch):
@@ -66,14 +66,21 @@ def test_nonzero_exit_with_outputs_is_still_a_failure(tmp_path, fake, monkeypatc
     monkeypatch.setattr(runner, "run_stage", exit_1)
     assert runner.run_session(session, tmp_path) == {"1": "failed"}
     assert "filtering.log" in session.run_state.errors["1"]
+    assert readiness.status_message(session, tmp_path, "1", "failed") == (
+        "Failed in step 5 of 7 (Smoothing): Pose2Sim stopped with an error (see mocap_logs/filtering.log).")
 
 
-def test_cancel_then_resume(tmp_path, fake):
+def test_cancel_then_resume(tmp_path, fake, monkeypatch):
     f = fake(cancel_at="triangulation")
     session = make_session(tmp_path, n_trials=1)
     with pytest.raises(runner.Cancelled):
         runner.run_session(session, tmp_path)
     assert load_session(tmp_path).run_state.trial_status["1"] == "cancelled"
+    assert readiness.status_message(load_session(tmp_path), tmp_path, "1", "stopped").startswith(
+        "Stopped by you in step 4 of 7 (Computing 3D positions). Run it again to continue from that step")
+    with monkeypatch.context() as m:  # as if ready: the status says stopped
+        m.setattr(readiness, "trial_missing", lambda *a: [])
+        assert readiness.trial_status(load_session(tmp_path), tmp_path, "1") == "stopped"
     f.calls.clear()
     assert runner.run_session(load_session(tmp_path), tmp_path) == {"1": "done"}
     assert f.calls[0] == ("1", "triangulation")
@@ -86,6 +93,9 @@ def test_unreliable_sync_stops_before_triangulation_even_on_resume(tmp_path, fak
     assert runner.run_session(session, tmp_path, listener=events.append) == {"1": "needs_sync_fix"}
     assert [s for _, s in f.calls] == ["poseEstimation", "synchronization"]
     assert any(e.kind == "needs_sync_fix" and "0.31" in e.message for e in events)
+    msg = readiness.status_message(load_session(tmp_path), tmp_path, "1")
+    assert msg.startswith("Stopped after step 2 of 7 (Synchronising the cameras): the cameras may not be lined up (")
+    assert "0.31" in msg and msg.endswith("Use Fix sync, or Accept as is.")
 
     f.calls.clear()
     assert runner.run_session(load_session(tmp_path), tmp_path) == {"1": "needs_sync_fix"}
@@ -223,6 +233,8 @@ def test_changed_settings_rerun_only_the_affected_stages(tmp_path, fake, change,
     runner.run_session(session, tmp_path)
     change(session)
     assert runner.stale_stages(session, "1") == rerun[:1]  # the changed stage; later ones follow
+    assert readiness.status_message(session, tmp_path, "1") == (
+        f"Runs again from {runner.step_name(rerun[0])}: settings changed since it ran.")
     f.calls.clear()
     assert runner.run_session(session, tmp_path) == {"1": "done"}
     assert [s for _, s in f.calls] == rerun
@@ -256,3 +268,81 @@ def test_preflight_warns_when_pose_models_must_be_downloaded(tmp_path, monkeypat
     session.settings.keypoints = "Whole_body"
     warn = [i for i in runner.preflight(session, tmp_path, ["1"]) if i.where == "pose models"]
     assert len(warn) == 1 and warn[0].level == "warning" and "internet" in warn[0].what
+
+
+def test_a_stage_run_again_replaces_its_old_outputs(tmp_path, fake):
+    """Pose2Sim adds to its folders: what a stage (and every later one) wrote before goes first."""
+    fake()
+    session = make_session(tmp_path, n_trials=1)
+    session.settings.keep_keypoints = True
+    runner.run_session(session, tmp_path)
+    tdir = Layout(tmp_path).trial("1")
+    stale = [tdir / "pose-sync" / "cam02_json" / "cam02_009999.json", tdir / "pose-3d" / "trial_1_500-900.trc",
+             tdir / "pose-3d" / "trial_1_500-900_filt_butterworth_LSTM.trc", tdir / "kinematics" / "old.mot"]
+    for p in stale:
+        p.write_text("old")
+    runner.run_session(session, tmp_path, resume=False)  # Start over
+    assert not any(p.exists() for p in stale)
+    assert runner.check_outputs(tdir, "kinematics", ["cam01", "cam02"], session) is None
+
+    (tdir / "pose-3d" / "trial_1_500-900.trc").write_text("old")
+    runner.clear_outputs(tdir, "kinematics")  # only the kinematics' own files
+    assert (tdir / "pose-3d" / "trial_1_500-900.trc").is_file() and not list((tdir / "kinematics").glob("*.mot"))
+
+
+def _player(monkeypatch, offset_line, writes=True):
+    """Stands in for the player's subprocess: prints its result and writes new synchronised files."""
+    import subprocess
+
+    def run(cmd, cwd, stdout, **kwargs):
+        stdout.write(f"Synchronizing...\n{offset_line}")
+        if writes:
+            for cam in ("cam01", "cam02"):
+                (cwd / "pose-sync" / f"{cam}_json").mkdir(parents=True, exist_ok=True)
+                (cwd / "pose-sync" / f"{cam}_json" / f"{cam}_000001.json").write_text("{}")
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(runner.subprocess, "run", run)
+
+
+def test_sync_player_replaces_the_sync_or_keeps_the_previous_one(tmp_path, fake, monkeypatch):
+    fake(sync_log=SYNC_BAD)
+    session = make_session(tmp_path, n_trials=1)
+    runner.run_session(session, tmp_path)  # stops for its sync: the keypoint files are there
+    tdir = Layout(tmp_path).trial("1")
+    (tdir / "pose-sync" / "cam02_json" / "cam02_000005.json").write_text("{}")  # from an earlier sync
+    old = tdir / "pose-sync" / "cam02_json" / "cam02_000005.json"
+    assert old.is_file()
+    config = (tdir / "Config.toml").read_text(encoding="utf-8")
+
+    _player(monkeypatch, "--> Camera cam01 and cam02: 40 frames offset (3 on the selected section), "
+                         "correlation 0.91.\n")
+    assert runner.sync_player(session, tmp_path, "1")
+    assert not old.exists() and not (tdir / "pose-sync-previous").exists()  # nothing of the old sync is mixed in
+    assert "40 frames offset" in (tdir / "mocap_logs" / "synchronization.log").read_text(encoding="utf-8")
+    assert (tdir / "Config.toml").read_text(encoding="utf-8") == config
+    runner.accept_checked_sync(session, tmp_path, "1")
+    info = session.run_state.sync["1"]
+    assert info["offsets"]["cam02"]["offset_frames"] == 40 and info["issues"] == [] and info["fixed_in_player"]
+    assert qa.trial_qa(session, tmp_path, "1").sync["cam02"]["correlation"] == 0.91
+
+    kept = sorted(p.name for p in (tdir / "pose-sync" / "cam02_json").iterdir())
+    _player(monkeypatch, "", writes=False)  # closed without saving a synchronisation
+    assert not runner.sync_player(session, tmp_path, "1")
+    assert sorted(p.name for p in (tdir / "pose-sync" / "cam02_json").iterdir()) == kept
+    assert "40 frames offset" in (tdir / "mocap_logs" / "synchronization.log").read_text(encoding="utf-8")
+
+
+def test_quality_report_takes_the_latest_sync_from_pose2sims_own_log(tmp_path, fake):
+    """Projects of 0.1 kept only the automatic result in mocap_logs; Pose2Sim's logs.txt has the player's too."""
+    fake(sync_log=SYNC_BAD)
+    session = make_session(tmp_path, n_trials=1)
+    runner.run_session(session, tmp_path, accept_sync=True)
+    tdir = Layout(tmp_path).trial("1")
+    assert qa.trial_qa(session, tmp_path, "1").sync["cam02"]["correlation"] == 0.31
+    (tdir / "logs.txt").write_text(SYNC_BAD + "--> Camera #0: selected person #0 at time 10.10 ± 2.00 s\n"
+                                   "--> Camera cam01 and cam02: -426 frames offset (40 on the selected section), "
+                                   "correlation 0.91.\n", encoding="utf-8")
+    r = qa.trial_qa(session, tmp_path, "1")
+    assert r.sync["cam02"] == {"reference": "cam01", "offset_frames": -426, "correlation": 0.91}
+    assert not any("low confidence" in w for w in r.warnings)

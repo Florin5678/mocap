@@ -15,7 +15,7 @@ from pathlib import Path
 
 import numpy as np
 
-from mocapapp.core.runner import LOG_DIR, STAGES, parse_sync
+from mocapapp.core.runner import LOG_DIR, STAGES, _fps, parse_sync, slots, sync_issues, sync_warnings
 from mocapapp.core.session import Layout, Session, atomic_write_text
 
 # (green up to, amber up to); above = red. Correlation is "higher is better".
@@ -128,14 +128,18 @@ def trial_qa(session: Session, root: Path, label: str) -> TrialQA:
 
     # synchronisation
     sync = parse_sync(_log(tdir, "synchronization"))
+    own = tdir / "logs.txt"  # Pose2Sim's own log: its last synchronisation is the latest, also one made in the
+    if own.is_file():        # player by an app before 0.2.0rc2 (which did not keep the player's log)
+        sync = parse_sync(own.read_text(encoding="utf-8", errors="replace")) or sync
     qa.sync = sync
     if sync:
         min_corr = min(o["correlation"] for o in sync.values())
         qa.metrics.append(Metric("Sync confidence (lowest camera)", round(min_corr, 2), "correlation",
                                  light("sync_min_correlation", min_corr),
                                  ", ".join(f"{c}: {o['offset_frames']:+d} frames" for c, o in sync.items())))
-        info = session.run_state.sync.get(label, {})
-        for issue in info.get("issues", []) + info.get("warnings", []):
+        cams = slots(session, label)
+        fps = _fps(tdir, cams) if cams else 0.0
+        for issue in sync_issues(sync, fps) + sync_warnings(sync, fps):
             qa.warnings.append(f"Synchronisation: {issue}")
 
     # triangulation

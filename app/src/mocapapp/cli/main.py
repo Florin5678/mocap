@@ -510,11 +510,17 @@ def _cmd_run(args: argparse.Namespace) -> int:
         return 130
     print()
     for label, status in results.items():
-        msg = session.run_state.errors.get(label) or "; ".join(session.run_state.sync.get(label, {}).get("issues", []))
-        print(f"trial {label}: {status}" + (f" - {msg}" if msg and status != "done" else ""))
+        from mocapapp.core.readiness import status_message, trial_status
+
+        state = trial_status(session, root, label)
+        msg = status_message(session, root, label, state)
+        print(f"trial {label}: {state}" + (f" - {msg}" if msg else ""))
         if status == "needs_sync_fix":
             print(f"    -> check it with: mocapapp run --session {root} --trial {label} --fix-sync"
                   f"   (or accept as is with --accept-sync)")
+        elif status == "failed" and "synchronization" in session.run_state.stage_done.get(label, []):
+            print(f"    -> if its synchronisation was wrong, check it with: mocapapp run --session {root} "
+                  f"--trial {label} --fix-sync")
     from mocapapp.core.qa import write_report
 
     report, _ = write_report(session, root, labels)
@@ -523,13 +529,13 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
 
 def _printer(verbose: bool):
-    from mocapapp.core.runner import Event
+    from mocapapp.core.runner import Event, step_name
 
     last = {"pct": -1}
 
     def show(e: Event) -> None:
         if e.kind == "stage_start":
-            print(f"[trial {e.trial}] {e.message} ...", flush=True)
+            print(f"[trial {e.trial}] {step_name(e.stage)[0].upper()}{step_name(e.stage)[1:]} ...", flush=True)
         elif e.kind == "stage_end":
             print(f"[trial {e.trial}]   {'done' if e.ok else 'FAILED'}: {e.message}", flush=True)
         elif e.kind == "progress" and e.fraction is not None:
@@ -538,7 +544,7 @@ def _printer(verbose: bool):
                 last["pct"] = pct
                 print(f"[trial {e.trial}]   {pct}% of this trial", flush=True)
         elif e.kind == "needs_sync_fix":
-            print(f"[trial {e.trial}]   synchronisation needs checking: {e.message}", flush=True)
+            print(f"[trial {e.trial}]   synchronisation needs a fix: {e.message}", flush=True)
         elif e.kind == "line" and verbose:
             print(f"    {e.message}", flush=True)
 
@@ -730,24 +736,31 @@ def _cmd_data(args: argparse.Namespace) -> int:
 
     root = Path(args.session)
     session = load_session(root)
-    try:
-        session.trial(args.trial)
-    except KeyError:
-        print(f"There is no trial {args.trial} in this session.")
-        return 1
-    tdir = Layout(root).trial(args.trial)
+    link = outputs.find_link(session, args.trial)
+    if link is not None:  # imported Pose2Sim data (project pose2sim)
+        tdir = Path(link.path)
+    else:
+        try:
+            session.trial(args.trial)
+        except KeyError:
+            print(f"There is no trial {args.trial} in this session.")
+            return 1
+        tdir = Layout(root).trial(args.trial)
+    who = link.name if link else f"trial {args.trial}"
     try:
         if args.markers:
             files = outputs.marker_files(tdir)
             source = args.markers if args.markers in files else next(iter(files), None)
             if source is None:
-                print(f"Trial {args.trial} has no 3D marker results yet. Run it first.")
+                print(f"{who.capitalize() if not link else who} has no 3D marker results"
+                      + ("." if link else " yet. Run it first."))
                 return 1
             table = outputs.read_markers(files[source]).table()
         else:
             mot = outputs.angle_file(tdir)
             if mot is None:
-                print(f"Trial {args.trial} has no joint angles yet. Run it first (or use --markers).")
+                print(f"{who.capitalize() if not link else who} has no joint angles"
+                      + (" (use --markers)." if link else " yet. Run it first (or use --markers)."))
                 return 1
             table = outputs.read_angles(mot)
         columns = [c.strip() for c in args.columns.split(",")] if args.columns else None
@@ -758,7 +771,7 @@ def _cmd_data(args: argparse.Namespace) -> int:
     except outputs.OutputError as exc:
         print(exc)
         return 1
-    print(f"{table.title} of trial {args.trial}: {table.path.name}, {len(table.time)} frames, "
+    print(f"{table.title} of {who}: {table.path.name}, {len(table.time)} frames, "
           f"{table.time[0]:.2f}-{table.time[-1]:.2f} s")
     print(f"  {'column':<26}{'min':>10}{'max':>10}{'range':>10}{'peak speed':>14}")
 
@@ -817,7 +830,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     data = sub.add_parser("data", help="a trial's joint angles or marker positions: summary or CSV")
     data.add_argument("--session", required=True)
-    data.add_argument("--trial", required=True)
+    data.add_argument("--trial", required=True, help="a trial number, or imported Pose2Sim data (e.g. i1)")
     data.add_argument("--markers", nargs="?", const="best", metavar="SOURCE",
                       help="marker positions instead of joint angles: 'smoothed + LSTM', 'smoothed' or 'raw' "
                            "(default: the best available)")

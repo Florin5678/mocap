@@ -41,6 +41,11 @@ STAGE_TITLES = {
     "kinematics": "Scaling the OpenSim model and computing joint angles",
 }
 LOG_DIR = "mocap_logs"
+
+
+def step_name(stage: str) -> str:
+    """'step 4 of 7 (Computing 3D positions)': where a trial failed, stopped or is."""
+    return f"step {STAGES.index(stage) + 1} of {len(STAGES)} ({STAGE_TITLES[stage]})"
 KEYPOINT_STAGES = ("poseEstimation", "synchronization", "personAssociation")  # their output is 2D keypoint files
 
 
@@ -225,6 +230,30 @@ def check_outputs(trial_dir: Path, stage: str, cameras: list[str], session: Sess
             return "OpenSim scaling or inverse kinematics failed (see mocap_logs/kinematics.log)."
         return f"OpenSim produced no {', '.join(missing)} file." if missing else None
     return None
+
+
+# (folder, patterns) each stage writes; removed before the stage runs again, with those of every later stage.
+# Pose2Sim adds to what is there: a second synchronisation keeps the first one's files where the new offset names
+# none, and a second triangulation over other frames leaves the first .trc next to the new one.
+STAGE_OUTPUTS = {
+    "synchronization": ("pose-sync", ("*_json", "*.png")),
+    "personAssociation": ("pose-associated", ("*_json",)),
+    "triangulation": ("pose-3d", ("*.trc", "*.c3d")),
+    "filtering": ("pose-3d", ("*_filt_*.trc", "*_filt_*.c3d")),
+    "markerAugmentation": ("pose-3d", ("*_LSTM.trc", "*_LSTM.c3d")),
+    "kinematics": ("kinematics", ("*.osim", "*.mot", "*.bvh", "*.sto")),
+}
+
+
+def clear_outputs(trial_dir: Path, stage: str) -> None:
+    """Remove what this stage and every later one wrote in an earlier run of the trial."""
+    for later in STAGES[STAGES.index(stage):]:
+        if later not in STAGE_OUTPUTS:
+            continue
+        folder, patterns = STAGE_OUTPUTS[later]
+        for pattern in patterns:
+            for p in (Path(trial_dir) / folder).glob(pattern):
+                shutil.rmtree(p) if p.is_dir() else p.unlink()
 
 
 # ---------- synchronisation QA (FR-4.4) ----------
@@ -482,19 +511,22 @@ def run_trial(session: Session, root: Path, label: str, listener: Listener = lam
             else:
                 listener(Event("line", label, stage, line))
 
+        clear_outputs(tdir, stage)
         try:
             code = run_stage(tdir, stage, on_line, cancel)
         except Cancelled:
             rs.trial_status[label] = "cancelled"
+            rs.errors[label] = (f"Stopped by you in {step_name(stage)}. Run it again to continue from that step; "
+                                "the steps before it are kept.")
             save_session(session, root)
             listener(Event("trial_end", label, stage, "cancelled", ok=False))
             raise
         problem = check_outputs(tdir, stage, cams, session)
         if code and problem is None and stage != "kinematics":
-            problem = f"{STAGE_TITLES[stage]} stopped with an error (see {LOG_DIR}/{stage}.log)."
+            problem = f"Pose2Sim stopped with an error (see {LOG_DIR}/{stage}.log)."
         if problem:
             rs.trial_status[label] = "failed"
-            rs.errors[label] = f"{STAGE_TITLES[stage]}: {problem}"
+            rs.errors[label] = f"Failed in {step_name(stage)}: {problem}"
             save_session(session, root)
             listener(Event("stage_end", label, stage, problem, ok=False))
             listener(Event("trial_end", label, stage, rs.errors[label], ok=False))
@@ -562,10 +594,18 @@ def run_session(session: Session, root: Path, labels: list[str] | None = None, l
     return results
 
 
-def accept_checked_sync(session: Session, label: str) -> None:
-    """The sync of a trial that needed a fix was checked in the player (or is accepted as is): continue from it."""
+def accept_checked_sync(session: Session, root: Path, label: str) -> None:
+    """The sync of a trial was fixed in the player (or is accepted as is): continue from it. The record takes the
+    offsets of the synchronisation log, which the player rewrites."""
     rs = session.run_state
-    rs.sync.setdefault(label, {})["accepted"] = True
+    tdir = Layout(root).trial(label)
+    log = tdir / LOG_DIR / "synchronization.log"
+    offsets = parse_sync(log.read_text(encoding="utf-8", errors="replace")) if log.is_file() else {}
+    info = rs.sync.setdefault(label, {"offsets": {}, "issues": [], "warnings": []})
+    if offsets and offsets != info.get("offsets"):
+        info.update(offsets=offsets, fixed_in_player=True)
+        _judge_sync(info, _fps(tdir, slots(session, label)))
+    info["accepted"] = True
     rs.stage_done[label] = [s for s in rs.stage_done.get(label, []) if s in ("poseEstimation", "synchronization")]
     if "synchronization" not in rs.stage_done[label]:
         rs.stage_done[label].append("synchronization")
@@ -580,30 +620,54 @@ def run_queue(session: Session, root: Path, take: Callable[[], str | None], list
         label = take()
         if label is None:
             break
-        accept_checked_sync(session, label)
+        accept_checked_sync(session, root, label)
         run_trial(session, root, label, listener, cancel, resume=True, accept_sync=True)
         results[label] = session.run_state.trial_status[label]
     return results
 
 
 def sync_player(session: Session, root: Path, label: str) -> bool:
-    """Open upstream's synchronisation player for one trial in a separate window; True when it was closed normally.
-    It changes only that trial's synchronised files, never the project file, so it can be open while other trials
-    run; run_queue continues the trial afterwards."""
+    """Open upstream's synchronisation player for one trial in a separate window; True when it saved a new
+    synchronisation. It changes only that trial's files (pose-sync/ and its log), never the project file, so it can
+    be open while other trials run; run_queue continues the trial afterwards. The previous synchronisation is set
+    aside first (Pose2Sim would mix the two) and comes back when the player is closed without saving one."""
     import tomlkit
 
-    cfg_path = Layout(root).trial(label) / "Config.toml"
+    tdir = Layout(root).trial(label)
+    cfg_path = tdir / "Config.toml"
+    sync_dir, backup = tdir / "pose-sync", tdir / "pose-sync-previous"
+    log, old_log = tdir / LOG_DIR / "synchronization.log", tdir / LOG_DIR / "synchronization-previous.log"
     original = cfg_path.read_text(encoding="utf-8")
     doc = tomlkit.parse(original)
     doc["synchronization"]["synchronization_gui"] = True
+    shutil.rmtree(backup, ignore_errors=True)
+    if sync_dir.is_dir():
+        sync_dir.rename(backup)
+    log.parent.mkdir(exist_ok=True)
+    if log.is_file():
+        log.replace(old_log)
     try:
         cfg_path.write_text(tomlkit.dumps(doc), encoding="utf-8")
-        code = subprocess.run([sys.executable, "-c", "from Pose2Sim.Pose2Sim import Pose2SimPipeline; "
-                               "Pose2SimPipeline().synchronization()"], cwd=cfg_path.parent,
-                              env={k: v for k, v in stage_env().items() if k != "MPLBACKEND"},  # a real window
-                              check=False).returncode
+        with open(log, "w", encoding="utf-8") as out:  # its result, for the trial's record and the quality report
+            code = subprocess.run([sys.executable, "-c", "from Pose2Sim.Pose2Sim import Pose2SimPipeline; "
+                                   "Pose2SimPipeline().synchronization()"], cwd=tdir, stdout=out,
+                                  stderr=subprocess.STDOUT,
+                                  env={k: v for k, v in stage_env().items() if k != "MPLBACKEND"},  # a real window
+                                  check=False).returncode
     finally:
         cfg_path.write_text(original, encoding="utf-8")
+        saved = check_outputs(tdir, "synchronization", slots(session, label), session) is None
+        text = log.read_text(encoding="utf-8", errors="replace") if log.is_file() else ""
+        if code == 0 and saved and parse_sync(text):
+            shutil.rmtree(backup, ignore_errors=True)
+            old_log.unlink(missing_ok=True)
+        else:  # closed without saving a synchronisation, or an error: the previous one stays
+            shutil.rmtree(sync_dir, ignore_errors=True)
+            if backup.is_dir():
+                backup.rename(sync_dir)
+            if old_log.is_file():
+                old_log.replace(log)
+            code = code or 1
     return code == 0
 
 
@@ -611,6 +675,6 @@ def fix_sync(session: Session, root: Path, label: str, listener: Listener = lamb
     """Open upstream's synchronisation player for one trial, then accept its result and continue the run."""
     if not sync_player(session, root, label):
         return False
-    accept_checked_sync(session, label)
+    accept_checked_sync(session, root, label)
     save_session(session, root)
     return run_trial(session, root, label, listener, accept_sync=True)
