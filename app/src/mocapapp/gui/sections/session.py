@@ -1,6 +1,6 @@
 """Session section, the project's hub (PROJECT.md §16.3): with nothing open, start a project (new, open, sample data);
-with a project open, the first steps still to do, the trials table (R9) with its add row (R10), actions on the
-selected trials, the trial panel and the run bar (R15)."""
+with a project open, the first steps still to do, the trials table (R9), actions on the selected trials (Add trial and
+Edit open the trial dialog, R10) and the run bar (R15)."""
 
 from __future__ import annotations
 
@@ -17,7 +17,6 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
-    QInputDialog,
     QLabel,
     QLineEdit,
     QPushButton,
@@ -34,7 +33,6 @@ from mocapapp.core.validate import suggest_trials
 from mocapapp.core.workflow import MAX_TRIALS, create_project
 from mocapapp.gui.common import (
     Background,
-    NoWheelCombo,
     clear_table,
     confirm,
     error_box,
@@ -49,25 +47,13 @@ from mocapapp.gui.common import (
 )
 from mocapapp.gui.main_window import Section
 from mocapapp.gui.sections.run_bar import RunBar
-from mocapapp.gui.sections.trial_panel import TrialPanel
+from mocapapp.gui.trial_dialog import TrialDialog
 
 TITLES = {"session": "Session", "participants": "Participants", "cameras": "Cameras", "layouts": "Layouts"}
 COLUMNS = ["Trial", "Name / note", "Participant", "Layout", "Date", "Status", "", "", ""]
 STATUS = 5
 RUNS_AGAIN = ("ready", "failed", "stopped", "out of date")  # Run with nothing selected runs these
 ERRORS = (ValueError, KeyError, OSError)
-HIGHLIGHT = "QComboBox { background: #fff3cd; font-weight: bold; }"
-
-
-def choose_layout(parent, session) -> str | None:
-    """The layout for Change layout: its id, or None (cancelled)."""
-    names = [f"{x.name} ({x.date})" if x.date else x.name for x in session.layouts]
-    if not names:
-        error_box(parent, "No layouts yet", "Make a layout in Layouts first.")
-        return None
-    name, ok = QInputDialog.getItem(parent, "Change layout", "Layout the selected trials were recorded with:", names,
-                                    0, False)
-    return session.layouts[names.index(name)].id if ok else None
 
 
 def clean(exc: Exception) -> str:
@@ -207,10 +193,12 @@ class SessionSection(Section):
         actions = QHBoxLayout()
         self.buttons: dict[str, QPushButton] = {}
         for key, text, slot, tip in (
+                ("add", "Add trial ...", self.add, "A new trial, filled in like the previous one: participant, "
+                 "layout, name, date and its videos."),
+                ("edit", "Edit ...", self.edit, "The selected trial's participant, layout, date, name and videos, its "
+                 "check and copy results and its state (also: double-click a trial)."),
                 ("duplicate", "Duplicate", self.duplicate, "A new trial like each selected one: same participant, "
                  "layout and name; its own videos."),
-                ("layout", "Change layout ...", self.change_layout, "The layout the selected trials were recorded "
-                 "with."),
                 ("check", "Check and copy videos", lambda: self.check_and_copy(), "Checks the videos of the selected "
                  "trials and copies them into the project, each trial on its own (none selected: every trial whose "
                  "videos are chosen but not copied yet)."),
@@ -244,39 +232,9 @@ class SessionSection(Section):
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setWordWrap(True)
         self.table.itemSelectionChanged.connect(self._selection_changed)
+        self.table.cellDoubleClicked.connect(lambda r, _c: self.edit(self.rows[r] if r < len(self.rows) else None))
         tl.addWidget(self.table)
-
-        add = QHBoxLayout()  # R10: pre-filled from the previous trial, editable before Add
-        add.addWidget(QLabel("<b>Add a trial:</b> participant"))
-        self.add_who = NoWheelCombo()
-        self.add_who.setStyleSheet(HIGHLIGHT)
-        self.add_who.setSizeAdjustPolicy(NoWheelCombo.SizeAdjustPolicy.AdjustToContents)
-        self.add_who.setToolTip("Who is recorded in the new trial. Pre-filled: the previous trial's participant "
-                                "while they have fewer trials than 'trials per participant', otherwise a participant "
-                                "without trials, otherwise a new one.")
-        add.addWidget(self.add_who)
-        add.addWidget(QLabel("layout"))
-        self.add_layout = NoWheelCombo()
-        self.add_layout.setSizeAdjustPolicy(NoWheelCombo.SizeAdjustPolicy.AdjustToContents)
-        add.addWidget(self.add_layout, 1)
-        add.addWidget(QLabel("name"))
-        self.add_name = QLineEdit()
-        self.add_name.setPlaceholderText("e.g. walking")
-        add.addWidget(self.add_name, 1)
-        add.addWidget(QLabel("date"))
-        self.add_date = QLineEdit()
-        self.add_date.setPlaceholderText("from the videos")
-        self.add_date.setToolTip("Empty: the day the videos were recorded (or today). Otherwise YYYY-MM-DD.")
-        self.add_date.setMaximumWidth(110)
-        add.addWidget(self.add_date)
-        self.add_button = QPushButton("Add")
-        self.add_button.clicked.connect(self.add)
-        add.addWidget(self.add_button)
-        tl.addLayout(add)
         layout.addWidget(trials)
-        self.panel = TrialPanel(self)
-        self.panel.setVisible(False)
-        layout.addWidget(self.panel)
         layout.addStretch()
         return w
 
@@ -304,7 +262,6 @@ class SessionSection(Section):
             self.suggested = {}
         self.checks = {k: v for k, v in self.checks.items() if k in {t.label for t in ses.trials}}
         self._fill_table()
-        self._fill_add_row()
 
     # ---------- the table ----------
 
@@ -395,9 +352,7 @@ class SessionSection(Section):
         return [self.rows[r] for r in selected_rows(self.table) if r < len(self.rows)]
 
     def _selection_changed(self) -> None:
-        labels = self.selected()
         self._enable()
-        self.panel.show_trial(labels[0] if len(labels) == 1 else None, self.suggested)
 
     def _enable(self) -> None:
         if self.session is None:
@@ -410,8 +365,9 @@ class SessionSection(Section):
         self.start_over.setEnabled(not busy)
         for key in ("duplicate", "remove"):
             self.buttons[key].setEnabled(not busy and n > 0)
-        for key in ("layout", "raw"):
-            self.buttons[key].setEnabled(not busy and bool(open_))
+        self.buttons["raw"].setEnabled(not busy and bool(open_))
+        self.buttons["add"].setEnabled(not busy)
+        self.buttons["edit"].setEnabled(n == 1)  # while the app works it opens to look (Save waits)
         self.buttons["check"].setEnabled(not busy and bool(self.session.trials))
         self.buttons["forms"].setEnabled(bool(self.session.active_participants))
         for key, text in (("sync", "Fix sync"), ("accept", "Accept sync as is")):
@@ -423,10 +379,6 @@ class SessionSection(Section):
                           ("check", "Check and copy videos")):
             dots = " ..." if key in ("remove", "raw") else ""
             self.buttons[key].setText(text + (f" ({n})" if n > 1 else "") + dots)
-        self.add_button.setEnabled(not busy)
-        shown = self.panel.label
-        self.panel.check_button.setEnabled(not busy and shown in self.rows and not self.session.trial(shown).frozen
-                                           and self.session.trial_layout(shown) is not None)
 
     def changed(self, keep: list[str] | None = None) -> None:
         """Something changed the project: this section (keeping these trials selected), the others, the badges."""
@@ -438,36 +390,25 @@ class SessionSection(Section):
         self.changed()
         self.completeChanged.emit()
 
-    # ---------- adding a trial (R10) ----------
+    # ---------- adding and editing a trial (R10) ----------
 
-    def _fill_add_row(self) -> None:
-        ses = self.session
-        self.add_who.clear()
-        self.add_who.addItem("New participant (random pseudonym)", None)
-        for p in ses.active_participants:
-            n = len(ses.trials_of(p.label))
-            self.add_who.addItem(f"{p.code} ({n} trial{'' if n == 1 else 's'})", p.label)
-        self.add_who.setCurrentIndex(max(0, self.add_who.findData(workflow.default_participant(ses))))
-        self.add_layout.clear()
-        self.add_layout.addItem("(none yet)", "")
-        for lay in ses.layouts:
-            self.add_layout.addItem(f"{lay.name} ({lay.date})" if lay.date else lay.name, lay.id)
-        last = ses.trials[-1] if ses.trials else None
-        self.add_layout.setCurrentIndex(max(0, self.add_layout.findData(workflow.default_layout(ses))))
-        self.add_layout.fit_items()
-        self.add_name.setText(last.name if last else "")
-        self.add_date.clear()
+    def open_dialog(self, label: str | None) -> TrialDialog:
+        """The trial dialog (label None: a new trial). Returns it after it closed."""
+        dlg = TrialDialog(self, label)
+        dlg.exec()
+        if dlg.saved is not None:
+            self.changed(keep=[dlg.saved])
+            if dlg.check_after:
+                self.check_and_copy([dlg.saved])
+        return dlg
 
     def add(self) -> None:
-        layout = self.add_layout.currentData() or ""
-        try:
-            trial = workflow.add_trial(self.session, self.root, participant=self.add_who.currentData(),
-                                       layout=layout, name=self.add_name.text(),
-                                       date=self.add_date.text().strip() or None)
-        except ERRORS as exc:
-            error_box(self, "Trial not added", clean(exc))
-            return
-        self.changed(keep=[trial.label])  # its panel opens: choose (or accept the suggested) videos there
+        self.open_dialog(None)
+
+    def edit(self, label: str | None = None) -> None:
+        labels = [label] if label else self.selected()
+        if len(labels) == 1:
+            self.open_dialog(labels[0])
 
     # ---------- actions on the selected trials ----------
 
@@ -475,15 +416,6 @@ class SessionSection(Section):
         copies = for_each(self, "Not duplicated", self.selected(),
                           lambda lb: workflow.duplicate_trial(self.session, self.root, lb), ERRORS)
         self.changed(keep=[t.label for t in copies])
-
-    def change_layout(self) -> None:
-        labels = self.selected()
-        lid = choose_layout(self, self.session) if labels else None
-        if lid is None:
-            return
-        for_each(self, "Layout not changed", labels,
-                 lambda lb: workflow.set_trial_layout(self.session, self.root, lb, lid), ERRORS)
-        self.changed(keep=labels)
 
     def waiting_for_copy(self) -> list[str]:
         """Trials whose videos are all chosen but not checked and copied yet."""
@@ -499,8 +431,8 @@ class SessionSection(Section):
     def check_and_copy(self, labels: list[str] | None = None) -> None:
         labels = [lb for lb in (labels or self.selected()) if lb] or self.waiting_for_copy()
         if not labels:
-            error_box(self, "Nothing to check", "Choose the videos of a trial first (select it: its panel opens "
-                      "below the table), or select the trials to check again.")
+            error_box(self, "Nothing to check", "Choose the videos of a trial first (select it and press Edit), "
+                      "or select the trials to check again.")
             return
         self.win.set_busy(True)
         self.show_status()

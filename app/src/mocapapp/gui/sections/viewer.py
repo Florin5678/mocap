@@ -19,12 +19,13 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
-    QListWidget,
-    QListWidgetItem,
     QPushButton,
+    QScrollArea,
     QSlider,
-    QSplitter,
     QTableView,
+    QTreeWidget,
+    QTreeWidgetItem,
+    QTreeWidgetItemIterator,
     QVBoxLayout,
     QWidget,
 )
@@ -37,6 +38,8 @@ LEFT, RIGHT, MIDDLE, EXTRA = QColor("#1f77b4"), QColor("#d62728"), QColor("#4444
 DEFAULT_ANGLES = ["arm_flex_r", "elbow_flex_r"]
 NO_PARENT = QModelIndex()
 SPEEDS = [("0.25x", 0.25), ("0.5x", 0.5), ("1x", 1.0), ("2x", 2.0)]
+COLUMN = Qt.ItemDataRole.UserRole  # a leaf of the columns tree: the table column it stands for
+PLOT_HEIGHT, LEGEND_ROW = 340, 20  # pixels: the plot's height, and what each row of its legend adds
 
 
 def side(name: str) -> QColor:
@@ -263,8 +266,11 @@ class Viewer(Page):
         self.filter_edit = QLineEdit()
         self.filter_edit.setPlaceholderText("Filter, e.g. arm, elbow, _r, RWrist")
         self.filter_edit.textChanged.connect(self._filter_columns)
-        self.columns = QListWidget()
+        # grouped by body part (0.2.0rc3): region > part > (marker >) column; ticking a group ticks all in it
+        self.columns = QTreeWidget()
+        self.columns.setHeaderHidden(True)
         self.columns.itemChanged.connect(self._column_toggled)
+        self._sync_pending = False
         self.compare_box = QCheckBox("Compare all trials")
         self.compare_box.setToolTip("Plot the ticked columns of every trial with results (and the imported Pose2Sim "
                                     "data) on top of each other.")
@@ -285,6 +291,8 @@ class Viewer(Page):
         side_panel.setLayout(left)
         side_panel.setMaximumWidth(300)
 
+        # plot, summary and table one under the other in a scrolled area: comparing many trials makes the legend
+        # and the summary longer, and the page scrolls instead of the plot getting smaller (0.2.0rc3)
         self.plot_area = QVBoxLayout()
         self.summary = QLabel()
         self.summary.setWordWrap(True)
@@ -293,18 +301,17 @@ class Viewer(Page):
         self.table_view = QTableView()
         self.table_view.setModel(self.table_model)
         self.table_view.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
-        top = QWidget()
-        tl = QVBoxLayout(top)
-        tl.setContentsMargins(0, 0, 0, 0)
-        tl.addLayout(self.plot_area, 1)
-        tl.addWidget(self.summary)
-        split = QSplitter(Qt.Orientation.Vertical)
-        split.addWidget(top)
-        split.addWidget(self.table_view)
-        split.setStretchFactor(0, 3)
-        split.setStretchFactor(1, 1)
+        self.table_view.setMinimumHeight(240)
+        content = QWidget()
+        cl = QVBoxLayout(content)
+        cl.addLayout(self.plot_area)
+        cl.addWidget(self.summary)
+        cl.addWidget(self.table_view, 1)
+        self.data_scroll = QScrollArea()
+        self.data_scroll.setWidgetResizable(True)
+        self.data_scroll.setWidget(content)
         outer.addWidget(side_panel)
-        outer.addWidget(split, 1)
+        outer.addWidget(self.data_scroll, 1)
         return w
 
     def _ensure_plot(self) -> None:
@@ -315,7 +322,7 @@ class Viewer(Page):
 
         self.figure = Figure(figsize=(6, 3.2), layout="constrained")
         self.canvas = FigureCanvasQTAgg(self.figure)
-        self.canvas.setMinimumHeight(220)
+        self.canvas.setMinimumHeight(PLOT_HEIGHT)
         self.plot_area.addWidget(NavigationToolbar2QT(self.canvas, self))
         self.plot_area.addWidget(self.canvas, 1)
         self.axes = self.figure.add_subplot()
@@ -438,7 +445,7 @@ class Viewer(Page):
 
     def _tick(self) -> None:
         """Real-time playback (frames are skipped rather than slowed down when drawing is slow)."""
-        if self.markers is None or not self.isVisible():
+        if self.markers is None or not self.view.isVisible():  # the 3D tab (this page itself is never shown)
             self.timer.stop()
             self.play_button.setText("Play")
             return
@@ -471,12 +478,7 @@ class Viewer(Page):
             if kind == "markers" and not self.checked["markers"]:
                 wrist = next((c for c in table.columns if c.startswith("RWrist")), None)
                 self.checked["markers"] = {wrist.rsplit(" ", 1)[0] + " Y"} if wrist else set()
-            for c in table.columns:
-                item = QListWidgetItem(f"{c} ({table.unit(c)})")
-                item.setData(Qt.ItemDataRole.UserRole, c)
-                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-                item.setCheckState(Qt.CheckState.Checked if c in self.checked[kind] else Qt.CheckState.Unchecked)
-                self.columns.addItem(item)
+            self._fill_tree(table, self.checked[kind])
         self.columns.blockSignals(False)
         self._filter_columns(self.filter_edit.text())
         if table is None:
@@ -487,25 +489,85 @@ class Viewer(Page):
         self.csv_button.setEnabled(table is not None)
         self.plot()
 
-    def ticked(self) -> list[str]:
+    def _fill_tree(self, table: outputs.Table, checked: set[str]) -> None:
+        """The columns grouped by body part: region > part > (marker >) column, regions in body order."""
+        flags = Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled
+        nodes: dict[tuple, QTreeWidgetItem] = {}
+        groups = {c: outputs.column_group(c) for c in table.columns}
+        order = sorted(table.columns, key=lambda c: outputs.REGIONS.index(groups[c][0]))
+        for c in order:
+            region, part, marker = groups[c]
+            path = [region] + ([part] if part != region else []) + ([marker] if marker else [])
+            parent, key = self.columns.invisibleRootItem(), ()
+            for name in path:
+                key += (name,)
+                if key not in nodes:
+                    node = QTreeWidgetItem([name])
+                    node.setFlags(flags | Qt.ItemFlag.ItemIsAutoTristate)
+                    node.setCheckState(0, Qt.CheckState.Unchecked)
+                    parent.addChild(node)
+                    nodes[key] = node
+                parent = nodes[key]
+            text = f"{c.rsplit(' ', 1)[1]} ({table.unit(c)})" if marker else f"{c} ({table.unit(c)})"
+            leaf = QTreeWidgetItem([text])
+            leaf.setData(0, COLUMN, c)
+            leaf.setToolTip(0, c)
+            leaf.setFlags(flags | Qt.ItemFlag.ItemIsSelectable)
+            parent.addChild(leaf)
+            leaf.setCheckState(0, Qt.CheckState.Checked if c in checked else Qt.CheckState.Unchecked)
+        for i in range(self.columns.topLevelItemCount()):  # the regions open; the groups with ticked columns too
+            self.columns.topLevelItem(i).setExpanded(True)
+        for leaf in self.leaves():
+            if leaf.checkState(0) == Qt.CheckState.Checked:
+                node = leaf.parent()
+                while node is not None:
+                    node.setExpanded(True)
+                    node = node.parent()
+
+    def leaves(self) -> list[QTreeWidgetItem]:
+        """The tree's columns, in tree order."""
         out = []
-        for i in range(self.columns.count()):
-            item = self.columns.item(i)
-            if item.checkState() == Qt.CheckState.Checked:
-                out.append(item.data(Qt.ItemDataRole.UserRole))
+        it = QTreeWidgetItemIterator(self.columns)
+        while it.value() is not None:
+            item = it.value()
+            if item.data(0, COLUMN):
+                out.append(item)
+            it += 1
         return out
 
-    def _column_toggled(self, item: QListWidgetItem) -> None:
-        name = item.data(Qt.ItemDataRole.UserRole)
-        group = self.checked[self.dataset_box.currentData()]
-        (group.add if item.checkState() == Qt.CheckState.Checked else group.discard)(name)
+    def leaf(self, column: str) -> QTreeWidgetItem | None:
+        return next((x for x in self.leaves() if x.data(0, COLUMN) == column), None)
+
+    def ticked(self) -> list[str]:
+        return [x.data(0, COLUMN) for x in self.leaves() if x.checkState(0) == Qt.CheckState.Checked]
+
+    def _column_toggled(self, _item: QTreeWidgetItem, _col: int = 0) -> None:
+        """Ticking a group changes each column in it: plot once, after all of them."""
+        if not self._sync_pending:
+            self._sync_pending = True
+            QTimer.singleShot(0, self._sync_ticked)
+
+    def _sync_ticked(self) -> None:
+        self._sync_pending = False
+        self.checked[self.dataset_box.currentData()] = set(self.ticked())
         self.plot()
 
     def _filter_columns(self, text: str) -> None:
         words = text.lower().split()
-        for i in range(self.columns.count()):
-            item = self.columns.item(i)
-            item.setHidden(bool(words) and not all(w in item.text().lower() for w in words))
+
+        def show(item: QTreeWidgetItem) -> bool:
+            if item.data(0, COLUMN):
+                name = f"{item.data(0, COLUMN)} {item.text(0)}".lower()
+                visible = not words or all(w in name for w in words)
+            else:
+                visible = any([show(item.child(i)) for i in range(item.childCount())])
+                if words and visible:
+                    item.setExpanded(True)
+            item.setHidden(not visible)
+            return visible
+
+        for i in range(self.columns.topLevelItemCount()):
+            show(self.columns.topLevelItem(i))
 
     def plot(self) -> None:
         if self.trial_box.currentData() is None:
@@ -513,6 +575,9 @@ class Viewer(Page):
         self._ensure_plot()
         ax = self.axes
         ax.clear()
+        for old in list(self.figure.legends):
+            old.remove()
+        self.canvas.setMinimumHeight(PLOT_HEIGHT)
         self.cursor = None
         columns = self.ticked()
         speed = self.speed_plot_box.isChecked()
@@ -557,7 +622,13 @@ class Viewer(Page):
         ax.set_xlabel("time (s)")
         ax.set_ylabel(("speed" if speed else "value") + f" ({unit})")
         ax.grid(True, alpha=0.3)
-        ax.legend(fontsize="small", loc="best")
+        handles, names = ax.get_legend_handles_labels()
+        if len(handles) <= 4:
+            ax.legend(fontsize="small", loc="best")
+        else:  # many lines (Compare all trials): the legend goes under the plot, which grows; the page scrolls
+            ncols = 3 if len(handles) > 8 else 2
+            self.figure.legend(handles, names, loc="outside lower center", ncols=ncols, fontsize="small")
+            self.canvas.setMinimumHeight(PLOT_HEIGHT + LEGEND_ROW * math.ceil(len(handles) / ncols))
         if self.markers is not None:
             t = self.markers.time[min(self.slider.value(), len(self.markers.time) - 1)]
             self.cursor = ax.axvline(t, color="#888888", linewidth=1, linestyle="--")

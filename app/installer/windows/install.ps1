@@ -7,10 +7,12 @@ Bootstraps a private, pinned environment - nothing is installed system-wide and 
   3. Python 3.12 + locked dependencies (uv.lock)      -> <Prefix>\python, <Prefix>\venv
   4. the pose-estimation models (once; then offline)  -> %USERPROFILE%\.cache\rtmlib
   5. Start-menu and desktop shortcuts, and double-click opening of project files (.mocapproj)
-Re-running it updates/repairs the installation. Session folders are never touched.
+Re-running it updates/repairs the installation. Installed into another folder (-Prefix, or the folder chosen in
+the setup), it then removes the earlier installation's programs from the old folder. Session folders are never
+touched.
 #>
 param(
-    [string]$Ref = "mocapapp-v0.2.0rc2",           # git tag (or branch) of https://github.com/Florin5678/mocap
+    [string]$Ref = "mocapapp-v0.2.0rc3",           # git tag (or branch) of https://github.com/Florin5678/mocap
     [string]$Source = "",                          # use a local checkout instead of downloading (testing)
     [string]$Prefix = (Join-Path $env:LOCALAPPDATA "mocapapp"),
     [switch]$NoModels,
@@ -32,6 +34,7 @@ $Repo = "https://github.com/Florin5678/mocap"
 $Pose2SimVersion = "0.10.48+mocapapp"
 $Steps = 6
 $FileType = "mocapapp.project"                     # registry class of .mocapproj files (uninstall.ps1 removes it)
+$Installed = @("venv", "python", "uv", "src", "src-new", "cache", "install.json", "install.log")  # = uninstall.ps1
 $script:Step = 0
 
 # .NET instead of Expand-Archive and Get-FileHash: those come from script modules that fail to load when
@@ -55,6 +58,16 @@ function Finish([int]$Code) {
 }
 
 New-Item -ItemType Directory -Force -Path $Prefix | Out-Null
+$Prefix = (Resolve-Path $Prefix).Path
+
+# An earlier installation in another folder (found through the project file type it registered, or in the
+# default folder): its programs are removed at the end, once this one works and the shortcuts point here.
+$OldPrefixes = @()
+$opener = (Get-ItemProperty -ErrorAction SilentlyContinue "HKCU:\Software\Classes\$FileType\shell\open\command").'(default)'
+if ($opener -match '^"([^"]+)"') { $OldPrefixes += (Split-Path (Split-Path (Split-Path $Matches[1]))) }  # <prefix>/venv/Scripts/mocapapp-gui.exe
+$OldPrefixes += (Join-Path $env:LOCALAPPDATA "mocapapp")
+$OldPrefixes = @($OldPrefixes | Where-Object { (Test-Path (Join-Path $_ "install.json")) -and
+    ((Resolve-Path $_).Path.TrimEnd("\") -ne $Prefix.TrimEnd("\")) } | Select-Object -Unique)
 try { Start-Transcript -Path (Join-Path $Prefix "install.log") -Force | Out-Null } catch {}
 Write-Host "Installing mocapapp ($Ref) into $Prefix" -ForegroundColor Green
 Write-Host "This needs an internet connection and takes about 10-30 minutes. Research use only."
@@ -123,8 +136,10 @@ try {
     }
 
     # 5. check ------------------------------------------------------------------------------------
+    # the disk-space check looks at the drive where the projects are kept (from the app's settings), or
+    # at this installation's drive before there are any
     Step "Checking the installation ..."
-    & $exe doctor --dir $env:USERPROFILE
+    & $exe doctor
     $doctorOk = ($LASTEXITCODE -eq 0)
 
     # 6. shortcuts --------------------------------------------------------------------------------
@@ -157,6 +172,23 @@ public static extern void SHChangeNotify(int eventId, int flags, System.IntPtr i
     @{ ref = $Ref; version = "$version"; installed = (Get-Date -Format s); prefix = $Prefix } |
         ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $Prefix "install.json")
 
+    # the earlier installation in another folder: only once the shortcuts and the file type point here
+    if (-not $NoShortcuts) {
+        foreach ($old in $OldPrefixes) {
+            Write-Host "Removing the earlier installation's programs from $old (your projects are not touched) ..."
+            $ErrorActionPreference = "Continue"
+            foreach ($name in ($Installed + "setup")) {
+                $path = Join-Path $old $name
+                if (Test-Path $path) { Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $path }
+            }
+            if ((Test-Path $old) -and -not (Get-ChildItem -Force $old)) { Remove-Item -Force $old }
+            if (Test-Path (Join-Path $old "venv")) {
+                Write-Host "Some of it is in use (is the old app still open?); delete $old later to free the space." -ForegroundColor Yellow
+            }
+            $ErrorActionPreference = "Stop"
+        }
+    }
+
     Write-Host ""
     $where = if ($NoShortcuts) { "with $gui" } else { "from the Start menu or the desktop: mocapapp" }
     if ($doctorOk) { Write-Host "Done: $version is installed. Start it $where." -ForegroundColor Green }
@@ -166,7 +198,9 @@ public static extern void SHChangeNotify(int eventId, int flags, System.IntPtr i
 catch {
     Write-Host ""
     Write-Host "Installation stopped at step $script:Step : $($_.Exception.Message)" -ForegroundColor Red
-    Write-Host "What to do: check the internet connection and free disk space (about 10 GB), then run the installer again;"
+    $drive = [System.IO.Path]::GetPathRoot($Prefix)
+    Write-Host "What to do: check the internet connection and the free space on $drive (the app needs about 4 GB there),"
+    Write-Host "then run the installer again (or choose a folder on another drive);"
     Write-Host "finished steps are reused. The full log is $(Join-Path $Prefix 'install.log')."
     Finish 1
 }

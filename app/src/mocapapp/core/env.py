@@ -72,14 +72,35 @@ def _models_check() -> Check:
                  "app download them at first start.")
 
 
-def _disk_check(path: Path) -> Check:
+def _existing(path: Path) -> Path:
+    """The folder itself, or its nearest parent that exists (a projects folder may not be made yet)."""
+    path = Path(path).absolute()
+    while not path.exists() and path.parent != path:
+        path = path.parent
+    return path
+
+
+def _disk_check(projects: Path | None) -> Check:
+    """Processing writes into the project folders, so their drive is the one that needs the space. Before any
+    project exists, the drive the app is installed on is checked instead."""
+    path = _existing(projects if projects else Path(sys.prefix))
     free_gb = shutil.disk_usage(path).free / 1e9
     ok = free_gb >= MIN_FREE_GB
-    return Check("Free disk", ok, f"{free_gb:.1f} GB free on {path.anchor}",
-                 "" if ok else f"Free up space: processing needs roughly {MIN_FREE_GB} GB or more.")
+    drive = path.anchor or str(path)
+    where = "where the projects are" if projects else "where the app is installed; no projects folder yet"
+    if ok:
+        fix = ""
+    elif projects:
+        fix = (f"Free up space on {drive}, or keep new projects on a drive with more space (Help > Settings): "
+               f"processing needs roughly {MIN_FREE_GB} GB or more.")
+    else:
+        fix = (f"Processing needs roughly {MIN_FREE_GB} GB or more on the drive where the projects are stored: "
+               f"put your first project on a drive with enough space, or free up space on {drive}.")
+    return Check("Free disk", ok, f"{free_gb:.1f} GB free on {drive} ({where})", fix)
 
 
 def run_checks(work_dir: Path | None = None) -> list[Check]:
+    """`work_dir`: the folder where projects are stored, for the disk-space check (None: not known yet)."""
     py_ok = (3, 11) <= sys.version_info[:2] <= (3, 13)
     checks = [
         Check("Python", py_ok, f"{platform.python_version()} ({sys.executable})",
@@ -90,6 +111,6 @@ def run_checks(work_dir: Path | None = None) -> list[Check]:
         _accelerator_check(),
         _ffmpeg_check(),
         _models_check(),
-        _disk_check(work_dir or Path.cwd()),
+        _disk_check(work_dir),
     ]
     return checks

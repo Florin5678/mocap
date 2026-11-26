@@ -1,5 +1,6 @@
 <#
-Removes what install.ps1 created: the private Python, environment, app source and shortcuts.
+Removes what install.ps1 created: the private Python, environment, app source and shortcuts. -Prefix is the
+folder it was installed into (the setup's uninstaller passes it).
 Session folders (your data) are never touched. The pose models in %USERPROFILE%\.cache\rtmlib are kept
 unless -Models is given (other Pose2Sim/rtmlib installations may share them).
 #>

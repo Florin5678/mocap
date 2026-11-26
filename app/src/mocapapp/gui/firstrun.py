@@ -5,14 +5,14 @@ from __future__ import annotations
 from PySide6.QtCore import QEventLoop, Qt
 from PySide6.QtWidgets import QApplication, QMessageBox, QProgressDialog, QWidget
 
-from mocapapp.gui.common import Background, error_box, settings
+from mocapapp.gui.common import Background, error_box, projects_folder, settings
 
 
 def problems() -> list:
     """Failed checks other than the models (offered separately) - never a stack trace."""
     from mocapapp.core.env import run_checks
 
-    return [c for c in run_checks(None) if not c.ok and c.name != "Pose models"]
+    return [c for c in run_checks(projects_folder()) if not c.ok and c.name != "Pose models"]
 
 
 def show_problems(parent: QWidget | None, failed: list) -> None:
@@ -64,7 +64,7 @@ def offer_models(parent: QWidget | None, ask: bool = True, on_finished=None) -> 
 def copy_diagnostics(parent: QWidget | None) -> None:
     from mocapapp.core.diagnostics import diagnostics_text
 
-    QApplication.clipboard().setText(diagnostics_text())
+    QApplication.clipboard().setText(diagnostics_text(projects_folder()))
     QMessageBox.information(parent, "Diagnostics copied",
                             "Versions and environment checks were copied to the clipboard (your user name and "
                             "home folder are replaced; no session or participant data is included). Paste them "

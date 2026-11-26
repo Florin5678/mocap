@@ -7,10 +7,22 @@ import sys
 from pathlib import Path
 
 
+def _projects_folder(given: str | None) -> Path | None:
+    """--dir, else where the app keeps projects (its settings), else None."""
+    if given:
+        return Path(given)
+    try:
+        from mocapapp.gui.common import projects_folder
+
+        return projects_folder()
+    except Exception:  # the settings could not be read: the check falls back to the app's own drive
+        return None
+
+
 def _cmd_doctor(args: argparse.Namespace) -> int:
     from mocapapp.core.env import run_checks
 
-    checks = run_checks(Path(args.dir) if args.dir else None)
+    checks = run_checks(_projects_folder(args.dir))
     for c in checks:
         mark = "OK  " if c.ok else "FAIL"
         print(f"[{mark}] {c.name}: {c.detail}")
@@ -109,6 +121,24 @@ def _print_details(session) -> None:
         kind = {"number": f"number{f' ({d.unit})' if d.unit else ''}", "choice": "choice: " + " / ".join(d.choices),
                 "text": "text"}[d.kind]
         print(f"  [{'x' if d.enabled else ' '}] {d.key}: {d.label} - {kind}{'' if d.builtin else ' (custom)'}")
+
+
+def _cmd_session_import(args: argparse.Namespace) -> int:
+    """Participants and their details from a CSV file (0.2.0rc3; as Participants > Import CSV in the app)."""
+    from mocapapp.core.participants_csv import example_header, import_participants
+    from mocapapp.core.session import load_session
+    from mocapapp.core.workflow import SetupError
+
+    root = Path(args.session)
+    session = load_session(root)
+    try:
+        result = import_participants(session, root, Path(args.file))
+    except (OSError, SetupError) as exc:
+        print(exc)
+        print(f"The first row names the columns, for this project: {example_header(session)}")
+        return 1
+    print(result.summary())
+    return 0
 
 
 def _cmd_session_details(args: argparse.Namespace) -> int:
@@ -719,7 +749,7 @@ def _cmd_models(args: argparse.Namespace) -> int:
 def _cmd_diagnostics(args: argparse.Namespace) -> int:
     from mocapapp.core.diagnostics import diagnostics_text
 
-    print(diagnostics_text())
+    print(diagnostics_text(_projects_folder(None)))
     return 0
 
 
@@ -810,7 +840,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     doctor = sub.add_parser("doctor", help="check that everything needed is installed")
-    doctor.add_argument("--dir", help="folder where sessions will be stored (for the disk-space check)")
+    doctor.add_argument("--dir", help="folder where projects are stored, for the disk-space check (default: the "
+                        "app's folder for new projects, else the last project's folder, else the app's own drive)")
     doctor.set_defaults(func=_cmd_doctor)
 
     mod = sub.add_parser("models", help="check or download the pose-estimation models (needed once, then offline)")
@@ -904,6 +935,10 @@ def build_parser() -> argparse.ArgumentParser:
     mv.add_argument("--to", required=True, help="the new output folder; the session folder moves into it")
     mv.add_argument("--dry-run", action="store_true", help="only check and show what would happen")
     mv.set_defaults(func=_cmd_session_move)
+    si = ssub.add_parser("import", help="add or update participants from a CSV file (Pseudonym, Height, Weight ...)")
+    si.add_argument("--session", required=True)
+    si.add_argument("file", help="CSV file, first row = column names; consent is never imported")
+    si.set_defaults(func=_cmd_session_import)
     sd = ssub.add_parser("details", help="which participant details are asked for every trial")
     sd.add_argument("--session", required=True)
     sd.add_argument("--enable", action="append", metavar="KEY", help="ask this detail (e.g. weight)")

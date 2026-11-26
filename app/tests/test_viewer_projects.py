@@ -145,9 +145,11 @@ def test_save_and_open_project_at_its_step(qtbot, tmp_path, monkeypatch):
 
 
 def test_viewer_shows_and_compares_trials(qtbot, tmp_path, monkeypatch):
+    from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QFileDialog
 
     from mocapapp.gui.main_window import MainWindow
+    from mocapapp.gui.sections import viewer as viewer_mod
 
     root = tmp_path / "S"
     _wizard_done(root, monkeypatch)
@@ -165,8 +167,11 @@ def test_viewer_shows_and_compares_trials(qtbot, tmp_path, monkeypatch):
     v.slider.setValue(10)
     assert v.view.frame == 10 and "frame 11/20" in v.time_label.text()
     v.view.grab()  # paints without errors
+    win.show()
     v.toggle_play()
     assert v.timer.isActive() and v.play_button.text() == "Pause"
+    qtbot.waitUntil(lambda: v.slider.value() != 10, timeout=3000)  # it really plays (0.2.0rc1-rc2 stopped at once)
+    assert v.timer.isActive()
     v.toggle_play()
     assert not v.timer.isActive()
 
@@ -177,13 +182,29 @@ def test_viewer_shows_and_compares_trials(qtbot, tmp_path, monkeypatch):
     assert "(trial 2)" in v.summary.text() and "max 99.7" in v.summary.text()
     v.speed_plot_box.setChecked(True)
     assert "deg/s" in v.axes.get_ylabel()
+    v.speed_plot_box.setChecked(False)
+    # the columns are grouped by body part; ticking a group ticks every column in it
+    regions = [v.columns.topLevelItem(i).text(0) for i in range(v.columns.topLevelItemCount())]
+    assert regions == ["Trunk and pelvis", "Right arm"]  # in body order
+    elbow = v.leaf("elbow_flex_r").parent()
+    assert elbow.text(0) == "Elbow and forearm" and elbow.parent().text(0) == "Right arm"
+    assert v.canvas.minimumHeight() == viewer_mod.PLOT_HEIGHT and not v.figure.legends
+    assert v.leaf("pelvis_tx").parent().text(0) == "Pelvis"
+    v.leaf("pelvis_tx").parent().parent().setCheckState(0, Qt.CheckState.Checked)  # the region: Trunk and pelvis
+    assert v.ticked() == ["pelvis_tx", "arm_flex_r", "elbow_flex_r"]  # 3 columns x 2 trials: 6 lines
+    qtbot.waitUntil(lambda: bool(v.figure.legends))  # many lines: the legend goes under the plot, which grows
+    assert v.canvas.minimumHeight() > viewer_mod.PLOT_HEIGHT and v.data_scroll.widgetResizable()
 
     v.dataset_box.setCurrentIndex(1)  # marker positions: starts with the right wrist's height ticked
     assert v.ticked() == [] or all(c.endswith(" Y") for c in v.ticked())
     v.filter_edit.setText("hip x")
-    shown = [v.columns.item(i).text() for i in range(v.columns.count()) if not v.columns.item(i).isHidden()]
-    assert shown == ["Hip X (m)", "RHip X (m)", "LHip X (m)"]
-    v.columns.item(0).setCheckState(v.columns.item(0).checkState().Checked)
+    shown = [x.data(0, viewer_mod.COLUMN) for x in v.leaves() if not x.isHidden()]
+    assert shown == ["Hip X", "RHip X", "LHip X"]
+    visible = [v.columns.topLevelItem(i).text(0) for i in range(v.columns.topLevelItemCount())
+               if not v.columns.topLevelItem(i).isHidden()]
+    assert visible == ["Trunk and pelvis", "Right leg", "Left leg"]
+    assert v.leaf("RHip X").text(0) == "X (m)" and v.leaf("RHip X").parent().text(0) == "RHip"
+    v.leaf("Hip X").setCheckState(0, Qt.CheckState.Checked)
     assert "Hip X" in v.ticked()
     monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: (str(tmp_path / "out.csv"), ""))
     v.save_csv()

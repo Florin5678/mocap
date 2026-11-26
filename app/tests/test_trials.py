@@ -253,9 +253,13 @@ def test_columns_dialog_and_participants_table(qtbot, tmp_path):
     people = win.section("participants")
     dlg = ColumnsDialog(people, session, tmp_path)
     qtbot.addWidget(dlg)
-    assert set(dlg.boxes) == {"weight", "handedness", "age", "sex"}  # height is always a column
-    assert dlg.boxes["sex"].text() == "Gender"
-    dlg.boxes["weight"].setChecked(True)
+    assert dlg.keys == ["height", "weight", "handedness", "age", "sex"]  # one row per detail
+    name, unit, kind, options, shown = dlg.widgets(dlg.keys.index("sex"))
+    assert name.text() == "Gender" and not name.isEnabled() and kind.currentData() == "choice"
+    assert not dlg.widgets(0)[4].isEnabled()  # height is always asked
+    dlg.widgets(dlg.keys.index("weight"))[4].setChecked(True)
+    assert [d.key for d in load_session(tmp_path).asked_details] == ["height"]  # nothing changes before Save
+    dlg.save()
     assert [d.key for d in load_session(tmp_path).asked_details] == ["height", "weight"]
     people.refresh()
     headers = [people.table.horizontalHeaderItem(c).text() for c in range(people.table.columnCount())]
@@ -266,3 +270,124 @@ def test_columns_dialog_and_participants_table(qtbot, tmp_path):
                         Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier, Qt.ScrollPhase.NoScrollPhase, False)
     QApplication.sendEvent(consent, event)
     assert consent.currentIndex() == before
+
+
+def test_details_table_adds_changes_and_removes(qtbot, tmp_path, monkeypatch):
+    """Participants > Columns: details as rows (name, unit, type, options, shown), saved together; a changed type
+    must fit the values entered; removing a detail removes its values (after asking)."""
+    from mocapapp.core.workflow import SetupError, set_details
+    from mocapapp.gui import columns_dialog
+    from mocapapp.gui.columns_dialog import ColumnsDialog
+
+    session = make_session(tmp_path)
+    save_session(session, tmp_path)
+    dlg = ColumnsDialog(None, session, tmp_path)
+    qtbot.addWidget(dlg)
+    r = dlg.add_row()
+    name, unit, kind, options, shown = dlg.widgets(r)
+    name.setText("Dominant leg")
+    kind.setCurrentIndex(kind.findData("choice"))
+    assert options.isEnabled() and not unit.isEnabled()
+    assert options.placeholderText() and not unit.placeholderText()  # an example only where one can type
+    options.setText("left, right")
+    dlg.add_row()  # left empty: ignored
+    dlg.save()
+    leg = session.detail("dominant_leg")
+    assert leg.choices == ["left", "right"] and leg.enabled and not leg.builtin
+    session.trials[0].details["dominant_leg"] = "left"
+    rows = [{"key": d.key, "label": d.label, "kind": d.kind, "unit": d.unit, "choices": d.choices,
+             "enabled": d.enabled} for d in session.details]
+    rows[-1]["kind"] = "number"
+    with pytest.raises(SetupError, match="do not fit"):
+        set_details(session, tmp_path, rows)
+    assert session.detail("dominant_leg").kind == "choice"
+    rows[-1].update(kind="choice", label="Leading leg", choices=["Left", "Right"])
+    set_details(session, tmp_path, rows)
+    assert session.detail("dominant_leg").label == "Leading leg" and session.trials[0].details["dominant_leg"] == "Left"
+    with pytest.raises(SetupError, match="built in"):
+        set_details(session, tmp_path, rows[1:])
+
+    dlg = ColumnsDialog(None, session, tmp_path)
+    qtbot.addWidget(dlg)
+    monkeypatch.setattr(columns_dialog, "confirm", lambda *a: True)
+    dlg.table.selectRow(dlg.keys.index("weight"))
+    assert not dlg.remove_button.isEnabled()  # built in: only unticked
+    dlg.table.clearSelection()
+    dlg.table.selectRow(dlg.keys.index("dominant_leg"))
+    assert dlg.remove_button.isEnabled()
+    dlg.remove_rows()
+    first, second = dlg.add_row(), dlg.add_row()  # a row removed above another: the type still changes its own row
+    dlg.table.clearSelection()
+    dlg.table.selectRow(first)
+    dlg.remove_rows()
+    kind, options = dlg.widgets(second - 1)[2], dlg.widgets(second - 1)[3]
+    kind.setCurrentIndex(kind.findData("choice"))
+    assert options.isEnabled()
+    dlg.save()
+    assert "dominant_leg" not in [d.key for d in load_session(tmp_path).details]
+    assert "dominant_leg" not in load_session(tmp_path).trials[0].details
+
+
+def test_import_participants_from_csv(tmp_path):
+    from mocapapp.core.participants_csv import import_participants
+    from mocapapp.core.workflow import SetupError, set_detail_enabled
+
+    session = make_session(tmp_path / "S")
+    save_session(session, tmp_path / "S")
+    root = tmp_path / "S"
+    set_detail_enabled(session, root, "weight", True)
+    first = session.participants[0].code
+    csv_file = tmp_path / "people.csv"
+    csv_file.write_text(f"Pseudonym;Height (m);Weight (kg);Shoe size\n{first};1,82;70;42\nNEWONE;175 cm;;\n;1.6;55;\n",
+                        encoding="utf-8-sig")
+    n = len(session.participants)
+    result = import_participants(session, root, csv_file)
+    assert result.updated == [first] and len(result.added) == 2 and "NEWONE" in result.added
+    assert result.ignored_columns == ["Shoe size"]
+    assert session.participants[0].height_m == pytest.approx(1.82)
+    assert all(t.details.get("weight") == "70" for t in session.trials_of(session.participants[0].label))
+    new = next(p for p in session.participants if p.code == "NEWONE")
+    assert new.height_m == pytest.approx(1.75) and session.trials_of(new.label)  # with trials for their details
+    assert len(session.participants) == n + 2 and len(load_session(root).participants) == n + 2
+
+    bad = tmp_path / "bad.csv"
+    bad.write_text("Pseudonym,Height,Weight\nAB,1.7,heavy\nJohn Smith,1.8,80\n", encoding="utf-8")
+    with pytest.raises(SetupError, match="Nothing was imported") as err:
+        import_participants(session, root, bad)
+    assert "row 2" in str(err.value) and "row 3" in str(err.value)
+    assert len(session.participants) == n + 2
+
+    from mocapapp.cli.main import main  # the same from the command line
+
+    again = tmp_path / "again.csv"
+    again.write_text("Pseudonym,Height\nNEWONE,1.77\n", encoding="utf-8")
+    assert main(["session", "import", "--session", str(root), str(again)]) == 0
+    assert next(p for p in load_session(root).participants if p.code == "NEWONE").height_m == pytest.approx(1.77)
+    assert main(["session", "import", "--session", str(root), str(bad)]) == 1
+
+
+def test_mouse_wheel_never_changes_values(qtbot, tmp_path):
+    """Scrolling over the calibration board's number boxes (or any number box or drop-down) leaves them as they
+    were (0.2.0rc3)."""
+    from PySide6.QtCore import QPoint, QPointF, Qt
+    from PySide6.QtGui import QWheelEvent
+    from PySide6.QtWidgets import QApplication, QLineEdit
+
+    from mocapapp.gui.main_window import MainWindow
+
+    session = make_session(tmp_path)
+    save_session(session, tmp_path)
+    win = MainWindow()
+    qtbot.addWidget(win)
+    win.set_session(tmp_path, session)
+    win.go("cameras")
+    cams = win.section("cameras")
+    for box in (cams.cols, cams.rows, cams.square, cams.board_type, cams.every):
+        before = box.currentIndex() if hasattr(box, "currentIndex") else box.value()
+        for target in [box] + box.findChildren(QLineEdit):  # also over the box's own text field
+            event = QWheelEvent(QPointF(5, 5), QPointF(target.mapToGlobal(QPoint(5, 5))), QPoint(0, 0),
+                                QPoint(0, 120), Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier,
+                                Qt.ScrollPhase.NoScrollPhase, False)
+            QApplication.sendEvent(target, event)
+        after = box.currentIndex() if hasattr(box, "currentIndex") else box.value()
+        assert after == before, box

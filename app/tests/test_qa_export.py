@@ -146,3 +146,21 @@ def test_export_again_replaces_a_trials_earlier_files(done_session, tmp_path):
     export(done_session, tmp_path, ["mot"])
     names = sorted(p.name for p in out.glob("T1-ABCDEF1_trial1_*"))
     assert names == ["T1-ABCDEF1_trial1_joint_angles.mot", "T1-ABCDEF1_trial1_model_scaled.osim"]
+
+
+def test_report_again_reuses_unchanged_3d_files(done_session, tmp_path, monkeypatch):
+    """The report is made again after changes elsewhere in the project: unchanged .trc files are not read again,
+    and their 3D previews are not written again (reading a long trial took seconds)."""
+    qa.write_report(done_session, tmp_path)
+    preview = Layout(tmp_path).qa / "trial_1_preview.html"
+    made = preview.stat().st_mtime_ns
+    reads = []
+    real = qa.read_trc
+    monkeypatch.setattr(qa, "read_trc", lambda p: reads.append(p) or real(p))
+    _path, results = qa.write_report(done_session, tmp_path)
+    assert reads == [] and preview.stat().st_mtime_ns == made
+    assert any(m.name.startswith("Feet height") for m in results[0].metrics)
+    trc = next((Layout(tmp_path).trial("1") / "pose-3d").glob("*_LSTM.trc"))
+    write_trc(trc, floor=0.3)  # a new result: read again
+    r = qa.trial_qa(done_session, tmp_path, "1")
+    assert reads and r.light == "red" and preview.stat().st_mtime_ns > made

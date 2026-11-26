@@ -472,14 +472,14 @@ mocapapp delete-session --session <dir>              # withdrawal
 
 **Session** (home)
 - Trials table (R9) with columns: Trial, Name/note, Participant, Layout, Status, row buttons (Run this trial, Fix sync ..., Accept as is). Header fixed, scrolls.
-- Add-trial row (R10) + **Add**. Videos for each layout camera are suggested by number (today's name rule) and confirmed in the trial panel.
-- Actions on selected trials: Run, Duplicate, Change layout, Check and copy videos, Delete raw footage ..., Remove trial ..., Generate consent forms.
+- **Add trial ...** (R10) opens the trial dialog, pre-filled from the previous trial. Videos for each layout camera are suggested by number (today's name rule) and confirmed in the dialog.
+- Actions on selected trials: Run, Add trial ..., Edit ..., Duplicate, Check and copy videos, Delete raw footage ..., Remove trial ..., Generate consent forms. (0.2.0rc3: the add row and *Change layout* were replaced by the dialog.)
 - Buttons: **Session settings ...**, **Run** (runs the selected trials; with none selected, every ready trial), and the **Start over (ignore finished stages)** checkbox next to it (R19).
 - Sync reminder next to the trials table: record a sync cue such as a clap at the start of every video (R18; no tick).
 - Bottom bar (R15): current stage and trial, overall progress, **Stop**, *Show Pose2Sim's own output*, time and disk estimate.
 - Empty project: a short checklist (add cameras → calibrate → reference points → layout → participants → first trial) linking to each section; sidebar badges (✓ or "N to do").
 
-**Trial panel** (opens on row click): participant, layout, date, name/note; video per camera (choose, suggested ones highlighted); *Check videos* results (fps, resolution vs the camera's calibration, length, sync); copy status and disk space; per-trial summary (today's *Before you run*); state and messages; layout-from-another-day warning with *Use this layout anyway* (R8).
+**Trial dialog** (*Edit ...* or a double-click; until 0.2.0rc3 a panel under the table): participant, layout, date, name/note; video per camera (choose, suggested ones highlighted); *Check videos* results (fps, resolution vs the camera's calibration, length, sync); copy status and disk space; per-trial summary (today's *Before you run*); state and messages; layout-from-another-day warning with *Use this layout anyway* (R8). A change that invalidates the trial's results (participant, layout, videos) warns, offers *Delete results and continue*, and asks to confirm again.
 
 **Participants**: R11 table, one row per participant (pseudonym, height, chosen columns, consent drop-down, consent form *Generate ...*); *Generate all consent forms ...*; *Edit columns ...*; issues (consent missing). A value entered here is written to all of that participant's trials (R12: stored per trial, as today's copy rule; no separate per-trial editor). Owner confirmed.
 

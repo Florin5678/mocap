@@ -11,10 +11,10 @@ This guide covers installing, using and troubleshooting the app. For how to film
 You need:
 
 - Windows 10/11, or macOS 15 (Sequoia) or newer;
-- about **10 GB** free disk space for the app, plus space for your videos;
+- about **4 GB** free disk space for the app, and **10 GB** or more where your projects are stored, plus space for your videos (the app and the projects can be on different drives);
 - an internet connection during installation only. Afterwards, the app works offline.
 
-**Windows:** run `mocapapp-setup.exe` and follow the steps. If Windows warns that it protected your PC, choose **More info > Run anyway** (the installer is not code-signed). The setup window shows progress while it downloads Python, the app and the pose models; this takes 10–30 minutes. When it finishes, start **mocapapp** from the Start menu or the desktop shortcut.
+**Windows:** run `mocapapp-setup.exe` and follow the steps. If Windows warns that it protected your PC, choose **More info > Run anyway** (the installer is not code-signed). The setup asks where to install the app: the default is your user folder on C:, and you can choose a folder on another drive with more space (for example `D:\mocapapp`). Installing again into another folder moves the app there and removes it from the old folder. The setup window shows progress while it downloads Python, the app and the pose models; this takes 10–30 minutes. When it finishes, start **mocapapp** from the Start menu or the desktop shortcut.
 
 **macOS:** unzip `mocapapp-macos.zip`, then double-click `Install mocapapp.command`. If macOS says the file is from an unidentified developer, right-click it, choose **Open**, then **Open** again. A window shows progress. When it finishes, **mocapapp** is in your *Applications* folder (your own, inside your home folder).
 
@@ -28,7 +28,7 @@ Your project folders are **never** removed by uninstalling.
 ## 2. First start
 
 - **Greeting window.** The app opens with two buttons. Choose **How it works** for the tutorial (recommended the first time), or **Start**.
-- **Environment check.** If something is wrong with the installation, the app tells you what to do before anything else. You can repeat the check with **Help > Environment check**.
+- **Environment check.** If something is wrong with the installation, the app tells you what to do before anything else. You can repeat the check with **Help > Environment check**. Its free-space check looks at the drive where your projects are stored (the folder for new projects in **Help > Settings**, or the last project's), or at the app's drive before there is a project.
 - **Pose models.** If the models were not downloaded during installation, the app offers to download them once (about 145 MB). You can also do this later with **Help > Download pose models**.
 - **Settings.** **Help > Settings ...** holds the options of the app as a whole, on this computer: the **output folder** for new projects (*Folders*), and whether the screen stays on while the app is working (*Running*; on by default, which also keeps the computer from going to sleep and pausing a run). The settings of a project, such as pose detection or smoothing, are in its **Session settings**.
 - **Sample data.** **File > Try with sample data** creates a ready-made project from a demo recording (calibration included), so you can try a run and *Results* before you film anything. A run on a laptop takes about 10 minutes.
@@ -37,7 +37,7 @@ Your project folders are **never** removed by uninstalling.
 
 A **project** is one study, recorded over one day or several. It holds its **cameras** (each with its lens calibration), its **layouts** (where the cameras stood: their positions, from an extrinsic video and the reference points), its **participants** and their **trials**. A trial is one recording of one participant, made with one layout. Calibration is done once and reused: a camera keeps its lens calibration for every layout, and a layout is used by every trial recorded while the cameras stood in that place.
 
-The window has five **sections**, listed on the left: **Session**, **Participants**, **Cameras**, **Layouts** and **Results**. Open them in any order. Next to each name the list shows **✓** when nothing is left to do there, or **N to do**. Everything is saved straight away. Close the app at any time: **File > Recent projects** reopens a project where you left off.
+The window has five **sections**, listed on the left: **Session**, **Participants**, **Cameras**, **Layouts** and **Results**. Open them in any order. Next to each name the list shows **✓** when nothing is left to do there, or **N to do**. Drag the edge between the list and the section to make the list wider or narrower; the app remembers it. The mouse wheel never changes a value: over a number box or a drop-down it scrolls the page, so type, click or use the arrow keys instead. Everything is saved straight away. Close the app at any time: **File > Recent projects** reopens a project where you left off.
 
 While the app works (a run, a calibration, copying videos), you can open **Session** and **Results** (to see trials as they finish), and the section where the work started; the other sections wait until it is done.
 
@@ -72,8 +72,8 @@ The seven steps are: 1 finding body keypoints in every video, 2 synchronising th
 Select a row to work on that trial; select several with **Ctrl**-click or **Shift**-click. The buttons above the table act on the selected trials:
 
 - **Run** runs the selected trials. With none selected it runs every trial that is ready (or failed, stopped, or out of date). Trials that are not ready are left out and named first. **Start over (ignore finished stages)** next to it computes every stage again; it unticks itself after the run.
+- **Add trial ...** and **Edit ...** (below) add a trial, or change the selected one.
 - **Duplicate** adds a trial like each selected one: same participant, layout and name, its own videos.
-- **Change layout ...** sets the layout the trials were recorded with.
 - **Check and copy videos** checks the videos (frame rate, size against the camera's lens calibration, length) and copies them into the project, converting them when needed; your original files are never changed. Each trial is checked on its own: a problem in one never holds the others back. With none selected, it checks every trial whose videos are chosen but not copied yet.
 - **Delete raw footage ...** and **Remove trial ...** (section 4). A trial without copied videos or results is removed after one question; its participant stays.
 - **Fix sync ...** and **Accept sync as is** for the selected trials that stopped with *needs sync fix* (none selected: all of them), also while other trials run (below). **Fix sync ...** also takes selected trials that got past their synchronisation (*failed*, *stopped* or *done*).
@@ -81,15 +81,17 @@ Select a row to work on that trial; select several with **Ctrl**-click or **Shif
 
 Each row also has **Run this trial**, and, when a trial stopped for its synchronisation, **Fix sync ...** and **Accept as is** (below). A trial that got past its synchronisation (failed, stopped or done) has **Fix sync ...** too: use it when its results look wrong because of the sync (see the quality report). For a finished trial the app asks first, since its 3D positions, smoothing and joint angles are computed again; export again afterwards.
 
-**Adding a trial.** The row under the table is filled in from the previous trial; change what differs and press **Add**. The **participant** (highlighted) is the previous trial's participant while they have fewer trials than *trials per participant*, otherwise a participant without trials yet, otherwise a **new participant** with a random pseudonym. The layout and name come from the previous trial (the layout: a newer one, when one was made on a later day); the date is left empty and becomes the day the videos were recorded.
+**Adding a trial.** **Add trial ...** opens a window filled in from the previous trial; change what differs and press **Add** (or **Add and check videos**). The **participant** is the previous trial's participant while they have fewer trials than *trials per participant*, otherwise a participant without trials yet, otherwise a **new participant** with a random pseudonym. The layout and name come from the previous trial (the layout: a newer one, when one was made on a later day); the date is left empty and becomes the day the videos were recorded.
 
-**The trial panel** opens under the table when one trial is selected:
+**Editing a trial.** Select a trial and press **Edit ...** (or double-click its row). The window shows:
 
-- its participant, layout, date and name, which you can change (participant and layout only until the trial has run);
+- its participant, layout, date and name, which you can change;
 - a **video for every camera of its layout**: **Choose ...** picks one, starting in the camera's folder. A video named with the trial's number (trial 1: `1`, `01`, `trial01`, `walk1`, ...) is suggested and highlighted: **Use the suggested videos** takes them;
 - **Check and copy videos** for this trial, with the problems found, the space used and the space left;
 - its status, what it still needs, messages from the run, and the participant's height, consent and what happens to the raw footage;
 - a warning when the trial was recorded on another day than its layout was made: were the cameras set up again? Then make a new layout. If they did not move, **Use this layout anyway** (recorded with the trial).
+
+Press **Save** (or **Save and check videos**); **Cancel** changes nothing. When the trial has results and you changed its participant, layout or videos, the results no longer fit: the app says which results will be deleted and offers **Delete results and continue**, then asks once more. Nothing is deleted until you confirm both; the trial then runs again from the start. A trial whose raw footage was deleted keeps its videos and layout.
 
 **The run.** Press **Run** (or **Run this trial**). The app first shows a rough time estimate and the space the working files need, and any warning. The bar at the bottom of Session shows the trial and step being worked on, the overall progress and the estimate; **Show Pose2Sim's own output** shows the log.
 
@@ -118,7 +120,11 @@ One row per participant; changes are saved straight away.
 
 - **Pseudonym**, such as `PA26-K7M2QX4`. Type another one to rename (letters, digits, `-` or `_`, never a real name), or select rows and press **New pseudonym** for random ones. Once consent is given or results exist, the app first says what a rename affects (write the new pseudonym on the signed form; the report and exported files are renamed) and asks you to confirm.
 - **Height**, in metres or centimetres. An empty height is estimated, which is less accurate.
-- The columns chosen with **Columns ...**: weight, handedness, age, gender, or your own (a number with a unit, a choice, or a short text). Never ask for names or details that identify the person. Values are kept with each of the participant's trials.
+- The columns chosen with **Columns ...**: weight, handedness, age, gender, or your own. Never ask for names or details that identify the person. Values are kept with each of the participant's trials.
+
+**Columns ...** opens a table with one row per detail: its **name**, **unit** (such as kg or cm), **type** (*number*, *text*, or *choice*, with its options separated by commas, such as `left, right`) and whether it is **shown**. **Add detail** adds a row; **Remove** removes the selected rows (after a question when participants have values for them). Height is always shown. A change that does not fit the values already entered (a text column made a number, an option taken away) is refused until those values are changed or cleared. Drag the edge of a column heading to make the column wider or narrower; the app remembers it.
+
+**Import CSV ...** adds or updates participants from a file made in Excel or another spreadsheet (saved as CSV, with `,`, `;` or tabs). The first row names the columns: `Pseudonym` (optional), `Height` and any detail of the project, with or without its unit, for example `Pseudonym, Height (m), Weight (kg)`. A row with a pseudonym already in the project updates that participant; any other row adds one (with the pseudonym given, or a random one). Columns the project does not know are named and left out. Every row is checked first: if one value is wrong, nothing is imported and the rows with problems are listed. Consent is never imported: confirm it here, with the signed form in hand.
 - **Consent**: *Not signed yet*, *Signed, delete footage* or *Signed, keep footage* (when the participant agreed to storing the raw footage). A trial runs only once consent is signed. **Raw footage** shows what will happen to the footage.
 - **Trials**: the participant's trials. **Consent form**: **Generate ...** makes the participant's form.
 
@@ -132,7 +138,7 @@ One row per camera: its name, **intrinsic video** (the board video for its lens)
 
 - **Add camera ...**: a name, the camera's **folder** (where its videos are; a video named `intrinsic` there is found by itself), the intrinsic video, and optional notes (resolution, zoom, focus, stabilisation, frame rate).
 - **Edit ...**, **Duplicate**, **Delete** (refused while a layout uses the camera). Select several rows to duplicate or delete several.
-- **Calibrate all cameras** computes every lens not calibrated yet; **Calibrate selected again** redoes the selected ones. **Pass** is fine; **Check** works but could be better (read the advice); **Fail** needs a new intrinsic video in which the board covers the whole picture, including the corners.
+- **Calibrate**: one button that follows the selection. With no camera or every camera selected it reads **Calibrate all cameras** (every lens not calibrated yet) or, once all are calibrated, **Recalibrate all cameras**; with some selected, **Calibrate selected** or **Recalibrate selected**. **Pass** is fine; **Check** works but could be better (read the advice); **Fail** needs a new intrinsic video in which the board covers the whole picture, including the corners.
 - Once a trial using the camera has run, its lens calibration is locked: for new settings (another zoom), **Duplicate** the camera and calibrate the copy.
 - The **board** settings and **Board PDF ...** (print it before the recordings).
 - **Import from another project ...** copies cameras with their lens calibration (also from the File menu).
@@ -164,7 +170,7 @@ The trials are listed on the left with a **traffic light**: **Good**, **Check** 
 
 **3D** plays the movement as a skeleton: **Play**, drag the slider to go to a moment, drag in the picture to rotate, use the mouse wheel to zoom, double-click to reset. Blue is left, red is right, grey dots are the LSTM markers; the grid is the floor in 0.5 m squares. **3D markers** chooses the marker file (smoothed + LSTM, smoothed, raw).
 
-**Data** shows the numbers: **joint angles (.mot)** in degrees (for the arm: `arm_flex`, `arm_add`, `arm_rot`, `elbow_flex`, `pro_sup`, `wrist_flex`, `wrist_dev`; `_r` right, `_l` left) or **marker positions (.trc)** in metres (Y is up). Tick columns to plot them; type in the filter box to find them (e.g. `elbow`). The table lists the values frame by frame; the line under the plot gives each column's minimum, maximum, range and **peak speed**. **Compare all trials** draws the same columns of every trial together; **Plot speed** draws the rate of change. **Save as CSV ...** writes the ticked columns (or all) for Excel, R, Python or MATLAB. With the default keypoints there are no points on the hand, so wrist and forearm rotation angles are not reliable; shoulder and elbow are.
+**Data** shows the numbers: **joint angles (.mot)** in degrees (for the arm: `arm_flex`, `arm_add`, `arm_rot`, `elbow_flex`, `pro_sup`, `wrist_flex`, `wrist_dev`; `_r` right, `_l` left) or **marker positions (.trc)** in metres (Y is up). The columns are grouped by body part (trunk and pelvis, head and neck, right and left arm and leg, then for example *Elbow and forearm* or *Fingers*; marker positions also by marker): open a group with its arrow, and tick a group to plot every column in it. Type in the filter box to find columns (e.g. `elbow`). The table lists the values frame by frame; the line under the plot gives each column's minimum, maximum, range and **peak speed**. **Compare all trials** draws the same columns of every trial together (with many lines, the legend goes under the plot and the page scrolls); **Plot speed** draws the rate of change. **Save as CSV ...** writes the ticked columns (or all) for Excel, R, Python or MATLAB. With the default keypoints there are no points on the hand, so wrist and forearm rotation angles are not reliable; shoulder and elbow are.
 
 **Import Pose2Sim data ...** (under the list) shows Pose2Sim results made elsewhere next to this project's trials: choose a Pose2Sim trial folder (with `pose-3d/` and/or `kinematics/`), or a Pose2Sim project folder, whose trial folders are each listed. They appear as **◆ Imported:** and the folder name, and work in **3D** and **Data** (also in **Compare all trials** and **Save as CSV ...**); they have no quality light and are not exported. Only a link is kept in the project: nothing is copied, and the app never changes or deletes those folders. The project remembers them; if a folder is moved, it shows *folder not found*. **Remove from the list** forgets one (its folder stays).
 
@@ -205,7 +211,7 @@ Details: the project's `app/docs/privacy.md`.
 | Head below the feet | Z points down in your reference points: Z must point up. |
 | "its raw footage was deleted" | After a deletion, that trial's videos and layout can no longer change; its results stay. Add a new trial for new recordings. |
 | "No space left on device" in a log | The drive filled up during the run. Free some space (or move the project to a larger drive) and run the trials again: finished stages are kept. |
-| "No video chosen for cam01" in a trial's Status | Select the trial in Session and choose its videos in the trial panel (or **Use the suggested videos**), then **Check and copy videos**. |
+| "No video chosen for cam01" in a trial's Status | Select the trial in Session, press **Edit ...** and choose its videos (or **Use the suggested videos**), then **Save and check videos**. |
 | "Were the cameras set up again?" | The trial was recorded on another day than its layout. If the cameras moved, make a new layout (Layouts > Duplicate, new extrinsic videos) and change the trial's layout; if not, **Use this layout anyway** in the trial panel. |
 | Anything else | **Help > Copy diagnostics** copies version and setup information (without your name or any participant data); paste it into your bug report. |
 

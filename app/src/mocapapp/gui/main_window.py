@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QProgressDialog,
+    QSplitter,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -29,14 +30,17 @@ from mocapapp.gui.common import (
     Background,
     error_box,
     forget_session,
+    guard_wheel,
     heading,
     keep_screen_on,
     last_output_root,
+    projects_folder,
     recent_sessions,
     remember_session,
     settings,
 )
 
+SIDEBAR_WIDTH, SIDEBAR_MIN = 210, 110  # pixels: the sidebar's first width, and the narrowest it can be dragged to
 BROWSE_WHILE_BUSY = ("session", "results")  # sections that can be opened while the app works
 TUTORIAL_PAGE = {"session": 0, "participants": 0, "cameras": 3, "layouts": 4, "results": 0}
 
@@ -100,6 +104,7 @@ class MainWindow(QMainWindow):
         from mocapapp.gui.sections.results import ResultsSection
         from mocapapp.gui.sections.session import SessionSection
 
+        guard_wheel()  # the mouse wheel never changes a value by accident (number boxes, drop-downs)
         self.root: Path | None = None
         self.session: Session | None = None
         self.project: Path | None = None  # the .mocapproj file the project was opened from or saved to
@@ -113,7 +118,7 @@ class MainWindow(QMainWindow):
                                         LayoutsSection(self), ResultsSection(self)]
         self.pages = self.sections
         self.sidebar = QListWidget()
-        self.sidebar.setFixedWidth(210)
+        self.sidebar.setMinimumWidth(SIDEBAR_MIN)
         self.sidebar.setSpacing(3)
         self.sidebar.currentRowChanged.connect(self._sidebar_clicked)
         self.stack = QStackedWidget()
@@ -131,10 +136,21 @@ class MainWindow(QMainWindow):
         right.addWidget(self.page_title)
         right.addWidget(self.purpose)
         right.addWidget(self.stack, 1)
+        page = QWidget()
+        page.setLayout(right)
+        # the sidebar's width can be dragged (the handle between it and the section); it is remembered
+        self.splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.splitter.addWidget(self.sidebar)
+        self.splitter.addWidget(page)
+        self.splitter.setCollapsible(0, False)
+        self.splitter.setCollapsible(1, False)
+        self.splitter.setStretchFactor(1, 1)
+        width = settings().value("sidebar_width", SIDEBAR_WIDTH, type=int)
+        self.splitter.setSizes([max(SIDEBAR_MIN, width), 1180 - width])
+        self.splitter.splitterMoved.connect(lambda *_: settings().setValue("sidebar_width", self.sidebar.width()))
         central = QWidget()
         layout = QHBoxLayout(central)
-        layout.addWidget(self.sidebar)
-        layout.addLayout(right, 1)
+        layout.addWidget(self.splitter)
         self.setCentralWidget(central)
         self.session_label = QLabel()
         self.session_label.setStyleSheet("color: palette(placeholder-text)")
@@ -210,8 +226,12 @@ class MainWindow(QMainWindow):
                        self.settings_action, self.import_action):
             action.setEnabled(session is not None)
         self._show_name()
+        current = self.current_page()
         for section in self.sections:
-            section.refresh()
+            # only the page on screen: each other one is brought up to date when it is opened (go). Refreshing
+            # Results here read every trial's 3D files and took seconds on opening a project (0.2.0rc3)
+            if session is None or section is current:
+                section.refresh()
         if session is None:
             self.go("session")
         self.update_nav()
@@ -227,10 +247,8 @@ class MainWindow(QMainWindow):
             save_session(self.session, self.root)
 
     def changed(self) -> None:
-        """A section changed the project: the other sections and the badges follow."""
-        for section in self.sections:
-            if section is not self.current_page():
-                section.refresh()
+        """A section changed the project: the badges follow. The other sections show the change when they are opened
+        (`go` refreshes them); refreshing them all here made every edit wait for the quality report."""
         self.update_nav()
 
     # ---------- project files ----------
@@ -586,7 +604,7 @@ class MainWindow(QMainWindow):
     def show_doctor(self) -> None:
         from mocapapp.core.env import run_checks
 
-        checks = run_checks(Path(self.root).parent if self.root else None)
+        checks = run_checks(Path(self.root).parent if self.root else projects_folder())
         lines = [f"{'OK' if c.ok else 'PROBLEM'} - {c.name}: {c.detail}" + (f"\n      -> {c.fix}" if not c.ok and
                                                                                c.fix else "") for c in checks]
         QMessageBox.information(self, "Environment check", "\n".join(lines))

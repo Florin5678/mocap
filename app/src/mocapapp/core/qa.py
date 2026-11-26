@@ -6,6 +6,7 @@ Thresholds are first guesses from the demo (decisions.md); they are shown in the
 
 from __future__ import annotations
 
+import functools
 import html
 import json
 import math
@@ -75,15 +76,43 @@ def worst(lights: list[str]) -> str:
 
 # ---------- readers ----------
 
+def number_grid(lines: list[str], width: int) -> np.ndarray:
+    """Tab-separated rows of numbers -> floats [rows, width]. Empty, 'nan' or unreadable values are NaN, short rows
+    are padded, blank lines skipped. pandas' C parser: a long trial's .trc holds millions of values, which took
+    seconds one by one in Python and froze the app (0.2.0rc3)."""
+    import csv
+    import io
+
+    import pandas as pd
+
+    rows = [r for r in lines if r.strip()]
+    if not rows or width <= 0:
+        return np.empty((len(rows), max(width, 0)))
+    n = max(width, max(r.count("\t") for r in rows) + 1)
+    frame = pd.read_csv(io.StringIO("\n".join(rows)), sep="\t", header=None, names=range(n), usecols=range(width),
+                        quoting=csv.QUOTE_NONE, low_memory=False)
+    text = [c for c in frame.columns if not pd.api.types.is_numeric_dtype(frame[c])]
+    if text:  # a column with something that is not a number in it: that becomes NaN
+        frame[text] = frame[text].apply(pd.to_numeric, errors="coerce")
+    return frame.to_numpy(dtype=float)
+
+
 def read_trc(path: Path) -> tuple[list[str], np.ndarray, float]:
-    """(marker names, data [frames, markers, 3], frame rate)."""
+    """(marker names, data [frames, markers, 3], frame rate). The data is read-only: the last two files read are
+    kept, as the report reads a trial's file twice (its floor, then its preview)."""
+    st = Path(path).stat()
+    names, data, rate = _read_trc_of(str(path), st.st_mtime_ns, st.st_size)
+    return list(names), data, rate
+
+
+@functools.lru_cache(maxsize=2)
+def _read_trc_of(path: str, _mtime_ns: int, _size: int) -> tuple[tuple[str, ...], np.ndarray, float]:
     lines = Path(path).read_text(encoding="utf-8", errors="replace").splitlines()
     rate = float(lines[2].split("\t")[0])
     names = [n for n in lines[3].split("\t")[2:] if n.strip()]
-    rows = [r.split("\t") for r in lines[5:] if r.strip()]
-    data = np.array([[float(v) if v.strip() not in ("", "nan") else np.nan for v in r[2:2 + 3 * len(names)]]
-                     for r in rows], dtype=float)
-    return names, data.reshape(len(rows), len(names), 3), rate
+    data = number_grid(lines[5:], 2 + 3 * len(names))[:, 2:].reshape(-1, len(names), 3)
+    data.flags.writeable = False
+    return tuple(names), data, rate
 
 
 def read_sto(path: Path):
@@ -174,25 +203,64 @@ def trial_qa(session: Session, root: Path, label: str) -> TrialQA:
     # floor and axes sanity, output frame is Y-up (upstream-notes §4)
     trc = best_trc(tdir)
     if trc is not None:
-        names, data, rate = read_trc(trc)
-        feet = [names.index(n) for n in FOOT_MARKERS if n in names]
-        if feet:
-            lowest = np.nanmin(data[:, feet, 1], axis=1)
-            offset = float(np.nanmedian(lowest))
+        offset, up = _floor(trc)
+        if offset is not None:
             qa.metrics.append(Metric("Feet height above floor (median of lowest foot point)", round(offset, 3), "m",
                                      light("floor_offset_m", abs(offset)),
                                      "should be near 0 if the floor is Z = 0 in the reference points"))
-            up = np.nanmedian(data[:, names.index("Head"), 1] - lowest) if "Head" in names else None
             if up is not None and up < 0:
                 qa.warnings.append("The head is below the feet: the vertical axis is flipped. Check that Z is up in "
                                    "the reference points.")
-        qa.preview = str(write_preview(tdir, trc, layout.qa / f"trial_{label}_preview.html"))
+        preview = layout.qa / f"trial_{label}_preview.html"
+        qa.preview = str(preview if _up_to_date(preview, trc) else write_preview(tdir, trc, preview))
 
     lights = [m.light for m in qa.metrics]
     if status in ("failed", "needs_sync_fix", "cancelled"):
         lights.append("red")
     qa.light = worst(lights)
     return qa
+
+
+def _floor(trc: Path) -> tuple[float | None, float | None]:
+    """(feet height above the floor, head height above the feet) of a trial's .trc file, read once per version
+    of it: kept in memory, and in the trial's mocap_logs/floor.json for the next start of the app."""
+    st = trc.stat()
+    key = {"file": trc.name, "mtime_ns": st.st_mtime_ns, "size": st.st_size}
+    saved_at = trc.parent.parent / LOG_DIR / "floor.json"
+    try:
+        saved = json.loads(saved_at.read_text(encoding="utf-8"))
+        if {k: saved.get(k) for k in key} == key:
+            return saved["offset"], saved["up"]
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        pass  # not saved yet, or for another version of the file
+    offset, up = _floor_of(str(trc), st.st_mtime_ns, st.st_size)
+    try:
+        saved_at.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_text(saved_at, json.dumps({**key, "offset": offset, "up": up}))
+    except OSError:
+        pass  # only a shortcut: the next report reads the file again
+    return offset, up
+
+
+@functools.lru_cache(maxsize=64)
+def _floor_of(path: str, _mtime_ns: int, _size: int) -> tuple[float | None, float | None]:
+    # the report is made again after every change in the project; reading a long trial's .trc takes seconds
+    names, data, _rate = read_trc(Path(path))
+    feet = [names.index(n) for n in FOOT_MARKERS if n in names]
+    if not feet:
+        return None, None
+    lowest = np.nanmin(data[:, feet, 1], axis=1)
+    up = float(np.nanmedian(data[:, names.index("Head"), 1] - lowest)) if "Head" in names else None
+    return float(np.nanmedian(lowest)), up
+
+
+def _up_to_date(preview: Path, trc: Path) -> bool:
+    """The 3D preview was made after this version of the .trc file. (If the preview page itself ever changes,
+    give the new one another file name, so that the old ones are made again.)"""
+    try:
+        return preview.stat().st_mtime_ns >= trc.stat().st_mtime_ns
+    except OSError:
+        return False
 
 
 def best_trc(trial_dir: Path) -> Path | None:

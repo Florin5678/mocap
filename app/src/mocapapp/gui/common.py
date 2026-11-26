@@ -7,9 +7,19 @@ import traceback
 from collections.abc import Callable
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QSettings, QThread, QUrl, Signal
+from PySide6.QtCore import QCoreApplication, QEvent, QObject, QSettings, QThread, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import QComboBox, QFrame, QLabel, QMessageBox, QScrollArea, QTextBrowser, QWidget
+from PySide6.QtWidgets import (
+    QAbstractSpinBox,
+    QApplication,
+    QComboBox,
+    QFrame,
+    QLabel,
+    QMessageBox,
+    QScrollArea,
+    QTextBrowser,
+    QWidget,
+)
 
 ORG, APP = "mocapapp", "mocapapp"
 MAX_RECENT = 8
@@ -48,6 +58,16 @@ def forget_session(root: Path) -> None:
 def last_output_root() -> str:
     """Help > Settings: the output folder for new sessions (until set there, the folder of the first session)."""
     return str(settings().value("output_root", "") or "")
+
+
+def projects_folder() -> Path | None:
+    """Where the projects are stored, for the disk-space check: the folder for new projects (Help > Settings),
+    else the folder of the last project opened; None when there is none yet."""
+    root = last_output_root()
+    if root:
+        return Path(root)
+    recent = recent_sessions()
+    return recent[0].parent if recent else None
 
 
 def keep_screen_on() -> bool:
@@ -214,6 +234,50 @@ def fit_rows(table, min_rows: int = 1, max_rows: int | None = None) -> None:
     rows = max(rows, min_rows * table.verticalHeader().defaultSectionSize())
     scroll = table.horizontalScrollBar().sizeHint().height()
     table.setFixedHeight(table.horizontalHeader().sizeHint().height() + rows + 2 * table.frameWidth() + scroll)
+
+
+class WheelGuard(QObject):
+    """The mouse wheel never changes a value (0.2.0rc3): over a number box or a drop-down it scrolls the
+    page or table around it instead. Values change by typing, clicking or the arrow keys. Installed once on the
+    application (`guard_wheel`)."""
+
+    WHEEL = QEvent.Type.Wheel
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802 (Qt name)
+        # every event of the app passes here: keep the first test cheap
+        if event.type() != self.WHEEL or not isinstance(obj, (QAbstractSpinBox, QComboBox)):
+            return False
+        if obj.property("wheel_ok"):  # a widget that zooms or steps with the wheel on purpose
+            return False
+        parent = obj.parentWidget()
+        if parent is not None:
+            QCoreApplication.sendEvent(parent, event)  # the page or table around it scrolls
+        return True
+
+
+_guard: WheelGuard | None = None
+
+
+def guard_wheel() -> None:
+    """Install the WheelGuard on the running application (once). It is taken off again before the application
+    closes: while Python shuts down, the widgets' last events must not reach Python code."""
+    global _guard
+    import atexit
+
+    app = QApplication.instance()
+    if app is not None and _guard is None:
+        _guard = WheelGuard()
+        app.installEventFilter(_guard)
+        app.aboutToQuit.connect(unguard_wheel)
+        atexit.register(unguard_wheel)
+
+
+def unguard_wheel() -> None:
+    global _guard
+    app = QApplication.instance()
+    if app is not None and _guard is not None:
+        app.removeEventFilter(_guard)
+    _guard = None
 
 
 class NoWheelCombo(QComboBox):

@@ -145,3 +145,43 @@ def test_sibling_camera_folders(tmp_path):
     assert [camera_number(n) for n in ("cam02", "CAM2", "cam0", "camera2", "cam02b")] == [2, 2, None, None, None]
     found = sibling_camera_dirs(tmp_path / "CAM2")
     assert {n: p.name for n, p in found.items()} == {1: "cam01", 2: "CAM2", 3: "cam03"}
+
+
+def test_installer_folder_can_be_chosen():
+    win = INSTALLER / "windows"
+    ps1 = (win / "install.ps1").read_text(encoding="ascii")
+    un = (win / "uninstall.ps1").read_text(encoding="ascii")
+    iss = (win / "mocapapp.iss").read_text(encoding="utf-8")
+    assert "DisableDirPage=no" in iss and r"UninstallFilesDir={app}\setup" in iss
+    assert iss.count('-Prefix ""{app}""') == 2  # install.ps1 and uninstall.ps1 get the chosen folder
+    # the disk check looks at the projects' drive (from the app's settings), not the user profile's
+    assert "& $exe doctor\n" in ps1.replace("\r\n", "\n") and "doctor --dir" not in ps1
+    # moving to another folder removes the earlier installation's programs: the same names uninstall.ps1 removes
+    names = re.search(r'\$Installed = @\(([^)]*)\)', ps1).group(1)
+    assert f"@({names})" in un
+
+
+def test_disk_check_looks_at_the_projects_drive(tmp_path, monkeypatch):
+    from mocapapp.core import env
+
+    check = env._disk_check(tmp_path / "not" / "made" / "yet")  # the nearest folder that exists
+    assert check.name == "Free disk" and f"on {tmp_path.anchor}" in check.detail
+    assert "where the projects are" in check.detail
+    assert "where the app is installed" in env._disk_check(None).detail
+    monkeypatch.setattr(env, "MIN_FREE_GB", 10**9)
+    assert "Help > Settings" in env._disk_check(tmp_path).fix
+    assert "first project" in env._disk_check(None).fix
+    main(["doctor", "--dir", str(tmp_path)])
+
+
+def test_projects_folder_from_settings(tmp_path):
+    from mocapapp.gui import common
+
+    assert common.projects_folder() is None
+    project = tmp_path / "studies" / "session_1"
+    project.mkdir(parents=True)
+    (project / "session.json").write_text("{}", encoding="utf-8")
+    common.remember_session(project)
+    assert common.projects_folder() == tmp_path / "studies"  # the last project's folder
+    common.settings().setValue("output_root", str(tmp_path / "new"))
+    assert common.projects_folder() == tmp_path / "new"  # Help > Settings wins

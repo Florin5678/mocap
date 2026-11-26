@@ -10,7 +10,7 @@ from pathlib import Path
 
 import numpy as np
 
-from mocapapp.core.qa import BONES
+from mocapapp.core.qa import BONES, number_grid
 from mocapapp.core.session import Layout, LinkedResults, Session, Trial
 
 # (label, glob in pose-3d/, name parts to exclude): best first
@@ -22,6 +22,55 @@ TRANSLATIONS = ("_tx", "_ty", "_tz")
 
 class OutputError(ValueError):
     pass
+
+
+# ---------- grouping columns by body part (Results > Data, 0.2.0rc3) ----------
+
+REGIONS = ["Trunk and pelvis", "Head and neck", "Right arm", "Left arm", "Right leg", "Left leg", "Other"]
+# (words in the name, part, region kind): the first match wins, so fingers come before hand, forearm before arm
+PARTS = [
+    (("thumb", "index", "middle", "ring", "pinky", "finger"), "Fingers", "arm"),
+    (("wrist", "hand", "palm", "radius_lunate", "lwrist", "mwrist"), "Wrist and hand", "arm"),
+    (("elbow", "forearm", "pro_sup", "ulna", "lelbow", "melbow"), "Elbow and forearm", "arm"),
+    (("shoulder", "arm_", "humer", "scapula", "clav", "acromion", "deltoid"), "Shoulder and upper arm", "arm"),
+    (("lumbar", "trunk", "spine", "chest", "torso", "thorax", "back"), "Trunk", "trunk"),
+    (("pelvis", "asis", "psis", "sacrum"), "Pelvis", "trunk"),
+    (("head", "nose", "eye", "ear", "face", "jaw", "mouth", "neck", "c7"), "Head and neck", "head"),
+    (("hip", "thigh", "femur"), "Hip and thigh", "leg"),
+    (("knee", "shank", "tibia", "_sh", "sh1", "sh2", "sh3"), "Knee and shank", "leg"),
+    (("ankle", "subtalar", "mtp", "toe", "heel", "calc", "meta", "foot"), "Ankle and foot", "leg"),
+]
+
+
+def _side(name: str) -> tuple[str, str]:
+    """('right' / 'left' / '', the name without its side): RWrist, r_knee_study, r.ASIS_study, elbow_flex_r."""
+    if name[:2].lower() in ("r_", "l_", "r.", "l."):
+        return ("right" if name[0] in "rR" else "left"), name[2:]
+    if len(name) > 1 and name[0] in "RL" and name[1].isupper():
+        return ("right" if name[0] == "R" else "left"), name[1:]
+    for suffix, side in (("_r", "right"), ("_l", "left")):
+        if name.endswith(suffix) or f"{suffix}_" in name:
+            return side, name.replace(suffix, "")
+    return "", name
+
+
+def column_group(column: str) -> tuple[str, str, str]:
+    """Where a column of a joint-angle or marker table sits in the Data tab's tree: (region, part, marker).
+    marker is the marker's name for a position column ('RWrist X' -> 'RWrist'), else ''."""
+    marker = column.rsplit(" ", 1)[0] if column.endswith((" X", " Y", " Z")) else ""
+    name = marker or column
+    side, rest = _side(name)
+    low = rest.lower().replace("_study", "")
+    if not side and low in ("hip", "midhip"):  # the point between the hips
+        return "Trunk and pelvis", "Pelvis", marker
+    for words, part, kind in PARTS:
+        if any(w in low for w in words):
+            if kind in ("arm", "leg"):
+                if not side:  # an arm or leg point without a side
+                    return "Other", part, marker
+                return f"{side.capitalize()} {kind}", part, marker
+            return ("Trunk and pelvis" if kind == "trunk" else "Head and neck"), part, marker
+    return "Other", "Other", marker
 
 
 @dataclass
@@ -159,14 +208,6 @@ def viewable(session: Session, root: Path) -> list[tuple[str, str]]:
 
 # ---------- readers ----------
 
-def _number(text: str) -> float:
-    text = text.strip()
-    try:
-        return float(text) if text and text.lower() != "nan" else np.nan
-    except ValueError:
-        return np.nan
-
-
 def read_markers(path: Path) -> Markers:
     """A .trc file (Pose2Sim/OpenSim): header of 5 lines, then Frame#, Time, X1, Y1, Z1, ..."""
     path = Path(path)
@@ -176,15 +217,13 @@ def read_markers(path: Path) -> Markers:
         meta = dict(zip((k.strip() for k in keys), (v.strip() for v in vals), strict=False))
         rate = float(meta.get("DataRate") or meta.get("CameraRate") or 0)
         names = [n.strip() for n in lines[3].split("\t")[2:] if n.strip()]
-        rows = [r.split("\t") for r in lines[5:] if r.strip()]
-        time = np.array([_number(r[1]) for r in rows])
-        data = np.array([[_number(v) for v in (r[2:2 + 3 * len(names)] + [""] * 3 * len(names))[:3 * len(names)]]
-                         for r in rows], dtype=float)
+        grid = number_grid(lines[5:], 2 + 3 * len(names))
     except (IndexError, ValueError) as exc:
         raise OutputError(f"{path.name} is not a readable marker file (.trc): {exc}") from None
-    if not names or not rows:
+    if not names or not len(grid):
         raise OutputError(f"{path.name} has no markers or no frames.")
-    return Markers(path, names, time, data.reshape(len(rows), len(names), 3), rate, meta.get("Units") or "m")
+    time, data = grid[:, 1], grid[:, 2:]
+    return Markers(path, names, time, data.reshape(len(grid), len(names), 3), rate, meta.get("Units") or "m")
 
 
 def read_angles(path: Path) -> Table:
@@ -200,11 +239,9 @@ def read_angles(path: Path) -> Table:
     header = [c.strip() for c in lines[end + 1].split("\t")] if len(lines) > end + 1 else []
     if not header or header[0].lower() != "time":
         raise OutputError(f"{path.name}: the first column after the header should be 'time'.")
-    rows = [[_number(v) for v in (r.split("\t") + [""] * len(header))[:len(header)]]
-            for r in lines[end + 2:] if r.strip()]
-    if not rows:
+    data = number_grid(lines[end + 2:], len(header))
+    if not len(data):
         raise OutputError(f"{path.name} has no frames.")
-    data = np.array(rows, dtype=float)
     cols = header[1:]
     units = ["m" if c.endswith(TRANSLATIONS) else "deg" if degrees else "rad" for c in cols]
     return Table("Joint angles", path, data[:, 0], cols, data[:, 1:], units)

@@ -229,7 +229,8 @@ def results_complete(session: Session, root: Path, label: str, need_export: bool
             problems.append(f"trial {label}: no {key.split('.')[0]} result file was found.")
             continue
         for f in files:
-            head = f.read_text(encoding="utf-8", errors="replace")[:4000] if f.stat().st_size else ""
+            with open(f, encoding="utf-8", errors="replace") as fh:  # the header only: result files are large
+                head = fh.read(4000)
             if header not in head:
                 problems.append(f"trial {label}: {f.name} is empty or unreadable.")
     if not need_export:

@@ -169,18 +169,16 @@ class CamerasSection(Section):
                               "copy."))
 
         cal = QHBoxLayout()
-        self.calibrate_all = QPushButton("Calibrate all cameras")
-        self.calibrate_all.setToolTip("Every camera with an intrinsic video and no lens calibration yet.")
-        self.calibrate_sel = QPushButton("Calibrate selected again")
-        self.calibrate_all.clicked.connect(lambda: self.calibrate(None, False))
-        self.calibrate_sel.clicked.connect(lambda: self.calibrate(self.selected(), True))
+        # one button (0.2.0rc3): all cameras (none or every one selected) or the selected ones; "Recalibrate" when
+        # they all have a lens calibration already
+        self.calibrate_button = QPushButton("Calibrate all cameras")
+        self.calibrate_button.clicked.connect(self.calibrate_clicked)
         self.every = QDoubleSpinBox()
         self.every.setRange(0.2, 5)
         self.every.setValue(1.0)
         self.every.setSuffix(" s")
         self.every.setToolTip("A frame is examined every this many seconds of video.")
-        cal.addWidget(self.calibrate_all)
-        cal.addWidget(self.calibrate_sel)
+        cal.addWidget(self.calibrate_button)
         cal.addStretch()
         cal.addWidget(QLabel("Use a frame every"))
         cal.addWidget(self.every)
@@ -272,8 +270,37 @@ class CamerasSection(Section):
         for key in ("duplicate", "delete"):
             self.buttons[key].setEnabled(n > 0 and not self.win.busy)
         self.buttons["add"].setEnabled(not imported)
-        self.calibrate_all.setEnabled(not imported and ses is not None and any(c.intrinsic for c in ses.cameras))
-        self.calibrate_sel.setEnabled(not imported and bool(self.selected()))
+        text, cameras, force = self.calibration_plan()
+        self.calibrate_button.setText(text)
+        self.calibrate_button.setEnabled(not imported and not self.win.busy and ses is not None
+                                         and any(ses.camera(c).intrinsic for c in cameras))
+        which = "the selected cameras" if "selected" in text else "every camera with an intrinsic video"
+        self.calibrate_button.setToolTip(f"Computes the lens calibration of {which}" + (
+            " again: the earlier calibration is replaced." if force else " that has none yet.")
+            + " Select some cameras to calibrate only those.")
+
+    def calibration_plan(self) -> tuple[str, list[str], bool]:
+        """What the calibrate button does now: (its text, the cameras, whether existing calibrations are redone).
+        Nothing or every camera selected: all cameras; otherwise the selected ones."""
+        from mocapapp.core.calibration import service
+
+        ses = self.session
+        if ses is None:
+            return "Calibrate all cameras", [], False
+        everyone = [c.id for c in ses.cameras]
+        chosen = self.selected()
+        every = not chosen or set(chosen) == set(everyone)
+        cameras = everyone if every else chosen
+        done = bool(cameras) and all(service.lens_result(self.root, c) is not None for c in cameras)
+        verb = "Recalibrate" if done else "Calibrate"
+        if every:
+            return f"{verb} all cameras", cameras, done
+        return f"{verb} selected" + (f" ({len(chosen)})" if len(chosen) > 1 else ""), cameras, True
+
+    def calibrate_clicked(self) -> None:
+        _text, cameras, force = self.calibration_plan()
+        every = len(cameras) == len(self.session.cameras)
+        self.calibrate(None if every and not force else cameras, force)
 
     def _changed(self, select: list[str] | None = None) -> None:
         self.refresh()

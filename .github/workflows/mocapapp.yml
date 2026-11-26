@@ -113,8 +113,9 @@ jobs:
           $out | Select-Object -Last 15
           if ($LASTEXITCODE) { Fail "iscc failed" ($out | Select-Object -Last 25) }
           $log = Join-Path $env:RUNNER_TEMP "setup.log"
-          $proc = Start-Process app\dist\mocapapp-setup.exe -Wait -PassThru -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/LOG=`"$log`""
-          $prefix = Join-Path $env:LOCALAPPDATA "mocapapp"
+          # into a chosen folder with a space in its name, as when installing on another drive
+          $prefix = Join-Path $env:RUNNER_TEMP "mocap app"
+          $proc = Start-Process app\dist\mocapapp-setup.exe -Wait -PassThru -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/LOG=`"$log`"", "/DIR=`"$prefix`""
           $inst = @(Get-Content "$prefix\install.log" -Tail 40 -ErrorAction SilentlyContinue)
           $inst
           $exe = "$prefix\venv\Scripts\mocapapp.exe"

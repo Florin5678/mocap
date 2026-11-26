@@ -5,10 +5,13 @@ raw footage follows the consent (§6.2), or Session settings when it is deleted 
 from __future__ import annotations
 
 import html
+import json
+from pathlib import Path
 
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QFileDialog,
     QHBoxLayout,
     QHeaderView,
     QLineEdit,
@@ -35,6 +38,7 @@ from mocapapp.gui.common import (
     readonly,
     scroll,
     selected_rows,
+    settings,
 )
 from mocapapp.gui.main_window import Section
 
@@ -73,8 +77,10 @@ class ParticipantsSection(Section):
                                                            "participant."),
                 ("remove", "Remove", self.remove, "The selected participants and their trials; only without videos "
                                                   "or results (for example someone who did not come)."),
-                ("columns", "Columns ...", self.columns, "Which details are asked for every participant, and your "
-                                                         "own columns."),
+                ("import", "Import CSV ...", self.import_csv, "Pseudonyms, heights and other details from a CSV "
+                 "file (for example saved from Excel): one row per participant, the first row names the columns."),
+                ("columns", "Columns ...", self.columns, "The details asked for every participant, as a table: add, "
+                                                         "remove or change them (name, unit, type)."),
                 ("forms", "Consent forms ...", self.forms,
                  "One PDF with the consent form of each selected participant (none selected: of every "
                  "participant), ready to print."),
@@ -92,6 +98,14 @@ class ParticipantsSection(Section):
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)  # Ctrl/Shift: several
         self.table.verticalHeader().setVisible(False)
         self.table.itemSelectionChanged.connect(self._enable)
+        self.table.horizontalHeader().sectionResized.connect(self._resized)
+        self._sizing = False
+        self.widths: dict[str, int] = {}  # column title -> width dragged by the researcher (remembered)
+        try:
+            self.widths = {str(k): int(v) for k, v in json.loads(settings().value("participant_columns", "{}")
+                                                                 or "{}").items()}
+        except (TypeError, ValueError):
+            pass
         layout.addWidget(self.table)
         self.issues = IssueView(min_height=40)
         self.issues.setMaximumHeight(140)
@@ -131,7 +145,6 @@ class ParticipantsSection(Section):
             code.setToolTip("Letters, digits, - or _; never the participant's real name." + former)
             code.editingFinished.connect(lambda p=person.label, w=code: self._code_typed(p, w))
             height = QLineEdit(format_height(person.height_m) if person.height_m else "")
-            height.setPlaceholderText("e.g. 1.75 m or 175 cm")
             height.editingFinished.connect(lambda p=person.label, w=height: self._value(p, "height", w.text()))
             cells = [code, height]
             trials = ses.trials_of(person.label)
@@ -173,11 +186,26 @@ class ParticipantsSection(Section):
             else:
                 self.table.setItem(r, base + 3, readonly("withdrawn"))
         header = self.table.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        self._sizing = True  # columns fit their contents, or keep the width they were dragged to
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         header.setStretchLastSection(True)
+        self.table.resizeColumnsToContents()
+        for c, title in enumerate(headers):
+            if title in self.widths and c < len(headers) - 1:
+                self.table.setColumnWidth(c, self.widths[title])
+        self._sizing = False
         fit_rows(self.table, max_rows=15)
         self._check()
         self._enable()
+
+    def _resized(self, column: int, _old: int, new: int) -> None:
+        """A column dragged wider or narrower: remembered (also for the next start)."""
+        if self._sizing or column >= self.table.columnCount() - 1:
+            return
+        item = self.table.horizontalHeaderItem(column)
+        if item is not None:
+            self.widths[item.text()] = new
+            settings().setValue("participant_columns", json.dumps(self.widths))
 
     def _check(self) -> None:
         issues = []
@@ -307,5 +335,27 @@ class ParticipantsSection(Section):
             self.win.save_all_consent_pdfs([self.session.participant(label).code for label in labels] or None)
 
     def columns(self) -> None:
-        ColumnsDialog(self, self.session, self.root).exec()
+        if ColumnsDialog(self, self.session, self.root).exec():
+            self._changed()
+
+    def import_csv(self) -> None:
+        from mocapapp.core.participants_csv import example_header, import_participants
+
+        start = str(Path(settings().value("last_csv", "") or Path(self.root).parent))
+        name, _ = QFileDialog.getOpenFileName(self, "Import participants from a CSV file", start,
+                                              "CSV file (*.csv *.txt)")
+        if not name:
+            return
+        settings().setValue("last_csv", str(Path(name).parent))
+        try:
+            result = import_participants(self.session, self.root, Path(name))
+        except (SetupError, ValueError, OSError) as exc:
+            error_box(self, "Participants not imported", str(exc).strip("'\""),
+                      f"The first row names the columns, for example:\n{example_header(self.session)}\n\nA row "
+                      "whose pseudonym is in the project updates that participant; other rows add participants. "
+                      "Consent is confirmed in the app, never imported.")
+            return
+        self.win.statusBar().showMessage(result.summary(), 12000)
+        if result.ignored_columns:
+            error_box(self, "Participants imported", result.summary())
         self._changed()

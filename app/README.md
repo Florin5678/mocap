@@ -6,7 +6,7 @@ Status: **0.1.0rc12, Milestone 6 (release candidate)**: installers for Windows a
 
 ## Install (users)
 
-Windows: run `mocapapp-setup.exe`; macOS (15 or newer): unzip `mocapapp-macos.zip` and double-click `Install mocapapp.command`. Both download Python, the locked dependencies and the pose models (about 10-30 minutes, ~10 GB), then work offline. How the installers work and how to make a release: [`installer/README.md`](installer/README.md).
+Windows: run `mocapapp-setup.exe`; macOS (15 or newer): unzip `mocapapp-macos.zip` and double-click `Install mocapapp.command`. Both download Python, the locked dependencies and the pose models (about 10-30 minutes; the app takes about 4 GB, and on Windows the setup lets you choose its folder, e.g. on another drive), then work offline. Processing needs 10 GB or more free where the projects are stored. How the installers work and how to make a release: [`installer/README.md`](installer/README.md).
 
 ## The app window
 
@@ -52,6 +52,7 @@ mocapapp session pseudonym --session <dir> --participant 2 --set P02|--random
 mocapapp session move --session <dir> --to <new output folder> [--dry-run]   # change the output folder later
 mocapapp session details --session <dir> [--enable weight] [--add "Leg length:number:cm"] [--add "Dominant leg:choice:left/right"]
 mocapapp session trial-details --session <dir> --trial 1 [--set weight=70 --set handedness=left]
+mocapapp session import --session <dir> people.csv          # participants: Pseudonym, Height, Weight (kg) ...
 mocapapp session add-trial --session <dir> --participant 2       # e.g. recorded later; then map, prepare, run --trial
 mocapapp session remove-trial --session <dir> --trial 3          # only a trial without copied videos or results
 mocapapp project save --session <dir> --out study.mocapproj [--step viewer]; mocapapp project show <file>

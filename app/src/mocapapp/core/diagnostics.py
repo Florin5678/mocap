@@ -27,7 +27,7 @@ def _scrub(text: str) -> str:
     return text
 
 
-def diagnostics_text() -> str:
+def diagnostics_text(projects: Path | None = None) -> str:
     from mocapapp.core.env import run_checks
     from mocapapp.core.export import _versions
 
@@ -35,6 +35,6 @@ def diagnostics_text() -> str:
              f"Platform {platform.platform()}", "", "Versions:"]
     lines += [f"  {k}: {v}" for k, v in _versions().items()]
     lines += ["", "Checks:"]
-    for c in run_checks(None):
+    for c in run_checks(projects):
         lines.append(f"  [{'OK' if c.ok else 'FAIL'}] {c.name}: {c.detail}")
     return _scrub("\n".join(lines))

@@ -149,14 +149,18 @@ def calibrate_in_window(win, tmp_path, qtbot, monkeypatch, trials: int = 0):
         CameraDialog.folder = str(raw / cam)
         cams.buttons["add"].click()
     assert [Path(c.intrinsic.file).name for c in ses.cameras] == ["intrinsic.mp4"] * 2
-    assert cams.calibrate_all.isEnabled()
+    assert cams.calibrate_button.isEnabled() and cams.calibrate_button.text() == "Calibrate all cameras"
     cams.every.setValue(0.5)  # the synthetic board videos are short (as in the CLI test)
-    cams.calibrate_all.click()
+    cams.calibrate_button.click()
     assert win.busy
     qtbot.waitUntil(lambda: not win.busy, timeout=300000)
     assert all(service.lens_result(root, c) for c in CAMS)
     assert cams.table.item(0, 3).text() in ("PASS", "CHECK (usable)")
     assert win.badges()["cameras"] == TICK
+    assert cams.calibrate_button.text() == "Recalibrate all cameras"
+    _select(cams.table, [0])
+    assert cams.calibrate_button.text() == "Recalibrate selected" and cams.calibration_plan()[1] == [next(iter(CAMS))]
+    cams.table.clearSelection()
 
     # Layouts: a new layout, its reference points, each camera's extrinsic video and clicks
     class LayoutDialog:

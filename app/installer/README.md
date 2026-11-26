@@ -9,15 +9,15 @@ The installers are thin **bootstrappers** (PROJECT.md D11, §9). They do not bun
 
 Everything goes into a private folder; no admin rights are needed:
 
-- Windows: `%LOCALAPPDATA%\mocapapp`
+- Windows: `%LOCALAPPDATA%\mocapapp` by default; the setup lets the user choose another folder (another drive)
 - macOS: `~/Library/Application Support/mocapapp`
 
 Running the installer again repairs or updates the installation. Uninstalling never touches session folders.
 
 | File | What it is |
 |---|---|
-| `windows/install.ps1`, `windows/uninstall.ps1` | The bootstrapper and its remover. Must stay ASCII: Windows PowerShell 5.1 reads BOM-less files as ANSI. Besides the shortcuts, `install.ps1` registers the `.mocapproj` file type for the user (`HKCU\Software\Classes`, no admin rights), so double-clicking a project file opens it in the app; `-NoShortcuts` skips both. `uninstall.ps1` removes the file type, not the project files. |
-| `windows/mocapapp.iss` | Inno Setup 6 script. It builds `mocapapp-setup.exe`, a per-user setup that runs `install.ps1` in a visible progress window and registers the uninstaller. It sets `RedirectionGuard=no`: with Windows' RedirectionGuard on, uv's Python junction fails with "untrusted mount point". |
+| `windows/install.ps1`, `windows/uninstall.ps1` | The bootstrapper and its remover. Must stay ASCII: Windows PowerShell 5.1 reads BOM-less files as ANSI. Besides the shortcuts, `install.ps1` registers the `.mocapproj` file type for the user (`HKCU\Software\Classes`, no admin rights), so double-clicking a project file opens it in the app; `-NoShortcuts` skips both. `uninstall.ps1` removes the file type, not the project files. Installed into a new folder without `-NoShortcuts`, `install.ps1` then removes the earlier installation's programs from its old folder (found through the file type it registered, or in the default folder; only the names `uninstall.ps1` removes, plus `setup`). Its `doctor` check measures the free space where the projects are kept (from the app's settings), else on the install drive. |
+| `windows/mocapapp.iss` | Inno Setup 6 script. It builds `mocapapp-setup.exe`, a per-user setup that runs `install.ps1` in a visible progress window and registers the uninstaller. It shows a folder page (default: the earlier installation's folder, else `%LOCALAPPDATA%\mocapapp`), passes the folder to `install.ps1` and `uninstall.ps1` as `-Prefix`, and keeps its own files in `<folder>\setup`. It sets `RedirectionGuard=no`: with Windows' RedirectionGuard on, uv's Python junction fails with "untrusted mount point". |
 | `windows/license.txt` | Shown by the setup: research use only, plus Pose2Sim's BSD-3 licence. |
 | `macos/Install mocapapp.command`, `macos/Uninstall mocapapp.command` | Double-clickable in Finder. They create `~/Applications/mocapapp.app`. They need macOS 15 or newer, because OpenSim's wheels require it. |
 
@@ -40,7 +40,7 @@ On macOS, use `MOCAPAPP_SOURCE=~/mocap MOCAPAPP_PREFIX=/tmp/mocap-test ./"Instal
 3. Run `uv lock`, the fast tests and the slow tests (`uv run pytest -m slow`).
 4. Push a tag `mocapapp-v<version>`. The `mocapapp` GitHub workflow then:
    - runs the tests on Windows and macOS;
-   - installs a test build of `mocapapp-setup.exe` silently on Windows, runs `doctor`, and uninstalls it;
+   - installs a test build of `mocapapp-setup.exe` silently on Windows into a chosen folder (`/DIR=`, with a space in its name), runs `doctor`, and uninstalls it;
    - builds `mocapapp-setup.exe` (Inno Setup) and `mocapapp-macos.zip`;
    - attaches both to a **draft** pre-release.
 5. Try both installers on a clean machine, then publish the draft.

@@ -47,6 +47,30 @@ def _fake_run(monkeypatch, fake=None):
     return fake
 
 
+def _dialogs(monkeypatch, *steps):
+    """Each trial dialog that opens runs the next step instead of waiting for a person: the step looks at the
+    dialog, fills it in and presses one of its buttons."""
+    from mocapapp.gui import trial_dialog
+
+    queue = list(steps)
+
+    def run(dlg):
+        queue.pop(0)(dlg)
+        return dlg.result()
+
+    monkeypatch.setattr(trial_dialog.TrialDialog, "exec", run)
+    return queue
+
+
+def _save(dlg):
+    dlg.save_button.click()
+
+
+def _use_suggested(dlg):
+    dlg.use_suggested.click()
+    dlg.save_button.click()
+
+
 def _status(hub, label):
     return hub.cells[label][0].text()
 
@@ -56,19 +80,30 @@ def test_full_project_on_the_hub(win, tmp_path, qtbot, monkeypatch):
     win.section("session").trials_spin.setValue(2)  # two trials per participant
     raw, root, ses = calibrate_in_window(win, tmp_path, qtbot, monkeypatch, trials=3)
 
-    # Session: the add row, pre-filled (R10): a new participant first, then theirs until they have two trials
+    # Session: Add trial, pre-filled (R10): a new participant first, then theirs until they have two trials
+    from mocapapp.gui.trial_dialog import NEW
+
     win.go("session")
     hub = win.section("session")
-    assert hub.add_who.currentData() is None and hub.add_layout.currentData() == "L1"
-    assert "font-weight: bold" in hub.add_who.styleSheet()  # the participant field is highlighted
-    hub.add_name.setText("walking")
-    hub.add_button.click()
+
+    def first(dlg):
+        assert dlg.participant.currentData() == NEW and dlg.layout_box.currentData() == "L1"
+        assert dlg.windowTitle() == "Add a trial" and not dlg.state.isVisibleTo(dlg)
+        dlg.name.setText("walking")
+        dlg.save_button.click()
+
+    def like_before(who):
+        def step(dlg):
+            assert dlg.participant.currentData() == who and dlg.name.text() == "walking"
+            dlg.save_button.click()
+        return step
+
+    _dialogs(monkeypatch, first, like_before("1"), like_before(NEW))
+    hub.buttons["add"].click()
     assert [(t.label, t.participant, t.layout, t.name) for t in ses.trials] == [("1", "1", "L1", "walking")]
-    assert hub.selected() == ["1"] and hub.panel.isVisibleTo(hub) and hub.panel.label == "1"
-    assert hub.add_who.currentData() == "1" and hub.add_name.text() == "walking"
-    hub.add_button.click()
-    assert hub.add_who.currentData() is None  # participant 1 has their two trials
-    hub.add_button.click()
+    assert hub.selected() == ["1"]
+    hub.buttons["add"].click()
+    hub.buttons["add"].click()  # participant 1 has their two trials: a new participant
     assert [t.participant for t in ses.trials] == ["1", "1", "2"]
     assert "No height" in _status(hub, "1") and "not ready" in _status(hub, "1")
     assert win.badges()["session"] == "3 to do"
@@ -86,17 +121,20 @@ def test_full_project_on_the_hub(win, tmp_path, qtbot, monkeypatch):
         qtbot.waitUntil(lambda r=row, h=height: people.table.cellWidget(r, _col(people.table, "Height")) is not h)
     assert all(p.consent.attested and p.height_m == 1.78 for p in ses.participants)
 
-    # Session: the trial panel suggests each trial's videos by number; accept them, then check and copy
+    # Session: Edit suggests each trial's videos by number; accept them, then check and copy
     win.go("session")
     for label in ("1", "2", "3"):
+        def suggested(dlg, label=label):
+            assert dlg.windowTitle().startswith(f"Trial {label} ") and dlg.use_suggested.isVisibleTo(dlg)
+            assert f"suggested: walk{label}.mp4" in dlg.table.item(0, 1).text()
+            _use_suggested(dlg)
+        _dialogs(monkeypatch, suggested)
         _select(hub.table, [int(label) - 1])
-        assert hub.panel.label == label and hub.panel.use_suggested.isVisibleTo(hub.panel)
-        assert f"suggested: walk{label}.mp4" in hub.panel.videos.item(0, 1).text()
-        hub.panel.use_suggested.click()
+        hub.buttons["edit"].click()
         assert Path(ses.trial(label).videos["cam01"]).name == f"walk{label}.mp4"
     assert "not checked and copied" in _status(hub, "1")
     _select(hub.table, [0, 1])
-    assert not hub.panel.isVisibleTo(hub)  # two trials selected: no panel
+    assert not hub.buttons["edit"].isEnabled()  # one trial at a time
     assert hub.buttons["check"].text() == "Check and copy videos (2)" and hub.run_button.text() == "Run selected (2)"
     hub.buttons["check"].click()
     assert win.busy
@@ -104,18 +142,28 @@ def test_full_project_on_the_hub(win, tmp_path, qtbot, monkeypatch):
     assert all(workflow.trial_inputs_ready(ses, root, lb) for lb in ("1", "2"))
     assert not workflow.trial_inputs_ready(ses, root, "3") and hub.selected() == ["1", "2"]
     assert readiness.trial_status(ses, root, "1") == "ready" and "ready" in _status(hub, "2")
-    _select(hub.table, [0])
-    copied = hub.panel.copy.text()
-    assert "Checked and copied: the trial's 2 video(s)" in copied and " free." in copied
+    def copied(dlg):
+        text = dlg.copy.text()
+        assert "Checked and copied: the trial's 2 video(s)" in text and " free." in text
+        assert "Status:" in dlg.state.text() and "ready" in dlg.state.text()
+        dlg.reject()
 
-    # R8 in the panel: a trial recorded on another day than its layout
-    _select(hub.table, [2])
-    hub.panel.date.setText("2020-01-01")
-    hub.panel.date.editingFinished.emit()
-    assert ses.trial("3").date == "2020-01-01" and hub.panel.accept_button.isVisibleTo(hub.panel)
-    assert "recorded on 2020-01-01" in hub.panel.warning.text()
-    hub.panel.accept_button.click()
-    assert ses.trial("3").layout_override and not hub.panel.accept_button.isVisibleTo(hub.panel)
+    _dialogs(monkeypatch, copied)
+    _select(hub.table, [0])
+    hub.buttons["edit"].click()
+
+    # R8 in the dialog: a trial recorded on another day than its layout
+    def other_day(dlg):
+        assert not dlg.accept_layout.isVisibleTo(dlg)
+        dlg.date.setText("2020-01-01")
+        dlg.date.editingFinished.emit()
+        assert dlg.accept_layout.isVisibleTo(dlg) and "recorded on 2020-01-01" in dlg.warning.text()
+        dlg.accept_layout.setChecked(True)
+        _save(dlg)
+
+    _dialogs(monkeypatch, other_day)
+    hub.table.cellDoubleClicked.emit(2, 0)  # a double-click opens it too
+    assert ses.trial("3").date == "2020-01-01" and ses.trial("3").layout_override
 
     # Run with nothing selected: every ready trial (3 is not copied yet, so it waits)
     hub.table.clearSelection()
@@ -360,7 +408,7 @@ def test_results_during_a_run(win, tmp_path, qtbot, monkeypatch):
 
 
 def test_actions_on_several_trials(win, tmp_path, qtbot, monkeypatch):
-    """Duplicate, change layout, remove for several selected trials; Run leaves out what is not ready."""
+    """Duplicate, edit, remove selected trials; Run leaves out what is not ready."""
     _fake_run(monkeypatch)
     shown = []
     monkeypatch.setattr(session_mod, "error_box", lambda _p, title, text, *a: shown.append((title, text)))
@@ -377,8 +425,14 @@ def test_actions_on_several_trials(win, tmp_path, qtbot, monkeypatch):
     assert hub.selected() == ["3", "4"]  # the copies are selected
     assert "No video chosen" in _status(hub, "3")
 
-    monkeypatch.setattr(session_mod, "choose_layout", lambda *a: "L2")
-    hub.buttons["layout"].click()
+    def gym(dlg):
+        dlg.layout_box.setCurrentIndex(dlg.layout_box.findData("L2"))
+        _save(dlg)
+
+    _dialogs(monkeypatch, gym, gym)
+    for row in (2, 3):
+        _select(hub.table, [row])
+        hub.buttons["edit"].click()
     assert [t.layout for t in ses.trials] == ["L1", "L1", "L2", "L2"]
 
     # Run on a selection: the ready trial runs, the other is left out and named in the confirmation
@@ -399,7 +453,7 @@ def test_actions_on_several_trials(win, tmp_path, qtbot, monkeypatch):
     hub.table.clearSelection()
     _select(hub.table, [])
     assert not shown, shown
-    assert hub.buttons["forms"].isEnabled() and hub.add_who.currentData() is None
+    assert hub.buttons["forms"].isEnabled() and hub.buttons["add"].isEnabled()
 
 
 def _shot(win, name):  # MOCAPAPP_SHOTS=<folder>: screenshots for the usability review
@@ -422,9 +476,14 @@ def test_two_days(win, tmp_path, qtbot, monkeypatch):
     raw, root, ses = calibrate_in_window(win, tmp_path, qtbot, monkeypatch, trials=2)
     win.go("session")
     hub = win.section("session")
-    hub.add_name.setText("walking")
-    hub.add_button.click()
-    hub.add_button.click()
+
+    def walking(dlg):
+        dlg.name.setText("walking")
+        _save(dlg)
+
+    _dialogs(monkeypatch, walking, _save)
+    hub.buttons["add"].click()
+    hub.buttons["add"].click()
     win.go("participants")
     people = win.section("participants")
     box = people.table.cellWidget(0, _col(people.table, "Consent"))
@@ -433,9 +492,10 @@ def test_two_days(win, tmp_path, qtbot, monkeypatch):
     height.setText("172")
     height.editingFinished.emit()
     win.go("session")
+    _dialogs(monkeypatch, _use_suggested, _use_suggested)
     for label in ("1", "2"):
         _select(hub.table, [int(label) - 1])
-        hub.panel.use_suggested.click()
+        hub.buttons["edit"].click()
     hub.table.clearSelection()
     hub.buttons["check"].click()  # nothing selected: every trial whose videos are chosen
     _idle(qtbot, win)
@@ -478,11 +538,18 @@ def test_two_days(win, tmp_path, qtbot, monkeypatch):
         qtbot.waitUntil(lambda: not win2.busy, timeout=10000)
     assert service.layout_state(ses, root, "L2") == {"Hall (copy): cam01": "ready", "Hall (copy): cam02": "ready"}
 
-    # Session: participant 1 has their two trials, so the add row offers a new participant, with today's layout
+    # Session: participant 1 has their two trials, so Add trial offers a new participant, with today's layout
+    from mocapapp.gui.trial_dialog import NEW
+
     win2.go("session")
-    assert hub.add_who.currentData() is None and hub.add_layout.currentData() == "L2"
-    hub.add_button.click()
-    hub.add_button.click()
+
+    def new_today(dlg):
+        assert dlg.participant.currentData() == NEW and dlg.layout_box.currentData() == "L2"
+        _save(dlg)
+
+    _dialogs(monkeypatch, new_today, _save)
+    hub.buttons["add"].click()
+    hub.buttons["add"].click()
     assert [(t.label, t.participant, t.layout) for t in ses.trials[2:]] == [("3", "2", "L2"), ("4", "2", "L2")]
     win2.go("participants")
     people = win2.section("participants")
@@ -492,21 +559,26 @@ def test_two_days(win, tmp_path, qtbot, monkeypatch):
     height.setText("165")
     height.editingFinished.emit()
     win2.go("session")
+    _dialogs(monkeypatch, _use_suggested, _use_suggested)
     for label in ("3", "4"):
         _select(hub.table, [int(label) - 1])
-        hub.panel.use_suggested.click()
-        assert ses.trial(label).date == day2 and not hub.panel.accept_button.isVisibleTo(hub.panel)
+        hub.buttons["edit"].click()
+        assert ses.trial(label).date == day2 and not ses.layout_warning(label)
 
     # R8: a day-2 trial put on yesterday's layout warns; back on today's layout it does not
+    def layouts(dlg):
+        dlg.layout_box.setCurrentIndex(dlg.layout_box.findData("L1"))
+        assert dlg.accept_layout.isVisibleTo(dlg) and "set up again" in dlg.warning.text()
+        dlg.layout_box.setCurrentIndex(dlg.layout_box.findData("L2"))
+        assert not dlg.accept_layout.isVisibleTo(dlg)
+        dlg.show()
+        _shot(dlg, "day2_trial_dialog")
+        dlg.reject()
+
+    _dialogs(monkeypatch, layouts)
     _select(hub.table, [3])
-    monkeypatch.setattr(session_mod, "choose_layout", lambda *a: "L1")
-    hub.buttons["layout"].click()
-    assert hub.panel.accept_button.isVisibleTo(hub.panel) and "set up again" in hub.panel.warning.text()
-    assert "not ready" in _status(hub, "4")
-    monkeypatch.setattr(session_mod, "choose_layout", lambda *a: "L2")
-    hub.buttons["layout"].click()
-    assert not hub.panel.accept_button.isVisibleTo(hub.panel)
-    _shot(win2, "day2_panel")
+    hub.buttons["edit"].click()
+    assert ses.trial("4").layout == "L2"
 
     hub.table.clearSelection()
     hub.buttons["check"].click()
@@ -530,3 +602,80 @@ def test_two_days(win, tmp_path, qtbot, monkeypatch):
     _shot(win2, "day2_results")
     res.tabs.setCurrentIndex(1)
     assert res.viewer.trial_box.count() == 4
+
+
+def test_participant_edits_do_not_rebuild_other_sections(win, tmp_path, qtbot, monkeypatch):
+    """A height typed in Participants saved straight away, without the Results section remaking the quality report
+    (that made every edit wait seconds); Results is up to date when it is opened."""
+    ses = _ready_project(tmp_path / "P", 2)
+    win.set_session(tmp_path / "P", ses)
+    win.go("participants")
+    part, res = win.section("participants"), win.section("results")
+    calls = []
+    monkeypatch.setattr(res, "refresh", lambda: calls.append(1))
+    height = part.cells[(part.rows[0], "Height")]
+    assert height.placeholderText() == ""
+    height.setText("1.81")
+    height.editingFinished.emit()
+    qtbot.waitUntil(lambda: part.cells[(part.rows[0], "Height")] is not height)  # the table was rebuilt
+    assert ses.participant(part.rows[0]).height_m == pytest.approx(1.81) and calls == []
+    win.go("results")
+    assert calls == [1]
+
+
+def test_sidebar_width_can_be_dragged_and_is_remembered(win, qtbot):
+    from mocapapp.gui.common import settings
+    from mocapapp.gui.main_window import SIDEBAR_MIN, MainWindow
+
+    win.show()
+    win.splitter.moveSplitter(320, 1)
+    assert win.sidebar.width() > 300 and settings().value("sidebar_width", type=int) == win.sidebar.width()
+    other = MainWindow()
+    qtbot.addWidget(other)
+    other.show()
+    assert abs(other.sidebar.width() - win.sidebar.width()) <= 2
+    win.splitter.moveSplitter(10, 1)
+    assert win.sidebar.width() >= SIDEBAR_MIN
+
+
+def test_editing_a_trial_that_ran_deletes_its_results_after_asking(win, tmp_path, qtbot, monkeypatch):
+    """Edit: a new name keeps the results; a new layout deletes them, after a warning and a confirmation (no to
+    either: nothing changes), and the trial runs again from the start."""
+    from mocapapp.gui import trial_dialog
+
+    _fake_run(monkeypatch)
+    ses = _ready_project(tmp_path, 1)
+    workflow.add_layout(ses, tmp_path, "Gym", ["cam01"])
+    hub = _hub(win, tmp_path, ses)
+    hub.run_button.click()
+    _idle(qtbot, win)
+    tdir = Layout(tmp_path).trial("1")
+    assert ses.run_state.trial_status == {"1": "done"} and any((tdir / "pose-3d").glob("*.trc"))
+    asked = []
+    answers = []
+    monkeypatch.setattr(trial_dialog, "confirm", lambda _p, title, text, ok: asked.append(title) or answers.pop(0))
+
+    def rename(dlg):
+        dlg.name.setText("jumping")
+        _save(dlg)
+
+    def to_gym(dlg):
+        dlg.layout_box.setCurrentIndex(dlg.layout_box.findData("L2"))
+        _save(dlg)
+
+    _dialogs(monkeypatch, rename, to_gym, to_gym, to_gym)
+    _select(hub.table, [0])
+    hub.buttons["edit"].click()
+    assert ses.trial("1").name == "jumping" and asked == [] and ses.run_state.trial_status == {"1": "done"}
+    for no in ([False], [True, False]):  # the warning, then the confirmation: either can say no
+        answers[:] = no
+        hub.buttons["edit"].click()
+        assert ses.trial("1").layout == "L1" and ses.run_state.trial_status == {"1": "done"}
+    answers[:] = [True, True]
+    asked.clear()
+    hub.buttons["edit"].click()
+    assert asked == ["The trial's results will be deleted", "Delete the results?"]
+    assert ses.trial("1").layout == "L2" and "1" not in ses.run_state.trial_status
+    assert not (tdir / "pose-3d").exists() and not (tdir / "kinematics").exists()
+    assert load_session(tmp_path).trial("1").layout == "L2"
+    assert readiness.trial_status(ses, tmp_path, "1") in ("ready", "not ready")

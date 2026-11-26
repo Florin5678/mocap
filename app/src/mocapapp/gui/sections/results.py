@@ -169,7 +169,10 @@ class ResultsSection(Section):
             self.viewer.stop()
 
     def hideEvent(self, event) -> None:  # noqa: N802
-        self.viewer.stop()
+        try:
+            self.viewer.stop()
+        except RuntimeError:  # the window is being taken apart as the app closes: nothing plays any more
+            pass
         super().hideEvent(event)
 
     # ---------- state ----------

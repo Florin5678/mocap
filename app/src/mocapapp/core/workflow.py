@@ -332,6 +332,76 @@ def add_detail(session: Session, root: Path, label: str, kind: str = "text", uni
     return field_
 
 
+def set_details(session: Session, root: Path, rows: list[dict]) -> list[str]:
+    """The participant details all at once, as edited in Participants > Columns (0.2.0rc3): one row per detail, in
+    order: {"key" (None for a new one), "label", "kind", "unit", "choices", "enabled"}. A custom detail left out is
+    removed with its values; built-in ones keep their name and kind (Height is always asked). Values already entered
+    must fit a changed detail, else nothing changes. Returns the keys removed."""
+    old = {d.key: d for d in session.details}
+    new: list[DetailField] = []
+    taken = set(old)
+    problems = []
+    for row in rows:
+        key = row.get("key")
+        label = " ".join(str(row.get("label", "")).split())
+        kind = row.get("kind", "text")
+        unit = str(row.get("unit", "")).strip()
+        options = [" ".join(str(c).split()) for c in row.get("choices") or [] if str(c).strip()]
+        enabled = bool(row.get("enabled", True))
+        if key in old and old[key].builtin:
+            d = old[key].model_copy(deep=True)
+            d.enabled = enabled or key == "height"
+            new.append(d)
+            continue
+        if not 1 <= len(label) <= 40:
+            raise SetupError("Give each detail a name of 1-40 characters, for example 'Leg length'.")
+        if kind not in ("number", "text", "choice"):
+            raise SetupError(f"{label}: a detail is a number, a text or a choice.")
+        if kind == "choice" and len(set(o.casefold() for o in options)) < 2:
+            raise SetupError(f"{label}: a choice needs at least two different options, for example 'left, right'.")
+        if len(unit) > 12:
+            raise SetupError(f"{label}: a unit has at most 12 characters.")
+        if key not in old:
+            base = DETAIL_KEY_RE.sub("_", label.lower()).strip("_") or "detail"
+            key, n = base, 2
+            while key in taken:
+                key, n = f"{base}_{n}", n + 1
+            taken.add(key)
+        new.append(DetailField(key=key, label=label, kind=kind, unit=unit if kind == "number" else "",
+                               choices=options if kind == "choice" else [], enabled=enabled))
+    labels = [d.label.casefold() for d in new]
+    if len(set(labels)) != len(labels):
+        raise SetupError("Two details have the same name: give each its own.")
+    kept = {d.key for d in new}
+    missing = [d.label for d in session.details if d.builtin and d.key not in kept]
+    if missing:
+        raise SetupError(f"{', '.join(missing)} is built in: untick it to stop asking it.")
+    values: dict[tuple[str, str], str] = {}
+    for d in new:
+        if d.key == "height" or old.get(d.key) == d:
+            continue
+        for t in session.trials:
+            value = t.details.get(d.key)
+            if not value:
+                continue
+            try:
+                values[(t.label, d.key)] = detail_value(d, value)
+            except SetupError as exc:
+                problems.append(f"trial {t.label}: {exc}")
+    if problems:
+        raise SetupError("Values already entered do not fit the changed details (change or clear them in "
+                         "Participants first): " + "; ".join(problems[:5]) + (" ..." if len(problems) > 5 else ""))
+    removed = [k for k in old if k not in kept]
+    session.details = new
+    for t in session.trials:
+        for k in removed:
+            t.details.pop(k, None)
+    for (label, key), value in values.items():
+        session.trial(label).details[key] = value
+    save_session(session, root)
+    return removed
+
+
 def set_detail_enabled(session: Session, root: Path, key: str, enabled: bool) -> None:
     """Ask a detail for every trial, or stop asking it (values already entered are kept)."""
     try:
@@ -766,6 +836,36 @@ def check_date(value: str | None) -> str | None:
         return date.fromisoformat(str(value).strip()).isoformat()
     except ValueError:
         raise SetupError(f"Date '{value}' is not a date like 2026-11-25.") from None
+
+
+# ---------- a trial's results, when what it was computed from changes (0.2.0rc3) ----------
+
+RESULT_FOLDERS = ("pose", "pose-sync", "pose-sync-previous", "pose-associated", "pose-3d", "kinematics",
+                  "mocap_logs")  # runner.LOG_DIR
+RESULT_FILES = ("logs.txt",)
+
+
+def trial_has_results(session: Session, label: str) -> bool:
+    """The trial ran (also partly): its results come from its participant, layout and videos."""
+    rs = session.run_state
+    return label in rs.trial_status or bool(rs.stage_done.get(label))
+
+
+def clear_results(session: Session, root: Path, label: str) -> None:
+    """Delete what the processing computed for this trial (2D keypoints, synchronisation, 3D markers, joint angles,
+    logs, its 3D preview) and forget its run, so it runs again from the start. Its copied videos, calibration and
+    details stay; exported copies stay until the next export replaces them."""
+    ensure_open(session, label)
+    tdir = Layout(root).trial(label)
+    for name in RESULT_FOLDERS:
+        shutil.rmtree(tdir / name, ignore_errors=True)
+    for name in RESULT_FILES:
+        (tdir / name).unlink(missing_ok=True)
+    (Layout(root).qa / f"trial_{label}_preview.html").unlink(missing_ok=True)
+    rs = session.run_state
+    for table in (rs.stage_done, rs.trial_status, rs.sync, rs.errors, rs.stage_settings, rs.keypoints_removed):
+        table.pop(label, None)
+    save_session(session, root)
 
 
 def set_trial_layout(session: Session, root: Path | None, label: str, layout: str) -> None:
